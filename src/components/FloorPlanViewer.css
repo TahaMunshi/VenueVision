@@ -1,0 +1,88 @@
+.floor-plan-viewer {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  position: relative;
+}
+
+.floor-plan-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.floor-plan-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.95);
+  padding: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.wall-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.wall-region {
+  transition: all 0.3s ease;
+  animation: pulse 2s infinite;
+}
+
+.wall-region.active {
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.wall-label {
+  position: absolute;
+  transform: translateX(-50%);
+  pointer-events: none;
+  z-index: 10;
+}
+
+.wall-label-content {
+  background: rgba(0, 200, 81, 0.95);
+  color: white;
+  padding: 8px 16px;
+  border-radius: 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  white-space: nowrap;
+}
+
+.wall-label-icon {
+  font-size: 1.2rem;
+}
+
+.wall-label-text {
+  font-size: 0.95rem;
+}
+

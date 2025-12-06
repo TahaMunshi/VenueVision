@@ -1,0 +1,158 @@
+.wall-editor-container {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  color: #fff;
+  padding: 2rem;
+}
+
+.wall-editor-header {
+  text-align: center;
+  margin-bottom: 2rem;
+  position: relative;
+}
+
+.back-button {
+  position: absolute;
+  left: 0;
+  top: 0;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #fff;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 1rem;
+  transition: all 0.3s;
+}
+
+.back-button:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.wall-editor-header h1 {
+  margin: 0.5rem 0;
+  font-size: 2rem;
+}
+
+.wall-editor-header p {
+  opacity: 0.7;
+  font-size: 0.9rem;
+}
+
+.wall-editor-content {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.loading {
+  text-align: center;
+  padding: 3rem;
+  font-size: 1.2rem;
+}
+
+.error-message {
+  background: rgba(244, 67, 54, 0.2);
+  border: 1px solid #f44336;
+  color: #f44336;
+  padding: 1rem;
+  border-radius: 8px;
+  margin-bottom: 2rem;
+  text-align: center;
+}
+
+.preview-section {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 2rem;
+  overflow: auto;
+  width: 100%;
+}
+
+.preview-canvas {
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  max-width: 90vw;
+  max-height: 85vh;
+  width: auto;
+  height: auto;
+  display: block;
+  background: #000;
+  object-fit: contain;
+  /* Ensure the canvas maintains its aspect ratio */
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
+}
+
+.instruction-text {
+  margin-top: 1rem;
+  text-align: center;
+  opacity: 0.8;
+  font-size: 0.9rem;
+}
+
+.controls-section {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.action-button {
+  padding: 0.75rem 1.5rem;
+  font-size: 1rem;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.3s;
+}
+
+.action-button.primary {
+  background: #4CAF50;
+  color: white;
+}
+
+.action-button.primary:hover:not(:disabled) {
+  background: #45a049;
+  transform: translateY(-2px);
+}
+
+.action-button.primary:disabled {
+  background: #666;
+  cursor: not-allowed;
+}
+
+.action-button.secondary {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.action-button.secondary:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.message {
+  padding: 1rem;
+  border-radius: 8px;
+  text-align: center;
+  font-weight: 500;
+  margin-top: 1rem;
+}
+
+.message.success {
+  background: rgba(76, 175, 80, 0.2);
+  border: 1px solid #4CAF50;
+  color: #4CAF50;
+}
+
+.message.error {
+  background: rgba(244, 67, 54, 0.2);
+  border: 1px solid #f44336;
+  color: #f44336;
+}
+

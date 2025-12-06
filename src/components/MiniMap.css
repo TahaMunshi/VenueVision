@@ -1,0 +1,57 @@
+.mini-map {
+  pointer-events: none;
+  width: 140px;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(10, 10, 10, 0.65);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+  color: #fff;
+}
+
+.mini-map svg {
+  width: 100%;
+  height: auto;
+}
+
+.mini-map-boundary {
+  fill: rgba(255, 255, 255, 0.02);
+  stroke: rgba(255, 255, 255, 0.4);
+  stroke-width: 1.5;
+}
+
+.wall-segment {
+  stroke: rgba(255, 255, 255, 0.4);
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke 0.2s ease;
+}
+
+.wall-segment.active {
+  stroke: #ff453a;
+  stroke-width: 4;
+  filter: drop-shadow(0 0 6px rgba(255, 69, 58, 0.8));
+  animation: wall-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes wall-pulse {
+  0% {
+    stroke-opacity: 0.6;
+    stroke-width: 3.5;
+  }
+  50% {
+    stroke-opacity: 1;
+    stroke-width: 4.5;
+  }
+  100% {
+    stroke-opacity: 0.6;
+    stroke-width: 3.5;
+  }
+}
+
+.mini-map-caption {
+  margin-top: 10px;
+  font-size: 0.85rem;
+  text-align: center;
+}
+

@@ -1,0 +1,80 @@
+.scanner-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.scanner-bracket {
+  pointer-events: none;
+}
+
+/* Scanning Laser Animation - Portrait (vertical movement) */
+.scanner-laser {
+  position: absolute;
+  left: 15%;
+  right: 15%;
+  width: 70%;
+  height: 2px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    #00C851 20%,
+    #00C851 80%,
+    transparent
+  );
+  box-shadow: 0 0 10px #00C851, 0 0 20px rgba(0, 200, 81, 0.5);
+  animation: scanVertical 3s infinite ease-in-out;
+  opacity: 0.9;
+}
+
+@keyframes scanVertical {
+  0% {
+    top: 10%;
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    top: 90%;
+    opacity: 0;
+  }
+}
+
+/* Landscape orientation adjustments */
+@media (orientation: landscape) {
+  /* In landscape, laser moves horizontally */
+  .scanner-laser {
+    left: 10%;
+    right: 10%;
+    width: auto;
+    height: 2px;
+    top: 50%;
+    animation: scanHorizontal 3s infinite ease-in-out;
+  }
+
+  @keyframes scanHorizontal {
+    0% {
+      left: 10%;
+      opacity: 0;
+    }
+    10% {
+      opacity: 1;
+    }
+    90% {
+      opacity: 1;
+    }
+    100% {
+      left: 90%;
+      opacity: 0;
+    }
+  }
+}
+
