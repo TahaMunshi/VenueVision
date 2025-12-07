@@ -291,31 +291,51 @@ def process_wall_image(
 
         # Parse corner points
         pts_src = np.array(corner_points, dtype="float32")
+        
+        # Calculate the natural aspect ratio from the corner points
+        # This preserves the wall's proportions when length/width is adjusted
+        # Calculate width and height from corner points
+        top_width = np.linalg.norm(pts_src[1] - pts_src[0])  # Top edge
+        bottom_width = np.linalg.norm(pts_src[2] - pts_src[3])  # Bottom edge
+        left_height = np.linalg.norm(pts_src[3] - pts_src[0])  # Left edge
+        right_height = np.linalg.norm(pts_src[2] - pts_src[1])  # Right edge
+        
+        # Use average dimensions to get aspect ratio
+        avg_width = (top_width + bottom_width) / 2
+        avg_height = (left_height + right_height) / 2
+        
+        # Calculate aspect ratio
+        if avg_height > 0:
+            aspect_ratio = avg_width / avg_height
+        else:
+            aspect_ratio = texture_width / texture_height  # Fallback to default
+        
+        # Adjust output dimensions to maintain aspect ratio
+        # Use a base height and calculate width from aspect ratio
+        base_height = 1024  # Higher resolution base
+        calculated_width = int(base_height * aspect_ratio)
+        
+        # Ensure minimum dimensions and reasonable maximum
+        calculated_width = max(512, min(calculated_width, 2048))
+        calculated_height = max(512, min(base_height, 2048))
+        
+        # Update destination points with calculated dimensions
+        pts_dst = np.array([
+            [0, 0],
+            [calculated_width - 1, 0],
+            [calculated_width - 1, calculated_height - 1],
+            [0, calculated_height - 1]
+        ], dtype="float32")
+        
+        logger.info(f"Wall processing: Calculated dimensions {calculated_width}x{calculated_height} (aspect ratio: {aspect_ratio:.2f})")
 
         # Get the matrix and warp the image
         matrix = cv2.getPerspectiveTransform(pts_src, pts_dst)
-        image_warped = cv2.warpPerspective(image_orig, matrix, (texture_width, texture_height))
+        image_warped = cv2.warpPerspective(image_orig, matrix, (calculated_width, calculated_height))
         
-        # --- Posterization Logic (Stylization) ---
-        pixel_data = image_warped.reshape((-1, 3))
-        pixel_data = np.float32(pixel_data)
-        
-        K = 8  # Number of colors
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
-        
-        if len(pixel_data) < K:
-            K = 4
-        
-        compactness, labels, center = cv2.kmeans(
-            pixel_data, K, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS
-        )
-
-        center = np.uint8(center)
-        poster_data = center[labels.flatten()]
-        image_posterized = poster_data.reshape((texture_height, texture_width, 3))
-        
-        # Apply bilateral filter for smoothing
-        image_final = cv2.bilateralFilter(image_posterized, 5, 50, 50)
+        # Use the warped image directly without posterization or filters
+        # This preserves the original image quality and proportions
+        image_final = image_warped
         
         # Ensure output directory exists
         os.makedirs(os.path.dirname(output_path), exist_ok=True)

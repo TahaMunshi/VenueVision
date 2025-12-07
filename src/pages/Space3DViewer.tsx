@@ -40,6 +40,7 @@ const Space3DViewer = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [dimensions, setDimensions] = useState({ width: 20, height: 8, depth: 20 })
+  const [loadingAssets, setLoadingAssets] = useState<string[]>([])
   
   // Refs to prevent memory leaks
   const sceneRef = useRef<any>(null)
@@ -264,6 +265,9 @@ const Space3DViewer = () => {
               const roomWidth = layoutData.dimensions?.width || dimensions.width
               const roomDepth = layoutData.dimensions?.depth || dimensions.depth
               
+              // Track loading assets
+              setLoadingAssets(layoutData.assets.map((a: any) => a.id || a.file))
+              
               layoutData.assets.forEach((asset: any) => {
                 // Convert 2D planner coordinates to 3D world coordinates
                 // Planner (0,0) is Top-Left. ThreeJS (0,0) is Center.
@@ -278,11 +282,15 @@ const Space3DViewer = () => {
                 group.position.set(worldX, 0, worldZ)
                 group.rotation.y = -asset.rotation * (Math.PI / 180)
                 
-                // Load the 3D model
+                // Load the 3D model - use full URL for proper loading
                 const modelPath = `${API_BASE_URL}/static/models/${asset.file}`
+                const assetId = asset.id || asset.file
+                
+                // Load from server (browser will cache automatically)
                 gltfLoader.load(
                   modelPath,
                   (gltf: any) => {
+                    
                     // Scale model to fit dimensions
                     const box = new THREE.Box3().setFromObject(gltf.scene)
                     const size = new THREE.Vector3()
@@ -297,15 +305,27 @@ const Space3DViewer = () => {
                     const scaleY = scaleX
                     
                     gltf.scene.scale.set(scaleX, scaleY, scaleZ)
-                    gltf.scene.position.y = (size.y * scaleY) / 2
+                    // Fix: Position at floor level (y=0) instead of half height
+                    // The model is already centered, so just set y to 0 to sit on floor
+                    gltf.scene.position.y = 0
                     
                     group.add(gltf.scene)
                     scene.add(group)
                     assetsRef.current.push(group)
+                    
+                    // Update loading state
+                    setLoadingAssets((prev) => prev.filter(id => id !== assetId))
                   },
-                  undefined,
+                  (progress: any) => {
+                    // Loading progress callback
+                    if (progress.lengthComputable) {
+                      const percent = (progress.loaded / progress.total) * 100
+                      console.log(`Loading ${asset.file}: ${percent.toFixed(0)}%`)
+                    }
+                  },
                   (error: any) => {
                     console.error(`Failed to load ${asset.file}:`, error)
+                    setLoadingAssets((prev) => prev.filter(id => id !== assetId))
                   }
                 )
               })
@@ -469,6 +489,13 @@ const Space3DViewer = () => {
           <button onClick={() => navigate(`/capture/${venueId}`)}>
             Go to Capture
           </button>
+        </div>
+      )}
+
+      {loadingAssets.length > 0 && (
+        <div className="asset-loading-notification">
+          <div className="loader" />
+          <p>Loading {loadingAssets.length} asset{loadingAssets.length > 1 ? 's' : ''}...</p>
         </div>
       )}
 
