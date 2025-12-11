@@ -5,7 +5,7 @@ from flask import Blueprint, jsonify, current_app, request
 from services.image_analysis import analyze_quality
 from services.floor_plan_service import get_venue_walls, get_current_target_wall
 from services.wall_processing import auto_detect_corners, process_wall_image, decode_image_from_bytes
-from utils.file_manager import save_wall_photo, save_floor_plan, get_floor_plan_path, UPLOAD_ROOT
+from utils.file_manager import save_wall_photo, save_floor_plan, get_floor_plan_path, UPLOAD_ROOT, reset_uploads
 import logging
 import json
 import os
@@ -116,22 +116,18 @@ def get_venue_progress(venue_id: str):
         # Generate URL for the floor plan
         floor_plan_url = f"/static/uploads/{venue_id}/floor_plan.jpg"
     
-    # Convert walls to regions with coordinates for floor plan display
-    # For now, we'll use simple default regions (can be enhanced later)
+    # Convert walls to regions; normalize to percentages if possible
     wall_regions = []
-    if floor_plan_url:
-        # Default regions: divide floor plan into 4 quadrants for 4 walls
-        regions = [
-            {"id": "wall_north", "x": 25, "y": 5, "width": 50, "height": 20},
-            {"id": "wall_east", "x": 75, "y": 25, "width": 20, "height": 50},
-            {"id": "wall_south", "x": 25, "y": 75, "width": 50, "height": 20},
-            {"id": "wall_west", "x": 5, "y": 25, "width": 20, "height": 50},
-        ]
-        wall_regions = [
-            {**region, "name": next((w["name"] for w in walls_metadata if w["id"] == region["id"]), region["id"])}
-            for region in regions
-            if any(w["id"] == region["id"] for w in walls_metadata)
-        ]
+    if walls_metadata:
+        for idx, wall in enumerate(walls_metadata):
+            region = {"id": wall["id"], "name": wall.get("name", wall["id"])}
+            region.update({
+                "x": 10 + (idx * 10) % 60,
+                "y": 10 + (idx * 15) % 60,
+                "width": 20,
+                "height": 15
+            })
+            wall_regions.append(region)
 
     response = {
         "total_walls": len(walls_metadata),
@@ -216,6 +212,21 @@ def upload_capture():
         })
 
     return jsonify(payload), 200
+
+
+@api_bp.route('/reset', methods=['POST'])
+def reset_all():
+    """
+    Reset all uploads and layouts. Optional JSON body {"venue_id": "..."} to reset one venue.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        venue_id = data.get("venue_id")
+        reset_uploads(venue_id)
+        return jsonify({"status": "success", "message": "Reset complete."}), 200
+    except Exception as e:
+        logger.error(f"Error during reset: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @api_bp.route('/wall/auto-detect', methods=['POST'])
@@ -408,14 +419,18 @@ def get_layout(venue_id: str):
             return jsonify({
                 "status": "success",
                 "dimensions": layout_data.get("dimensions", {"width": 20, "height": 8, "depth": 20}),
-                "assets": layout_data.get("assets", [])
+                "assets": layout_data.get("assets", []),
+                "polygon": layout_data.get("polygon"),
+                "walls": layout_data.get("walls")
             }), 200
         else:
             # Return default layout if file doesn't exist
             return jsonify({
                 "status": "success",
                 "dimensions": {"width": 20, "height": 8, "depth": 20},
-                "assets": []
+                "assets": [],
+                "polygon": None,
+                "walls": None
             }), 200
         
     except Exception as e:
@@ -433,6 +448,8 @@ def save_layout(venue_id: str):
     Expects JSON body with:
         - dimensions: {width, height, depth}
         - assets: array of asset objects
+        - polygon: array of points (optional)
+        - walls: array of walls (optional)
     """
     try:
         data = request.get_json()
@@ -442,6 +459,8 @@ def save_layout(venue_id: str):
         
         dimensions = data.get("dimensions", {"width": 20, "height": 8, "depth": 20})
         assets = data.get("assets", [])
+        polygon = data.get("polygon")
+        walls = data.get("walls")
         
         # Ensure venue directory exists
         venue_dir = os.path.join(UPLOAD_ROOT, venue_id)
@@ -451,7 +470,9 @@ def save_layout(venue_id: str):
         layout_path = os.path.join(venue_dir, 'layout.json')
         layout_data = {
             "dimensions": dimensions,
-            "assets": assets
+            "assets": assets,
+            "polygon": polygon,
+            "walls": walls
         }
         
         with open(layout_path, 'w') as f:

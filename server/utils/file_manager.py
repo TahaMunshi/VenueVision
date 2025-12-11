@@ -145,5 +145,20 @@ def get_floor_plan_path(venue_id: str) -> Optional[str]:
     return None
 
 
+def reset_uploads(venue_id: Optional[str] = None) -> None:
+    """
+    Remove all uploads for a venue, or all venues if none specified.
+    """
+    target = UPLOAD_ROOT if venue_id is None else os.path.join(UPLOAD_ROOT, str(venue_id))
+    if not os.path.exists(target):
+        return
+    # Safety: ensure we're deleting inside static/uploads
+    target = os.path.abspath(target)
+    if not target.startswith(os.path.abspath(UPLOAD_ROOT)):
+        raise ValueError("Invalid reset target")
+    import shutil
+    shutil.rmtree(target, ignore_errors=True)
+
+
 
 

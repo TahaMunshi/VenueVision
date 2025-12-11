@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Wall Alignment Test</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script>
+        // Make OrbitControls available globally
+        if (typeof THREE !== 'undefined' && typeof THREE.OrbitControls === 'undefined') {
+            // Fallback: define a simple OrbitControls if not available
+            THREE.OrbitControls = function(camera, domElement) {
+                this.camera = camera;
+                this.domElement = domElement;
+                this.target = new THREE.Vector3();
+                this.update = function() {};
+            };
+        }
+    </script>
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background: #222222;
+        }
+        #info { 
+            position: absolute; 
+            top: 10px; 
+            left: 10px; 
+            background: rgba(0,0,0,0.7); 
+            color: white; 
+            padding: 10px; 
+            font-family: monospace; 
+            z-index: 100; 
+            pointer-events: none;
+        }
+        canvas {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div id="info" style="pointer-events: none;">Loading...</div>
+    <script>
+        // Use the actual layout.json data
+        const layout = {
+            "dimensions": { "width": 51, "height": 8, "depth": 16 },
+            "polygon": [
+                { "x": 0, "y": 0 },
+                { "x": 37, "y": 0 },
+                { "x": 51, "y": 8 },
+                { "x": 37, "y": 16 },
+                { "x": 1, "y": 15 }
+            ],
+            "walls": [
+                {
+                    "id": "wall_1",
+                    "geometry": {
+                        "center": { "x": 18.5, "z": 0 },
+                        "rotationY": 0,
+                        "length": 37,
+                        "start": { "x": 0, "z": 0 },
+                        "end": { "x": 37, "z": 0 }
+                    }
+                },
+                {
+                    "id": "wall_2",
+                    "geometry": {
+                        "center": { "x": 44, "z": 4 },
+                        "rotationY": 0.5191461142465229,
+                        "length": 16.1245154965971,
+                        "start": { "x": 37, "z": 0 },
+                        "end": { "x": 51, "z": 8 }
+                    }
+                },
+                {
+                    "id": "wall_3",
+                    "geometry": {
+                        "center": { "x": 44, "z": 12 },
+                        "rotationY": 2.6224465393432705,
+                        "length": 16.1245154965971,
+                        "start": { "x": 51, "z": 8 },
+                        "end": { "x": 37, "z": 16 }
+                    }
+                },
+                {
+                    "id": "wall_4",
+                    "geometry": {
+                        "center": { "x": 19, "z": 15.5 },
+                        "rotationY": -3.113822016996372,
+                        "length": 36.013886210738214,
+                        "start": { "x": 37, "z": 16 },
+                        "end": { "x": 1, "z": 15 }
+                    }
+                },
+                {
+                    "id": "wall_5",
+                    "geometry": {
+                        "center": { "x": 0.5, "z": 7.5 },
+                        "rotationY": -1.6373644905707205,
+                        "length": 15.033296378372908,
+                        "start": { "x": 1, "z": 15 },
+                        "end": { "x": 0, "z": 0 }
+                    }
+                }
+            ]
+        };
+
+        // Initialize scene
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x222222);
+        
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        // Calculate floor plan center from polygon
+        const xs = layout.polygon.map(p => p.x);
+        const zs = layout.polygon.map(p => p.y); // y in 2D is z in 3D
+        const centerX = (Math.min(...xs) + Math.max(...xs)) / 2;
+        const centerZ = (Math.min(...zs) + Math.max(...zs)) / 2;
+        const centerY = layout.dimensions.height / 2;
+        
+        // Position camera to view the floor plan centered
+        camera.position.set(centerX + 20, centerY + 15, centerZ + 20);
+        camera.lookAt(centerX, centerY, centerZ); // Look at center of floor plan
+        console.log('Camera positioned to look at floor plan center:', centerX, centerY, centerZ);
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setClearColor(0x222222, 1); // Ensure background color is set
+        document.body.appendChild(renderer.domElement);
+        console.log('Renderer created and added to DOM. Canvas size:', renderer.domElement.width, 'x', renderer.domElement.height);
+        
+        // Simple mouse controls (works without OrbitControls)
+        let isDragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
+        let cameraDistance = 40;
+        let cameraAngleX = 0.5;
+        let cameraAngleY = 0.5;
+        
+        // Use the centerX, centerZ, centerY already calculated above
+        function updateCamera() {
+            camera.position.x = centerX + cameraDistance * Math.cos(cameraAngleX) * Math.sin(cameraAngleY);
+            camera.position.y = centerY + cameraDistance * Math.sin(cameraAngleX);
+            camera.position.z = centerZ + cameraDistance * Math.cos(cameraAngleX) * Math.cos(cameraAngleY);
+            camera.lookAt(centerX, centerY, centerZ);
+        }
+        updateCamera();
+        
+        renderer.domElement.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            previousMousePosition = { x: e.clientX, y: e.clientY };
+            renderer.domElement.style.cursor = 'grabbing';
+        });
+        renderer.domElement.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                const deltaX = e.clientX - previousMousePosition.x;
+                const deltaY = e.clientY - previousMousePosition.y;
+                cameraAngleY += deltaX * 0.01;
+                cameraAngleX += deltaY * 0.01;
+                cameraAngleX = Math.max(-Math.PI/2, Math.min(Math.PI/2, cameraAngleX));
+                updateCamera();
+                previousMousePosition = { x: e.clientX, y: e.clientY };
+            }
+        });
+        renderer.domElement.addEventListener('mouseup', () => { 
+            isDragging = false;
+            renderer.domElement.style.cursor = 'grab';
+        });
+        renderer.domElement.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            cameraDistance += e.deltaY * 0.1;
+            cameraDistance = Math.max(10, Math.min(100, cameraDistance));
+            updateCamera();
+        });
+        renderer.domElement.style.cursor = 'grab';
+        
+        // Add grid - size it to match the room dimensions and center it on the model
+        const roomWidth = Math.max(...xs) - Math.min(...xs);
+        const roomDepth = Math.max(...zs) - Math.min(...zs);
+        const gridSize = Math.max(roomWidth, roomDepth) * 1.2; // Slightly larger than room
+        const gridDivisions = Math.max(roomWidth, roomDepth); // One division per meter
+        const gridHelper = new THREE.GridHelper(gridSize, gridDivisions);
+        // Center the grid on the model (centerX, centerZ are already calculated above)
+        gridHelper.position.set(centerX, 0, centerZ);
+        scene.add(gridHelper);
+        
+        // Add axes
+        const axesHelper = new THREE.AxesHelper(10);
+        scene.add(axesHelper);
+        
+        // Create floor from polygon - shift by room depth (the other dimension)
+        // Use the roomDepth already calculated for the grid
+        const floorShape = new THREE.Shape();
+        // Reverse the polygon order to flip the floor
+        const reversedPolygon = [...layout.polygon].reverse();
+        reversedPolygon.forEach((p, idx) => {
+            const x = p.x; // Shift by room depth (subtract from X)
+            const z = p.y; // y in 2D becomes z in 3D (no shift needed)
+            if (idx === 0) {
+                floorShape.moveTo(x, z);
+            } else {
+                floorShape.lineTo(x, z);
+            }
+        });
+        // Close the shape - make sure to use the same shift
+        floorShape.lineTo(reversedPolygon[0].x, reversedPolygon[0].y - roomDepth);
+        
+        const floorGeom = new THREE.ShapeGeometry(floorShape);
+        const floorMat = new THREE.MeshBasicMaterial({ 
+            color: 0x666666, 
+            side: THREE.DoubleSide,
+            transparent: false,
+            opacity: 1.0
+        });
+        const floorMesh = new THREE.Mesh(floorGeom, floorMat);
+        // Rotate to lie flat on XZ plane (y=0), then rotate 180° around X axis
+        floorMesh.rotateX(-Math.PI / 2);
+        floorMesh.rotateX(Math.PI); // Rotate 180 degrees around X axis
+        // Ensure floor is exactly at y=0
+        // floorMesh.position.set(0, 0, 0);
+        scene.add(floorMesh);
+        console.log('Floor created from polygon with', layout.polygon.length, 'points');
+        
+        // Create walls using explicit geometry - DIRECT VERTEX APPROACH
+        // Create wall plane directly from edge vertices - no rotation needed!
+        layout.walls.forEach((wall, idx) => {
+            const geom = wall.geometry;
+            
+            // Create wall plane directly from 4 vertices
+            // Bottom-left, bottom-right, top-right, top-left
+            const vertices = new Float32Array([
+                // Bottom-left
+                geom.start.x, 0, geom.start.z,
+                // Bottom-right  
+                geom.end.x, 0, geom.end.z,
+                // Top-right
+                geom.end.x, layout.dimensions.height, geom.end.z,
+                // Top-left
+                geom.start.x, layout.dimensions.height, geom.start.z
+            ]);
+            
+            // Create indices for two triangles
+            // Order: bottom-left, bottom-right, top-right, top-left
+            // Triangle 1: 0-1-2 (bottom-left to bottom-right to top-right)
+            // Triangle 2: 0-2-3 (bottom-left to top-right to top-left)
+            const indices = new Uint16Array([
+                0, 1, 2,  // First triangle
+                0, 2, 3   // Second triangle
+            ]);
+            
+            // Create geometry from vertices
+            const wallGeom = new THREE.BufferGeometry();
+            const positionAttribute = new THREE.BufferAttribute(vertices, 3);
+            positionAttribute.needsUpdate = true;
+            wallGeom.setAttribute('position', positionAttribute);
+            wallGeom.setIndex(new THREE.BufferAttribute(indices, 1));
+            wallGeom.computeVertexNormals();
+            
+            // Verify geometry is valid
+            if (!wallGeom.attributes.position || wallGeom.attributes.position.count === 0) {
+                console.error(`Wall ${idx + 1}: Invalid geometry - no position attribute`);
+                return; // Skip this wall
+            }
+            
+            // Make sure normals are correct - flip if needed
+            const normals = wallGeom.getAttribute('normal');
+            if (normals) {
+                // Ensure normals point inward (toward room center)
+                // For CCW polygon, normal should point up (positive Y)
+                // But we want it to point into the room, so we might need to flip
+            }
+            
+            const wallMat = new THREE.MeshBasicMaterial({ 
+                color: 0xff0000, 
+                side: THREE.DoubleSide,
+                transparent: false,
+                opacity: 1.0,
+                depthWrite: true,
+                depthTest: true
+            });
+            const wallMesh = new THREE.Mesh(wallGeom, wallMat);
+            
+            // Also add wireframe for visibility (create new geometry instead of cloning)
+            const wireframeGeom = new THREE.BufferGeometry();
+            const wireframePositionAttr = new THREE.BufferAttribute(vertices, 3);
+            wireframePositionAttr.needsUpdate = true;
+            wireframeGeom.setAttribute('position', wireframePositionAttr);
+            wireframeGeom.setIndex(new THREE.BufferAttribute(indices, 1));
+            const wireframeMat = new THREE.MeshBasicMaterial({ 
+                color: 0xff0000, 
+                wireframe: true,
+                side: THREE.DoubleSide
+            });
+            const wireframeMesh = new THREE.Mesh(wireframeGeom, wireframeMat);
+            
+            // Debug: log wall creation
+            console.log(`Wall ${idx + 1} created:`, {
+                start: geom.start,
+                end: geom.end,
+                vertices: Array.from(vertices),
+                indices: Array.from(indices),
+                center: geom.center
+            });
+            
+            // No rotation needed - vertices are already in correct positions!
+            scene.add(wallMesh);
+            scene.add(wireframeMesh); // Add wireframe too
+            
+            // Add green line showing the exact edge - use simple line segments
+            const linePoints = [
+                new THREE.Vector3(geom.start.x, 0, geom.start.z),
+                new THREE.Vector3(geom.end.x, 0, geom.end.z)
+            ];
+            const lineGeom = new THREE.BufferGeometry().setFromPoints(linePoints);
+            const lineMat = new THREE.LineBasicMaterial({ 
+                color: 0x00ff00, 
+                linewidth: 3
+            });
+            const line = new THREE.Line(lineGeom, lineMat);
+            scene.add(line);
+            
+            // Also add vertical lines at corners
+            const line2Points = [
+                new THREE.Vector3(geom.start.x, 0, geom.start.z),
+                new THREE.Vector3(geom.start.x, layout.dimensions.height, geom.start.z)
+            ];
+            const line2Geom = new THREE.BufferGeometry().setFromPoints(line2Points);
+            const line2 = new THREE.Line(line2Geom, lineMat);
+            scene.add(line2);
+            
+            const line3Points = [
+                new THREE.Vector3(geom.end.x, 0, geom.end.z),
+                new THREE.Vector3(geom.end.x, layout.dimensions.height, geom.end.z)
+            ];
+            const line3Geom = new THREE.BufferGeometry().setFromPoints(line3Points);
+            const line3 = new THREE.Line(line3Geom, lineMat);
+            scene.add(line3);
+            
+            console.log(`Green lines ${idx + 1} added from`, geom.start, 'to', geom.end);
+            
+            // Debug info
+            console.log(`Wall ${idx + 1}:`, {
+                center: geom.center,
+                rotationY: geom.rotationY,
+                rotationDeg: (geom.rotationY * 180 / Math.PI).toFixed(1) + '°',
+                length: geom.length,
+                start: geom.start,
+                end: geom.end
+            });
+        });
+        
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+        
+        // Initial render to make sure something shows
+        console.log('Scene children before render:', scene.children.length);
+        console.log('Camera position:', camera.position);
+        console.log('Camera looking at:', camera.getWorldDirection(new THREE.Vector3()));
+        renderer.render(scene, camera);
+        console.log('Initial render complete. Scene has', scene.children.length, 'objects');
+        console.log('Renderer domElement:', renderer.domElement);
+        
+        // Start animation loop
+        animate();
+        
+        // Update info
+        document.getElementById('info').innerHTML = `
+            <div><b>Wall Alignment Test</b></div>
+            <div>Red = Walls (BoxGeometry)</div>
+            <div>Green = Exact Edge Lines</div>
+            <div>Gray = Floor</div>
+            <div>Check console for wall details</div>
+            <div>Drag to rotate, scroll to zoom</div>
+        `;
+        
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
