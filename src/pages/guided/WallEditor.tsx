@@ -3,23 +3,22 @@ import { useParams, useNavigate } from 'react-router-dom'
 import './WallEditor.css'
 import { getApiBaseUrl } from '../../utils/api'
 
-const enforceRectangle = (points: CornerPoint[]): CornerPoint[] => {
-  if (points.length < 2) return points
-  const xs = points.map(p => p[0])
-  const ys = points.map(p => p[1])
-  const minX = Math.min(...xs)
-  const maxX = Math.max(...xs)
-  const minY = Math.min(...ys)
-  const maxY = Math.max(...ys)
+type CornerPoint = [number, number]
+
+const rectFromDrag = (index: number, x: number, y: number, points: CornerPoint[]): CornerPoint[] => {
+  if (points.length !== 4) return points
+  const anchor = points[(index + 2) % 4] // opposite corner
+  const minX = Math.min(x, anchor[0])
+  const maxX = Math.max(x, anchor[0])
+  const minY = Math.min(y, anchor[1])
+  const maxY = Math.max(y, anchor[1])
   return [
     [minX, minY],
     [maxX, minY],
     [maxX, maxY],
-    [minX, maxY],
+    [minX, maxY]
   ]
 }
-
-type CornerPoint = [number, number]
 
 const WallEditor = () => {
   const { venueId, wallId } = useParams<{ venueId: string; wallId: string }>()
@@ -30,13 +29,11 @@ const WallEditor = () => {
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [cornerPoints, setCornerPoints] = useState<CornerPoint[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
-  const [isDetecting, setIsDetecting] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
-  const [mode, setMode] = useState<'auto' | 'manual'>('auto')
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null)
   const [isDragging, setIsDragging] = useState(false)
-  const [lockRectangle, setLockRectangle] = useState(true)
+  const [cropMode, setCropMode] = useState(true)
 
   const API_BASE_URL = getApiBaseUrl()
 
@@ -83,9 +80,20 @@ const WallEditor = () => {
               
               const ctx = canvas.getContext('2d')
               if (ctx) {
-                // Clear and draw the full image at full resolution
+            // Clear and draw the full image at full resolution
                 ctx.clearRect(0, 0, canvas.width, canvas.height)
                 ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+
+            // Initialize a full-image rectangle so the user immediately sees a crop box
+            const defaultPoints: CornerPoint[] = [
+              [0, 0],
+              [img.width, 0],
+              [img.width, img.height],
+              [0, img.height]
+            ]
+            setCornerPoints(defaultPoints)
+            drawCornersOnCanvas(defaultPoints)
+            setCropMode(true)
               }
               
               console.log('Image loaded:', {
@@ -119,74 +127,6 @@ const WallEditor = () => {
     loadWallImage()
   }, [venueId, wallId, API_BASE_URL])
 
-  const handleAutoDetect = async () => {
-    if (!imageRef.current) return
-
-    setIsDetecting(true)
-    setMessage(null)
-
-    try {
-      // Use the original image directly instead of canvas to ensure full image is sent
-      // Convert image to blob for upload
-      const canvas = document.createElement('canvas')
-      canvas.width = imageRef.current.width
-      canvas.height = imageRef.current.height
-      const ctx = canvas.getContext('2d')
-      if (!ctx) {
-        setMessage({ text: 'Failed to create canvas context', type: 'error' })
-        setIsDetecting(false)
-        return
-      }
-      
-      // Draw the full original image to the temporary canvas
-      ctx.drawImage(imageRef.current, 0, 0, canvas.width, canvas.height)
-      
-      console.log('Auto-detect: Sending image', {
-        width: canvas.width,
-        height: canvas.height,
-        imageWidth: imageRef.current.width,
-        imageHeight: imageRef.current.height
-      })
-
-      canvas.toBlob(async (blob) => {
-        if (!blob) {
-          setMessage({ text: 'Failed to convert image', type: 'error' })
-          setIsDetecting(false)
-          return
-        }
-
-        console.log('Auto-detect: Image blob size', blob.size, 'bytes')
-
-        const formData = new FormData()
-        formData.append('file', blob, 'wall.jpg')
-
-        const response = await fetch(`${API_BASE_URL}/api/v1/wall/auto-detect`, {
-          method: 'POST',
-          body: formData
-        })
-
-        const data = await response.json()
-
-        console.log('Auto-detect: Response', data)
-
-        if (data.status === 'success' && data.points) {
-          const rectPoints = lockRectangle ? enforceRectangle(data.points as CornerPoint[]) : (data.points as CornerPoint[])
-          setCornerPoints(rectPoints)
-          drawCornersOnCanvas(rectPoints)
-          setMessage({ text: 'Corners detected! Review and adjust if needed, then click Process.', type: 'success' })
-          setMode('manual') // Switch to manual mode for adjustments
-        } else {
-          setMessage({ text: data.message || 'Auto-detection failed. Please select corners manually.', type: 'error' })
-          setMode('manual')
-        }
-        setIsDetecting(false)
-      }, 'image/jpeg', 0.95)
-    } catch (error) {
-      setMessage({ text: 'Failed to detect corners. Please select manually.', type: 'error' })
-      setMode('manual')
-      setIsDetecting(false)
-    }
-  }
 
   const drawCornersOnCanvas = (points: CornerPoint[]) => {
     const canvas = canvasRef.current
@@ -244,6 +184,13 @@ const WallEditor = () => {
     }
   }
 
+  // Ensure canvas redraws when points or image change to avoid black/blank view
+  useEffect(() => {
+    if (imageRef.current && canvasRef.current && cornerPoints.length === 4) {
+      drawCornersOnCanvas(cornerPoints)
+    }
+  }, [cornerPoints, imageUrl])
+
   const getScaledCoordinates = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current
     if (!canvas) return null
@@ -252,7 +199,6 @@ const WallEditor = () => {
     const x = clientX - rect.left
     const y = clientY - rect.top
 
-    // Scale coordinates to image size
     const scaleX = canvas.width / rect.width
     const scaleY = canvas.height / rect.height
     const scaledX = x * scaleX
@@ -262,7 +208,7 @@ const WallEditor = () => {
   }
 
   const getPointAtPosition = (x: number, y: number, scaleX: number, scaleY: number) => {
-    const threshold = 15 / Math.min(scaleX, scaleY) // 15px threshold in screen space
+    const threshold = 15 / Math.min(scaleX, scaleY)
     for (let i = 0; i < cornerPoints.length; i++) {
       const [px, py] = cornerPoints[i]
       const dx = x - px
@@ -276,52 +222,27 @@ const WallEditor = () => {
   }
 
   const handleCanvasMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (mode !== 'manual') return
+    if (!cropMode || cornerPoints.length !== 4) return
 
     const coords = getScaledCoordinates(e.clientX, e.clientY)
     if (!coords) return
 
-    // Check if clicking on existing point
     const pointIndex = getPointAtPosition(coords.x, coords.y, coords.scaleX, coords.scaleY)
-    
-    if (pointIndex !== null && cornerPoints.length === 4) {
+    if (pointIndex !== null) {
       setDraggingIndex(pointIndex)
       setIsDragging(true)
-    } else if (cornerPoints.length < 4) {
-      const newPoints = [...cornerPoints, [coords.x, coords.y] as CornerPoint]
-      const constrained = lockRectangle && newPoints.length === 4 ? enforceRectangle(newPoints) : newPoints
-      setCornerPoints(constrained)
-      if (constrained.length === 4) {
-        drawCornersOnCanvas(constrained)
-      } else {
-        const canvas = canvasRef.current
-        if (canvas && imageRef.current) {
-          const ctx = canvas.getContext('2d')
-          if (ctx) {
-            ctx.drawImage(imageRef.current, 0, 0)
-            ctx.fillStyle = '#ff0000'
-            constrained.forEach(([px, py]) => {
-              ctx.beginPath()
-              ctx.arc(px, py, 8, 0, 2 * Math.PI)
-              ctx.fill()
-            })
-          }
-        }
-      }
     }
   }
 
   const handleCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDragging || draggingIndex === null) return
+    if (!isDragging || draggingIndex === null || !cropMode) return
 
     const coords = getScaledCoordinates(e.clientX, e.clientY)
     if (!coords) return
 
-    const newPoints = [...cornerPoints]
-    newPoints[draggingIndex] = [coords.x, coords.y]
-    const constrained = lockRectangle && newPoints.length === 4 ? enforceRectangle(newPoints) : newPoints
-    setCornerPoints(constrained)
-    drawCornersOnCanvas(constrained)
+    const newPoints = rectFromDrag(draggingIndex, coords.x, coords.y, cornerPoints)
+    setCornerPoints(newPoints)
+    drawCornersOnCanvas(newPoints)
   }
 
   const handleCanvasMouseUp = () => {
@@ -330,31 +251,17 @@ const WallEditor = () => {
   }
 
   const handleReset = () => {
-    setCornerPoints([])
-    if (canvasRef.current && imageRef.current) {
-      const canvas = canvasRef.current
-      // Ensure canvas size is correct
-      if (canvas.width !== imageRef.current.width || canvas.height !== imageRef.current.height) {
-        canvas.width = imageRef.current.width
-        canvas.height = imageRef.current.height
-        
-        // Recalculate and set display size
-        const maxDisplayWidth = Math.min(window.innerWidth * 0.9, 1400)
-        const maxDisplayHeight = window.innerHeight * 0.85
-        const scaleX = maxDisplayWidth / imageRef.current.width
-        const scaleY = maxDisplayHeight / imageRef.current.height
-        const scale = Math.min(scaleX, scaleY)
-        
-        canvas.style.width = `${imageRef.current.width * scale}px`
-        canvas.style.height = `${imageRef.current.height * scale}px`
-      }
-      
-      const ctx = canvas.getContext('2d')
-      if (ctx) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height)
-        ctx.drawImage(imageRef.current, 0, 0, canvas.width, canvas.height)
-      }
-    }
+    if (!imageRef.current || !canvasRef.current) return
+    const img = imageRef.current
+    const defaultPoints: CornerPoint[] = [
+      [0, 0],
+      [img.width, 0],
+      [img.width, img.height],
+      [0, img.height]
+    ]
+    setCornerPoints(defaultPoints)
+    drawCornersOnCanvas(defaultPoints)
+    setCropMode(true)
   }
 
   const handleProcess = async () => {
@@ -424,7 +331,7 @@ const WallEditor = () => {
     return (
       <div className="wall-editor-container">
         <div className="wall-editor-header">
-          <button onClick={() => navigate(`/editor/${venueId}`)} className="back-button">
+          <button onClick={() => navigate(`/capture/${venueId}`)} className="back-button">
             ← Back
           </button>
           <h1>Edit Wall</h1>
@@ -443,7 +350,7 @@ const WallEditor = () => {
   return (
     <div className="wall-editor-container">
       <div className="wall-editor-header">
-        <button onClick={() => navigate(`/editor/${venueId}`)} className="back-button">
+        <button onClick={() => navigate(`/capture/${venueId}`)} className="back-button">
           ← Back
         </button>
         <h1>Edit Wall</h1>
@@ -460,61 +367,41 @@ const WallEditor = () => {
             onMouseLeave={handleCanvasMouseUp}
             className="preview-canvas"
             style={{ 
-              cursor: isDragging ? 'grabbing' : (mode === 'manual' && cornerPoints.length === 4 ? 'grab' : mode === 'manual' ? 'crosshair' : 'default')
+              cursor: isDragging ? 'grabbing' : (cornerPoints.length === 4 ? 'grab' : 'crosshair')
             }}
           />
           
-          {cornerPoints.length < 4 && mode === 'manual' && (
+          {cornerPoints.length === 4 && cropMode && (
             <p className="instruction-text">
-              Click on the image to select {4 - cornerPoints.length} more corner(s)
-              <br />
-              Order: Top-Left, Top-Right, Bottom-Right, Bottom-Left
-            </p>
-          )}
-          {cornerPoints.length === 4 && mode === 'manual' && (
-            <p className="instruction-text">
-              Click and drag the red corner points to adjust them
+              Drag to resize the crop box. It stays rectangular.
             </p>
           )}
         </div>
 
         <div className="controls-section">
-          {cornerPoints.length === 0 && (
+          <button
+            onClick={() => setCropMode(true)}
+            className="action-button primary"
+            style={{ marginBottom: '0.5rem' }}
+          >
+            {cropMode ? 'Crop Mode: On' : 'Start Crop / Resize'}
+          </button>
+
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
             <button
-              onClick={handleAutoDetect}
-              disabled={isDetecting}
+              onClick={handleReset}
+              className="action-button secondary"
+            >
+              Reset to Full Image
+            </button>
+            <button
+              onClick={handleProcess}
+              disabled={isProcessing || cornerPoints.length !== 4}
               className="action-button primary"
             >
-              {isDetecting ? 'Detecting...' : 'Auto-Detect Corners'}
+              {isProcessing ? 'Processing...' : 'Save / Process'}
             </button>
-          )}
-
-          {cornerPoints.length > 0 && (
-            <>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem' }}>
-                <input
-                  type="checkbox"
-                  checked={lockRectangle}
-                  onChange={(e) => setLockRectangle(e.target.checked)}
-                />
-                Keep corners rectangular
-              </label>
-
-              <button
-                onClick={handleReset}
-                className="action-button secondary"
-              >
-                Reset Corners
-              </button>
-              <button
-                onClick={handleProcess}
-                disabled={isProcessing || cornerPoints.length !== 4}
-                className="action-button primary"
-              >
-                {isProcessing ? 'Processing...' : 'Process Wall'}
-              </button>
-            </>
-          )}
+          </div>
 
           <button
             onClick={() => navigate(`/view/${venueId}`)}

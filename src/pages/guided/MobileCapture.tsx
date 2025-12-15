@@ -51,6 +51,7 @@ const MobileCapture = () => {
   const [progress, setProgress] = useState<ProgressState | null>(null)
   const [currentWall, setCurrentWall] = useState<WallSegment | null>(null)
   const [floorPlanUrl, setFloorPlanUrl] = useState<string | null>(null)
+  const [wallImages, setWallImages] = useState<Record<string, string>>({})
   const [videoReady, setVideoReady] = useState(false)
   const [loadingTimeout, setLoadingTimeout] = useState(false)
 
@@ -173,13 +174,23 @@ const MobileCapture = () => {
       setCurrentWall(wall)
       
       if (data.floor_plan_url) {
-        // Convert relative URL to absolute
         const fullUrl = data.floor_plan_url.startsWith('http') 
           ? data.floor_plan_url 
           : `${currentApiUrl}${data.floor_plan_url}`
         setFloorPlanUrl(fullUrl)
       } else {
         setFloorPlanUrl(null)
+      }
+
+      // Preload wall images for review
+      try {
+        const imagesRes = await fetch(`${currentApiUrl}/api/v1/venue/${venueId}/wall-images`)
+        const imagesData = await imagesRes.json()
+        if (imagesData.status === 'success' && imagesData.wall_images) {
+          setWallImages(imagesData.wall_images)
+        }
+      } catch (err) {
+        console.warn('[MobileCapture] Could not load wall images for review')
       }
     } catch (error) {
       console.error('[MobileCapture] Unable to fetch venue progress:', error)
@@ -499,7 +510,17 @@ const MobileCapture = () => {
       setShowCheck(true)
       setTimeout(() => setShowCheck(false), 1200)
 
+      // Refresh progress and wall images
       await fetchProgress()
+      try {
+        const imagesRes = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/wall-images`)
+        const imagesData = await imagesRes.json()
+        if (imagesData.status === 'success' && imagesData.wall_images) {
+          setWallImages(imagesData.wall_images)
+        }
+      } catch (err) {
+        console.warn('[MobileCapture] Unable to refresh wall images after capture')
+      }
     } catch (error) {
       console.error('[MobileCapture] Capture error:', error)
       if (error instanceof TypeError && error.message.includes('fetch')) {
@@ -614,8 +635,60 @@ const MobileCapture = () => {
     cameraError
   })
 
+  const captureUrl = `${API_BASE_URL}/mobile/${venueId ?? ''}`
+  const shareUrl = (import.meta.env as any).VITE_NGROK_URL || captureUrl
+
   return (
     <div className="capture-container" style={{ width: '100vw', height: '100vh', position: 'fixed', top: 0, left: 0 }}>
+      <div
+        className="share-banner"
+        style={{
+          position: 'absolute',
+          top: '10px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 1200,
+          background: 'rgba(0,0,0,0.7)',
+          color: '#fff',
+          padding: '8px 12px',
+          borderRadius: '12px',
+          display: 'flex',
+          gap: '10px',
+          alignItems: 'center',
+          fontSize: '0.85rem',
+          boxShadow: '0 6px 20px rgba(0,0,0,0.3)'
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <img
+            src={`https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(shareUrl)}`}
+            alt="Open on phone QR"
+            style={{ width: 48, height: 48, borderRadius: 6, background: '#fff' }}
+          />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontWeight: 600 }}>Open guided capture on your phone</span>
+            <code style={{ background: 'rgba(255,255,255,0.08)', padding: '3px 5px', borderRadius: '6px' }}>
+              {shareUrl}
+            </code>
+          </div>
+        </div>
+        <button
+          onClick={() => navigator.clipboard?.writeText(shareUrl).catch(() => {})}
+          style={{
+            background: '#4CAF50',
+            color: '#fff',
+            border: 'none',
+            padding: '6px 10px',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontWeight: 600,
+            whiteSpace: 'nowrap'
+          }}
+        >
+          Copy link
+        </button>
+      </div>
+
       <div className="video-wrapper" style={{ position: 'relative', width: '100%', height: '100%' }}>
         <video
           ref={videoRef}
@@ -909,6 +982,86 @@ const MobileCapture = () => {
             </div>
           </div>
         )}
+
+        {/* Review captures panel */}
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '16px',
+            left: '16px',
+            right: '16px',
+            maxHeight: '32vh',
+            overflowY: 'auto',
+            background: 'rgba(0,0,0,0.6)',
+            color: '#fff',
+            padding: '12px',
+            borderRadius: '12px',
+            zIndex: 1200,
+            backdropFilter: 'blur(6px)'
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <div style={{ fontWeight: 700, fontSize: '0.95rem' }}>Review Captures</div>
+            <div style={{ fontSize: '0.85rem', opacity: 0.8 }}>
+              {progress?.completed_walls.length ?? 0}/{progress?.total_walls ?? progress?.walls?.length ?? 0} done
+            </div>
+          </div>
+          <div style={{ display: 'grid', gap: '10px', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
+            {progress?.walls?.map((wall) => {
+              const url = wallImages[wall.id]
+              return (
+                <div key={wall.id} style={{ background: 'rgba(255,255,255,0.08)', borderRadius: '10px', padding: '8px' }}>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '6px' }}>{wall.name}</div>
+                  {url ? (
+                    <img
+                      src={url.startsWith('http') ? url : `${API_BASE_URL}${url}`}
+                      alt={wall.name}
+                      style={{ width: '100%', height: '80px', objectFit: 'cover', borderRadius: '8px', marginBottom: '6px' }}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        height: '80px',
+                        borderRadius: '8px',
+                        background: 'rgba(255,255,255,0.05)',
+                        display: 'grid',
+                        placeItems: 'center',
+                        fontSize: '0.85rem',
+                        opacity: 0.8,
+                        marginBottom: '6px'
+                      }}
+                    >
+                      No image
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button
+                      style={{ flex: 1, background: '#1e88e5', color: '#fff', border: 'none', borderRadius: '6px', padding: '6px', cursor: 'pointer', fontSize: '0.8rem' }}
+                      onClick={() => {
+                        const target = progress?.walls?.find(w => w.id === wall.id) as WallSegment | undefined
+                        if (target) {
+                          setCurrentWall(target)
+                          setToast({ message: `Now capturing ${target.name}`, type: 'success' })
+                        }
+                      }}
+                    >
+                      Retake
+                    </button>
+                    <button
+                      style={{ flex: 1, background: '#ff9800', color: '#fff', border: 'none', borderRadius: '6px', padding: '6px', cursor: 'pointer', fontSize: '0.8rem' }}
+                      onClick={() => navigate(`/edit/${venueId}/${wall.id}?from=capture`)}
+                    >
+                      Adjust
+                    </button>
+                  </div>
+                </div>
+              )
+            }) || null}
+            {(!progress?.walls || progress.walls.length === 0) && (
+              <div style={{ fontSize: '0.9rem', opacity: 0.8 }}>No walls loaded yet.</div>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Floating Shutter Button */}

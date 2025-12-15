@@ -21,6 +21,7 @@ const FloorPlanner = () => {
   const { venueId } = useParams<{ venueId: string }>()
   const navigate = useNavigate()
   const canvasRef = useRef<HTMLDivElement>(null)
+  const [venueName, setVenueName] = useState<string>('')
   const [roomDimensions, setRoomDimensions] = useState({ width: 20, height: 8, depth: 20 })
   const [materials, setMaterials] = useState<{ floor: { type: string; color: string }; ceiling: { type: string; color?: string } }>({
     floor: { type: 'carpet', color: '#c6b39e' },
@@ -67,6 +68,12 @@ const FloorPlanner = () => {
           const data = await response.json()
           if (data.dimensions) {
             setRoomDimensions(data.dimensions)
+          }
+          if (data.name) {
+            setVenueName(data.name)
+          }
+          if (data.materials) {
+            setMaterials(data.materials)
           }
           if (data.assets && Array.isArray(data.assets)) {
             setPlacedAssets(data.assets)
@@ -280,6 +287,7 @@ const FloorPlanner = () => {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
+          name: venueName || venueId,
           dimensions: roomDimensions,
           assets: placedAssets,
           materials
@@ -524,7 +532,7 @@ const FloorPlanner = () => {
           ← Back
         </button>
         <h1>2D Floor Planner</h1>
-        <p>Venue: {venueId} | Room: {roomDimensions.width}m x {roomDimensions.depth}m</p>
+        <p>Venue: {venueName || venueId} | Room: {roomDimensions.width}m x {roomDimensions.depth}m</p>
       </div>
 
       <div className="planner-content">
@@ -558,6 +566,15 @@ const FloorPlanner = () => {
           </div>
           <div className="material-panel">
             <h3>Room & Materials</h3>
+            <label className="form-row">
+              <span>Venue Name</span>
+              <input
+                type="text"
+                value={venueName}
+                onChange={(e) => setVenueName(e.target.value)}
+                placeholder="My Venue"
+              />
+            </label>
             <label className="form-row">
               <span>Width (m)</span>
               <input
