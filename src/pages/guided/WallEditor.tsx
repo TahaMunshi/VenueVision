@@ -3,6 +3,22 @@ import { useParams, useNavigate } from 'react-router-dom'
 import './WallEditor.css'
 import { getApiBaseUrl } from '../../utils/api'
 
+const enforceRectangle = (points: CornerPoint[]): CornerPoint[] => {
+  if (points.length < 2) return points
+  const xs = points.map(p => p[0])
+  const ys = points.map(p => p[1])
+  const minX = Math.min(...xs)
+  const maxX = Math.max(...xs)
+  const minY = Math.min(...ys)
+  const maxY = Math.max(...ys)
+  return [
+    [minX, minY],
+    [maxX, minY],
+    [maxX, maxY],
+    [minX, maxY],
+  ]
+}
+
 type CornerPoint = [number, number]
 
 const WallEditor = () => {
@@ -20,6 +36,7 @@ const WallEditor = () => {
   const [mode, setMode] = useState<'auto' | 'manual'>('auto')
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null)
   const [isDragging, setIsDragging] = useState(false)
+  const [lockRectangle, setLockRectangle] = useState(true)
 
   const API_BASE_URL = getApiBaseUrl()
 
@@ -153,8 +170,9 @@ const WallEditor = () => {
         console.log('Auto-detect: Response', data)
 
         if (data.status === 'success' && data.points) {
-          setCornerPoints(data.points as CornerPoint[])
-          drawCornersOnCanvas(data.points)
+          const rectPoints = lockRectangle ? enforceRectangle(data.points as CornerPoint[]) : (data.points as CornerPoint[])
+          setCornerPoints(rectPoints)
+          drawCornersOnCanvas(rectPoints)
           setMessage({ text: 'Corners detected! Review and adjust if needed, then click Process.', type: 'success' })
           setMode('manual') // Switch to manual mode for adjustments
         } else {
@@ -267,24 +285,22 @@ const WallEditor = () => {
     const pointIndex = getPointAtPosition(coords.x, coords.y, coords.scaleX, coords.scaleY)
     
     if (pointIndex !== null && cornerPoints.length === 4) {
-      // Start dragging existing point
       setDraggingIndex(pointIndex)
       setIsDragging(true)
     } else if (cornerPoints.length < 4) {
-      // Add new point
       const newPoints = [...cornerPoints, [coords.x, coords.y] as CornerPoint]
-      setCornerPoints(newPoints)
-      if (newPoints.length === 4) {
-        drawCornersOnCanvas(newPoints)
+      const constrained = lockRectangle && newPoints.length === 4 ? enforceRectangle(newPoints) : newPoints
+      setCornerPoints(constrained)
+      if (constrained.length === 4) {
+        drawCornersOnCanvas(constrained)
       } else {
-        // Redraw with current points
         const canvas = canvasRef.current
         if (canvas && imageRef.current) {
           const ctx = canvas.getContext('2d')
           if (ctx) {
             ctx.drawImage(imageRef.current, 0, 0)
             ctx.fillStyle = '#ff0000'
-            newPoints.forEach(([px, py]) => {
+            constrained.forEach(([px, py]) => {
               ctx.beginPath()
               ctx.arc(px, py, 8, 0, 2 * Math.PI)
               ctx.fill()
@@ -303,8 +319,9 @@ const WallEditor = () => {
 
     const newPoints = [...cornerPoints]
     newPoints[draggingIndex] = [coords.x, coords.y]
-    setCornerPoints(newPoints)
-    drawCornersOnCanvas(newPoints)
+    const constrained = lockRectangle && newPoints.length === 4 ? enforceRectangle(newPoints) : newPoints
+    setCornerPoints(constrained)
+    drawCornersOnCanvas(constrained)
   }
 
   const handleCanvasMouseUp = () => {
@@ -474,6 +491,15 @@ const WallEditor = () => {
 
           {cornerPoints.length > 0 && (
             <>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem' }}>
+                <input
+                  type="checkbox"
+                  checked={lockRectangle}
+                  onChange={(e) => setLockRectangle(e.target.checked)}
+                />
+                Keep corners rectangular
+              </label>
+
               <button
                 onClick={handleReset}
                 className="action-button secondary"

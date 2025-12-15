@@ -39,8 +39,9 @@ const Space3DViewer = () => {
     // Dynamically load Three.js
     const loadThreeJS = async () => {
       try {
-        // First, fetch wall images from API
+        // Fetch wall images and layout (for materials / generated glb)
         let wallImageUrls: { [key: string]: string } = {}
+        let generatedGlb: string | null = null
         try {
           const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/wall-images`)
           const data = await response.json()
@@ -50,6 +51,18 @@ const Space3DViewer = () => {
           }
         } catch (err) {
           console.warn('[Space3DViewer] Failed to fetch wall images, will try default paths:', err)
+        }
+        try {
+          const layoutResponse = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/layout`)
+          const layoutData = await layoutResponse.json()
+          if (layoutData.status === 'success' && layoutData.generated_glb) {
+            generatedGlb = `${API_BASE_URL}${layoutData.generated_glb}`
+          }
+          if (layoutData.status === 'success' && layoutData.dimensions) {
+            setDimensions(layoutData.dimensions)
+          }
+        } catch (err) {
+          console.warn('[Space3DViewer] Failed to fetch layout for GLB info:', err)
         }
 
         // Load Three.js from CDN
@@ -111,7 +124,28 @@ const Space3DViewer = () => {
         dirLight.position.set(10, 20, 15)
         scene.add(dirLight)
 
-        // Load wall textures
+        // If a server-generated GLB exists, try to load it first
+        if (generatedGlb) {
+          try {
+            const gltfLoader = new THREE.GLTFLoader()
+            await new Promise<void>((resolve, reject) => {
+              gltfLoader.load(
+                generatedGlb!,
+                (gltf: any) => {
+                  scene.add(gltf.scene)
+                  setLoading(false)
+                  resolve()
+                },
+                undefined,
+                (err: any) => reject(err)
+              )
+            })
+          } catch (err) {
+            console.warn('[Space3DViewer] Failed to load generated GLB, falling back to textured room:', err)
+          }
+        }
+
+        // Load wall textures (fallback / enhancement)
         const loader = new THREE.TextureLoader()
         const cacheBuster = `?v=${Date.now()}`
         

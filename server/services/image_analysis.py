@@ -66,6 +66,21 @@ def analyze_quality(image_bytes: bytes) -> Dict[str, Any]:
     if edge_ratio > MAX_EDGE_RATIO:
         return {"valid": False, "error": "Too Noisy: Move closer and avoid clutter."}
 
+    # 4. Angle check: discourage steep perspective (prompt for straight-on shot)
+    try:
+        lines = cv2.HoughLines(edges, 1, np.pi / 180, threshold=120)
+        if lines is not None and len(lines) > 0:
+            # Compute deviation from vertical/horizontal
+            angles = np.abs(np.rad2deg(lines[:, 0, 1]))
+            angles = np.minimum(angles, 180 - angles)  # map to [0,90]
+            # consider near-vertical (<=20) and near-horizontal (>=70)
+            predominant = np.median(angles)
+            logger.debug("Median edge angle: %.2f", predominant)
+            if predominant > 25:  # too tilted
+                return {"valid": False, "error": "Too angled: capture straight-on, centered on the wall."}
+    except Exception as err:
+        logger.warning("Angle check failed: %s", err)
+
     return {"valid": True}
 
 

@@ -22,6 +22,10 @@ const FloorPlanner = () => {
   const navigate = useNavigate()
   const canvasRef = useRef<HTMLDivElement>(null)
   const [roomDimensions, setRoomDimensions] = useState({ width: 20, height: 8, depth: 20 })
+  const [materials, setMaterials] = useState<{ floor: { type: string; color: string }; ceiling: { type: string; color?: string } }>({
+    floor: { type: 'carpet', color: '#c6b39e' },
+    ceiling: { type: 'plain', color: '#f5f5f5' }
+  })
   const [placedAssets, setPlacedAssets] = useState<Asset[]>([])
   const [draggedAsset, setDraggedAsset] = useState<{ type: string; width: number; depth: number; file: string } | null>(null)
   const [draggingAssetId, setDraggingAssetId] = useState<string | null>(null)
@@ -277,7 +281,8 @@ const FloorPlanner = () => {
         },
         body: JSON.stringify({
           dimensions: roomDimensions,
-          assets: placedAssets
+          assets: placedAssets,
+          materials
         })
       })
 
@@ -296,6 +301,24 @@ const FloorPlanner = () => {
 
   const handleView3D = () => {
     navigate(`/view/${venueId}`)
+  }
+
+  const handleGenerateGlb = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/generate-glb`, {
+        method: 'POST'
+      })
+      if (response.ok) {
+        setMessage({ text: 'Server GLB generated.', type: 'success' })
+        setTimeout(() => setMessage(null), 2500)
+      } else {
+        setMessage({ text: 'Failed to generate GLB.', type: 'error' })
+        setTimeout(() => setMessage(null), 2500)
+      }
+    } catch (err) {
+      setMessage({ text: 'Error generating GLB.', type: 'error' })
+      setTimeout(() => setMessage(null), 2500)
+    }
   }
 
   // Asset preview functions
@@ -533,6 +556,65 @@ const FloorPlanner = () => {
             <div ref={previewContainerRef} className="asset-preview-canvas"></div>
             <div className="asset-preview-status">Hover an asset to load its 3D preview.</div>
           </div>
+          <div className="material-panel">
+            <h3>Room & Materials</h3>
+            <label className="form-row">
+              <span>Width (m)</span>
+              <input
+                type="number"
+                min={5}
+                value={roomDimensions.width}
+                onChange={(e) => setRoomDimensions({ ...roomDimensions, width: Number(e.target.value) })}
+              />
+            </label>
+            <label className="form-row">
+              <span>Depth (m)</span>
+              <input
+                type="number"
+                min={5}
+                value={roomDimensions.depth}
+                onChange={(e) => setRoomDimensions({ ...roomDimensions, depth: Number(e.target.value) })}
+              />
+            </label>
+            <label className="form-row">
+              <span>Height (m)</span>
+              <input
+                type="number"
+                min={2}
+                value={roomDimensions.height}
+                onChange={(e) => setRoomDimensions({ ...roomDimensions, height: Number(e.target.value) })}
+              />
+            </label>
+            <label className="form-row">
+              <span>Floor</span>
+              <select
+                value={materials.floor.type}
+                onChange={(e) => setMaterials({ ...materials, floor: { ...materials.floor, type: e.target.value } })}
+              >
+                <option value="carpet">Carpet</option>
+                <option value="wood">Wood</option>
+                <option value="tile">Tile</option>
+              </select>
+            </label>
+            <label className="form-row">
+              <span>Floor Color</span>
+              <input
+                type="color"
+                value={materials.floor.color}
+                onChange={(e) => setMaterials({ ...materials, floor: { ...materials.floor, color: e.target.value } })}
+              />
+            </label>
+            <label className="form-row">
+              <span>Ceiling</span>
+              <select
+                value={materials.ceiling.type}
+                onChange={(e) => setMaterials({ ...materials, ceiling: { ...materials.ceiling, type: e.target.value } })}
+              >
+                <option value="plain">Plain</option>
+                <option value="acoustic">Acoustic</option>
+              </select>
+            </label>
+          </div>
           <hr />
           <button onClick={handleSave} className="action-button primary">
             💾 Save Layout
@@ -540,11 +622,14 @@ const FloorPlanner = () => {
           <button onClick={handleView3D} className="action-button secondary">
             👁️ View 3D Space
           </button>
+          <button onClick={handleGenerateGlb} className="action-button secondary">
+            🧊 Generate Server GLB
+          </button>
         </div>
 
         <div className="planning-area">
           <div className="controls-bar">
-            Room: {roomDimensions.width}m x {roomDimensions.depth}m (Scale: 1m = 20px) | Assets: {placedAssets.length}
+            Room: {roomDimensions.width}m x {roomDimensions.depth}m x {roomDimensions.height}m (Scale: 1m = 20px) | Floor: {materials.floor.type} | Assets: {placedAssets.length}
           </div>
           <div
             ref={canvasRef}
