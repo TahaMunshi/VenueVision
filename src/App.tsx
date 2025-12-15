@@ -1,11 +1,11 @@
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import './App.css'
-import MobileCapture from './pages/MobileCapture'
-import WallUpload from './pages/WallUpload'
-import Space3DViewer from './pages/Space3DViewer'
-import WallSelector from './pages/WallSelector'
-import WallEditor from './pages/WallEditor'
-import FloorPlanner from './pages/FloorPlanner'
+import MobileCapture from './pages/guided/MobileCapture'
+import WallUpload from './pages/guided/WallUpload'
+import Space3DViewer from './pages/viewer/Space3DViewer'
+import WallSelector from './pages/guided/WallSelector'
+import WallEditor from './pages/guided/WallEditor'
+import FloorPlanner from './pages/planner/FloorPlanner'
 
 // Mobile Home Page - shown when accessing /mobile
 const MobileHome = () => {

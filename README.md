@@ -70,14 +70,19 @@ A 3D event space visualization tool that allows you to capture venue walls using
 
 ```
 fyp/
-├── server/           # Flask backend
-│   ├── api/         # API routes
-│   ├── services/    # Business logic
-│   └── static/      # Static files and uploads
-├── src/             # React frontend
-│   ├── pages/      # Page components
-│   └── components/  # Reusable components
-└── dist/            # Built frontend (generated)
+├── server/              # Flask backend
+│   ├── api/             # API blueprints grouped by feature (see endpoints/)
+│   ├── services/        # Business logic
+│   ├── utils/           # Upload + file helpers
+│   └── static/          # Static files and uploads (demo textures in uploads/demo)
+├── src/                 # React frontend
+│   ├── pages/
+│   │   ├── guided/      # Guided capture + wall editing
+│   │   ├── planner/     # 2D floor planner
+│   │   └── viewer/      # 3D space viewer
+│   ├── components/      # Reusable UI pieces
+│   └── utils/           # Shared helpers (e.g., API base URL)
+└── dist/                # Built frontend (generated)
 ```
 
 ## Usage
