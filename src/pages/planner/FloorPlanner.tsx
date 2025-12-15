@@ -2,8 +2,9 @@ import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import './FloorPlanner.css'
 import { getApiBaseUrl } from '../../utils/api'
+import FloorPlanUpload from '../../components/FloorPlanUpload'
 
-const METER_TO_PIXEL_SCALE = 20 // 1 meter = 20 pixels
+const METER_TO_PIXEL_SCALE = 30 // 1 meter = 30 pixels for a larger canvas
 const GRID_SIZE = METER_TO_PIXEL_SCALE
 
 type Asset = {
@@ -17,6 +18,17 @@ type Asset = {
   rotation: number
 }
 
+type WallSpec = {
+  id: string
+  name: string
+  type: 'straight' | 'curved'
+  length: number
+  height: number
+  radius?: number
+  sweep?: number
+  coordinates?: [number, number, number, number] // normalized 0-100 in planner space
+}
+
 const FloorPlanner = () => {
   const { venueId } = useParams<{ venueId: string }>()
   const navigate = useNavigate()
@@ -27,6 +39,11 @@ const FloorPlanner = () => {
     floor: { type: 'carpet', color: '#c6b39e' },
     ceiling: { type: 'plain', color: '#f5f5f5' }
   })
+  // Start with no walls by default; user draws or adds rectangle manually
+  const defaultWalls: WallSpec[] = []
+  const [walls, setWalls] = useState<WallSpec[]>(defaultWalls)
+  const [floorPlanUrl, setFloorPlanUrl] = useState<string | null>(null)
+  const [planMode, setPlanMode] = useState<'upload' | 'manual'>('manual')
   const [placedAssets, setPlacedAssets] = useState<Asset[]>([])
   const [draggedAsset, setDraggedAsset] = useState<{ type: string; width: number; depth: number; file: string } | null>(null)
   const [draggingAssetId, setDraggingAssetId] = useState<string | null>(null)
@@ -58,6 +75,12 @@ const FloorPlanner = () => {
   })
 
   const API_BASE_URL = getApiBaseUrl()
+  const [isDrawingWall, setIsDrawingWall] = useState(false)
+  const [draftWall, setDraftWall] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
+  const [selectedWallId, setSelectedWallId] = useState<string | null>(null)
+  const [draggingWallId, setDraggingWallId] = useState<string | null>(null)
+  const dragWallStartRef = useRef<{ x: number; y: number } | null>(null)
+  const [draggingEndpoint, setDraggingEndpoint] = useState<{ wallId: string; handle: 'start' | 'end' } | null>(null)
 
   useEffect(() => {
     // Load room dimensions and layout from server
@@ -75,8 +98,17 @@ const FloorPlanner = () => {
           if (data.materials) {
             setMaterials(data.materials)
           }
+          if (data.walls && Array.isArray(data.walls)) {
+            setWalls(data.walls as WallSpec[])
+          } else {
+            setWalls(defaultWalls)
+          }
           if (data.assets && Array.isArray(data.assets)) {
             setPlacedAssets(data.assets)
+          }
+          if (data.floor_plan_url) {
+            setFloorPlanUrl(data.floor_plan_url)
+            setPlanMode('upload')
           }
         }
       } catch (error) {
@@ -250,6 +282,35 @@ const FloorPlanner = () => {
     setPlacedAssets(placedAssets.filter(a => a.id !== assetId))
   }
 
+  const hitTestWall = (xPx: number, yPx: number, tolerancePx = 8): WallSpec | null => {
+    const cw = canvasRef.current
+    if (!cw) return null
+    const widthPx = cw.clientWidth
+    const heightPx = cw.clientHeight
+    let closestWall: WallSpec | null = null
+    let closestDist = Infinity
+    walls.forEach((wall) => {
+      if (!wall.coordinates) return
+      const x1 = (wall.coordinates[0] / 100) * widthPx
+      const y1 = (wall.coordinates[1] / 100) * heightPx
+      const x2 = (wall.coordinates[2] / 100) * widthPx
+      const y2 = (wall.coordinates[3] / 100) * heightPx
+      const dx = x2 - x1
+      const dy = y2 - y1
+      const len2 = dx * dx + dy * dy || 1
+      const t = Math.max(0, Math.min(1, ((xPx - x1) * dx + (yPx - y1) * dy) / len2))
+      const projX = x1 + t * dx
+      const projY = y1 + t * dy
+      const dist = Math.hypot(xPx - projX, yPx - projY)
+      if (dist < closestDist) {
+        closestDist = dist
+        closestWall = wall
+      }
+    })
+    if (closestWall && closestDist <= tolerancePx) return closestWall
+    return null
+  }
+
   const checkCollision = (excludeId: string | null, x: number, y: number, width: number, depth: number): boolean => {
     const spacing = 1 // 1 meter spacing requirement
     const newLeft = x - spacing / 2
@@ -290,7 +351,9 @@ const FloorPlanner = () => {
           name: venueName || venueId,
           dimensions: roomDimensions,
           assets: placedAssets,
-          materials
+          materials,
+          walls,
+          floor_plan_url: floorPlanUrl
         })
       })
 
@@ -566,6 +629,48 @@ const FloorPlanner = () => {
           </div>
           <div className="material-panel">
             <h3>Room & Materials</h3>
+          <div className="plan-mode-toggle">
+            <label>
+              <input
+                type="radio"
+                name="planMode"
+                value="manual"
+                checked={planMode === 'manual'}
+                onChange={() => setPlanMode('manual')}
+              />
+              Create floor plan here
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="planMode"
+                value="upload"
+                checked={planMode === 'upload'}
+                onChange={() => setPlanMode('upload')}
+              />
+              Upload floor plan image
+            </label>
+          </div>
+
+          {planMode === 'upload' && (
+            <div className="upload-wrapper">
+              <FloorPlanUpload
+                venueId={venueId || 'demo-venue'}
+                onUploadComplete={(url) => {
+                  setFloorPlanUrl(url.startsWith('http') ? url : `${API_BASE_URL}${url}`)
+                  setMessage({ text: 'Floor plan uploaded.', type: 'success' })
+                  setTimeout(() => setMessage(null), 2000)
+                }}
+              />
+              {floorPlanUrl && (
+                <div className="upload-preview">
+                  <p>Current floor plan:</p>
+                  <img src={floorPlanUrl.startsWith('http') ? floorPlanUrl : `${API_BASE_URL}${floorPlanUrl}`} alt="Floor plan" />
+                </div>
+              )}
+            </div>
+          )}
+
             <label className="form-row">
               <span>Venue Name</span>
               <input
@@ -631,6 +736,150 @@ const FloorPlanner = () => {
                 <option value="acoustic">Acoustic</option>
               </select>
             </label>
+            <div className="walls-editor">
+              <div className="walls-editor-header">
+                <h4>Walls</h4>
+                <button
+                  className="action-button secondary"
+                  onClick={() => {
+                    const rectWalls: WallSpec[] = [
+                      {
+                        id: 'wall_north',
+                        name: 'North Wall',
+                        type: 'straight',
+                        length: roomDimensions.width,
+                        height: roomDimensions.height,
+                        coordinates: [0, 0, 100, 0],
+                      },
+                      {
+                        id: 'wall_south',
+                        name: 'South Wall',
+                        type: 'straight',
+                        length: roomDimensions.width,
+                        height: roomDimensions.height,
+                        coordinates: [0, 100, 100, 100],
+                      },
+                      {
+                        id: 'wall_east',
+                        name: 'East Wall',
+                        type: 'straight',
+                        length: roomDimensions.depth,
+                        height: roomDimensions.height,
+                        coordinates: [100, 0, 100, 100],
+                      },
+                      {
+                        id: 'wall_west',
+                        name: 'West Wall',
+                        type: 'straight',
+                        length: roomDimensions.depth,
+                        height: roomDimensions.height,
+                        coordinates: [0, 0, 0, 100],
+                      },
+                    ]
+                    setWalls(rectWalls)
+                    setSelectedWallId('wall_north')
+                  }}
+                >
+                  Add rectangle
+                </button>
+              </div>
+              {walls.map((wall, idx) => (
+                <div key={wall.id} className={`wall-row ${selectedWallId === wall.id ? 'selected' : ''}`}>
+                  <div className="wall-row-title">
+                    {wall.name}
+                    <div className="wall-row-actions">
+                      <button
+                        className="select-wall-btn"
+                        onClick={() => setSelectedWallId(wall.id)}
+                      >
+                        {selectedWallId === wall.id ? 'Selected' : 'Select'}
+                      </button>
+                      <button
+                        className="delete-wall-btn"
+                        onClick={() => {
+                          setWalls(walls.filter((w) => w.id !== wall.id))
+                          if (selectedWallId === wall.id) setSelectedWallId(null)
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                  <label className="form-row compact">
+                    <span>Type</span>
+                    <select
+                      value={wall.type}
+                      onChange={(e) => {
+                        const type = e.target.value as 'straight' | 'curved'
+                        const next = [...walls]
+                        next[idx] = { ...wall, type }
+                        setWalls(next)
+                      }}
+                    >
+                      <option value="straight">Straight</option>
+                      <option value="curved">Curved</option>
+                    </select>
+                  </label>
+                  <label className="form-row compact">
+                    <span>Length (m)</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={wall.length}
+                      onChange={(e) => {
+                        const next = [...walls]
+                        next[idx] = { ...wall, length: Number(e.target.value) }
+                        setWalls(next)
+                      }}
+                    />
+                  </label>
+                  <label className="form-row compact">
+                    <span>Height (m)</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={wall.height}
+                      onChange={(e) => {
+                        const next = [...walls]
+                        next[idx] = { ...wall, height: Number(e.target.value) }
+                        setWalls(next)
+                      }}
+                    />
+                  </label>
+                  {wall.type === 'curved' && (
+                    <>
+                      <label className="form-row compact">
+                        <span>Radius (m)</span>
+                        <input
+                          type="number"
+                          min={1}
+                          value={wall.radius ?? 5}
+                          onChange={(e) => {
+                            const next = [...walls]
+                            next[idx] = { ...wall, radius: Number(e.target.value) }
+                            setWalls(next)
+                          }}
+                        />
+                      </label>
+                      <label className="form-row compact">
+                        <span>Sweep (deg)</span>
+                        <input
+                          type="number"
+                          min={5}
+                          max={180}
+                          value={wall.sweep ?? 45}
+                          onChange={(e) => {
+                            const next = [...walls]
+                            next[idx] = { ...wall, sweep: Number(e.target.value) }
+                            setWalls(next)
+                          }}
+                        />
+                      </label>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
           <hr />
           <button onClick={handleSave} className="action-button primary">
@@ -651,13 +900,320 @@ const FloorPlanner = () => {
           <div
             ref={canvasRef}
             className="floor-plan-canvas"
-            style={{
+          style={{
               width: `${canvasWidthPx}px`,
-              height: `${canvasHeightPx}px`
+              height: `${canvasHeightPx}px`,
+              background: 'transparent',
+              backgroundImage:
+                'repeating-linear-gradient(0deg, rgba(255,255,255,0.04) 0, rgba(255,255,255,0.04) 1px, transparent 1px, transparent 20px),' +
+                'repeating-linear-gradient(90deg, rgba(255,255,255,0.04) 0, rgba(255,255,255,0.04) 1px, transparent 1px, transparent 20px)',
+              border: 'none'
             }}
             onDrop={handleCanvasDrop}
             onDragOver={handleCanvasDragOver}
+            onMouseDown={(e) => {
+              if (planMode !== 'manual' || draggingAssetId || draggedAsset) return
+              if (e.button !== 0) return
+              const target = e.target as HTMLElement
+              if (target.closest('.placed-asset')) return
+              const rect = canvasRef.current?.getBoundingClientRect()
+              if (!rect) return
+              const xPx = e.clientX - rect.left
+              const yPx = e.clientY - rect.top
+
+              // Check endpoint handles first
+              const snapHandle = (x: number, y: number): { wallId: string; handle: 'start' | 'end' } | null => {
+                let found: { wallId: string; handle: 'start' | 'end' } | null = null
+                walls.forEach((w) => {
+                  if (!w.coordinates) return
+                  const [x1, y1, x2, y2] = w.coordinates
+                  const toPx = (val: number, maxPx: number) => (val / 100) * maxPx
+                  const hx1 = toPx(x1, canvasWidthPx)
+                  const hy1 = toPx(y1, canvasHeightPx)
+                  const hx2 = toPx(x2, canvasWidthPx)
+                  const hy2 = toPx(y2, canvasHeightPx)
+                  const distStart = Math.hypot(x - hx1, y - hy1)
+                  const distEnd = Math.hypot(x - hx2, y - hy2)
+                  const tol = 10
+                  if (distStart <= tol) found = { wallId: w.id, handle: 'start' }
+                  if (distEnd <= tol) found = { wallId: w.id, handle: 'end' }
+                })
+                return found
+              }
+              const handleHit: { wallId: string; handle: 'start' | 'end' } | null = snapHandle(xPx, yPx)
+              if (handleHit) {
+                setSelectedWallId(handleHit.wallId)
+                setDraggingEndpoint(handleHit)
+                return
+              }
+
+              // If clicked near an existing wall, select/drag it
+              const hit = hitTestWall(xPx, yPx)
+              if (hit) {
+                setSelectedWallId(hit.id)
+                setDraggingWallId(hit.id)
+                dragWallStartRef.current = { x: xPx, y: yPx }
+                return
+              }
+
+              const xM = xPx / METER_TO_PIXEL_SCALE
+              const yM = yPx / METER_TO_PIXEL_SCALE
+              setIsDrawingWall(true)
+              setDraftWall({ x1: xM, y1: yM, x2: xM, y2: yM })
+              setSelectedWallId(null)
+            }}
+            onMouseMove={(e) => {
+              if (planMode !== 'manual') return
+              const rect = canvasRef.current?.getBoundingClientRect()
+              if (!rect) return
+              const xPx = e.clientX - rect.left
+              const yPx = e.clientY - rect.top
+
+              const toNormX = (valPx: number) => Math.max(0, Math.min(100, (valPx / canvasWidthPx) * 100))
+              const toNormY = (valPx: number) => Math.max(0, Math.min(100, (valPx / canvasHeightPx) * 100))
+              const snapPx = 10
+
+              if (draggingEndpoint) {
+                const endpoint = draggingEndpoint
+                setWalls((prevWalls) => {
+                  let updated = false
+                  const nextWalls: WallSpec[] = prevWalls.map((w) => {
+                    if (w.id !== endpoint.wallId || !w.coordinates) return w
+                    const [x1, y1, x2, y2] = w.coordinates
+
+                    let targetX = xPx
+                    let targetY = yPx
+                    prevWalls.forEach((other) => {
+                      if (!other.coordinates || other.id === w.id) return
+                      const [ox1, oy1, ox2, oy2] = other.coordinates
+                      const cands = [
+                        [(ox1 / 100) * canvasWidthPx, (oy1 / 100) * canvasHeightPx],
+                        [(ox2 / 100) * canvasWidthPx, (oy2 / 100) * canvasHeightPx],
+                      ]
+                      cands.forEach(([cx, cy]) => {
+                        if (Math.hypot(cx - xPx, cy - yPx) <= snapPx) {
+                          targetX = cx
+                          targetY = cy
+                        }
+                      })
+                    })
+
+                    updated = true
+                    if (endpoint.handle === 'start') {
+                      const coords: [number, number, number, number] = [toNormX(targetX), toNormY(targetY), x2, y2]
+                      return { ...w, coordinates: coords }
+                    }
+                    const coords: [number, number, number, number] = [x1, y1, toNormX(targetX), toNormY(targetY)]
+                    return { ...w, coordinates: coords }
+                  })
+                  return updated ? nextWalls : prevWalls
+                })
+                return
+              }
+
+              if (draggingWallId && dragWallStartRef.current) {
+                const start = dragWallStartRef.current
+                const dxPx = xPx - start.x
+                const dyPx = yPx - start.y
+                const dxNorm = (dxPx / canvasWidthPx) * 100
+                const dyNorm = (dyPx / canvasHeightPx) * 100
+                setWalls((prev) =>
+                  prev.map((w) => {
+                    if (w.id !== draggingWallId || !w.coordinates) return w
+                    const [x1, y1, x2, y2] = w.coordinates
+                    const clamp = (v: number) => Math.max(0, Math.min(100, v))
+                    const coords: [number, number, number, number] = [
+                      clamp(x1 + dxNorm),
+                      clamp(y1 + dyNorm),
+                      clamp(x2 + dxNorm),
+                      clamp(y2 + dyNorm),
+                    ]
+                    return {
+                      ...w,
+                      coordinates: coords,
+                    }
+                  })
+                )
+                dragWallStartRef.current = { x: xPx, y: yPx }
+                return
+              }
+
+              if (isDrawingWall && draftWall) {
+                const xM = xPx / METER_TO_PIXEL_SCALE
+                const yM = yPx / METER_TO_PIXEL_SCALE
+                setDraftWall({ ...draftWall, x2: xM, y2: yM })
+              }
+            }}
+            onMouseUp={() => {
+              if (draggingEndpoint) {
+                setDraggingEndpoint(null)
+              }
+              if (draggingWallId) {
+                setDraggingWallId(null)
+                dragWallStartRef.current = null
+              }
+              if (!isDrawingWall || !draftWall) return
+              setIsDrawingWall(false)
+              const { x1, y1, x2, y2 } = draftWall
+              const dx = x2 - x1
+              const dy = y2 - y1
+              const length = Math.sqrt(dx * dx + dy * dy)
+              if (length < 0.5) {
+                setDraftWall(null)
+                return
+              }
+              const norm = (val: number, max: number) =>
+                max > 0 ? Math.max(0, Math.min(100, (val / max) * 100)) : 0
+              const coords: [number, number, number, number] = [
+                norm(x1, roomDimensions.width),
+                norm(y1, roomDimensions.depth),
+                norm(x2, roomDimensions.width),
+                norm(y2, roomDimensions.depth)
+              ]
+              const newWall: WallSpec = {
+                id: `wall_${Date.now()}`,
+                name: `Wall ${walls.length + 1}`,
+                type: 'straight',
+                length,
+                height: roomDimensions.height,
+                coordinates: coords
+              }
+              setWalls([...walls, newWall])
+              setSelectedWallId(newWall.id)
+              setDraftWall(null)
+            }}
           >
+            {/* Draw interactive walls */}
+            {planMode === 'manual' &&
+              walls.map((wall) => {
+                const coords = wall.coordinates
+                let x1Px: number
+                let y1Px: number
+                let x2Px: number
+                let y2Px: number
+                if (coords) {
+                  x1Px = (coords[0] / 100) * canvasWidthPx
+                  y1Px = (coords[1] / 100) * canvasHeightPx
+                  x2Px = (coords[2] / 100) * canvasWidthPx
+                  y2Px = (coords[3] / 100) * canvasHeightPx
+                } else {
+                  // Fallback approximate rectangle around room if no coordinates
+                  switch (wall.id) {
+                    case 'wall_north':
+                      x1Px = 0
+                      y1Px = 0
+                      x2Px = canvasWidthPx
+                      y2Px = 0
+                      break
+                    case 'wall_south':
+                      x1Px = 0
+                      y1Px = canvasHeightPx
+                      x2Px = canvasWidthPx
+                      y2Px = canvasHeightPx
+                      break
+                    case 'wall_east':
+                      x1Px = canvasWidthPx
+                      y1Px = 0
+                      x2Px = canvasWidthPx
+                      y2Px = canvasHeightPx
+                      break
+                    case 'wall_west':
+                      x1Px = 0
+                      y1Px = 0
+                      x2Px = 0
+                      y2Px = canvasHeightPx
+                      break
+                    default:
+                      return null
+                  }
+                }
+                const dx = x2Px - x1Px
+                const dy = y2Px - y1Px
+                const lengthPx = Math.sqrt(dx * dx + dy * dy)
+                const angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI
+                const left = x1Px
+                const top = y1Px
+                return (
+                  <div key={wall.id}>
+                    <div
+                      className="drawn-wall"
+                      style={{
+                        position: 'absolute',
+                        left,
+                        top,
+                        width: lengthPx,
+                        height: 4,
+                        background: wall.id === selectedWallId ? '#4CAF50' : wall.type === 'curved' ? '#ff9800' : '#ffffff',
+                        transform: `rotate(${angleDeg}deg)`,
+                        transformOrigin: '0 50%',
+                        borderRadius: 4,
+                        pointerEvents: 'none',
+                        opacity: 0.9
+                      }}
+                    />
+                    {/* Endpoints as white handles */}
+                    <div
+                      className="wall-handle"
+                      style={{
+                        position: 'absolute',
+                        left: x1Px - 5,
+                        top: y1Px - 5,
+                        width: 10,
+                        height: 10,
+                        borderRadius: '50%',
+                        background: '#fff',
+                        border: '1px solid #000',
+                        pointerEvents: 'none'
+                      }}
+                    />
+                    <div
+                      className="wall-handle"
+                      style={{
+                        position: 'absolute',
+                        left: x2Px - 5,
+                        top: y2Px - 5,
+                        width: 10,
+                        height: 10,
+                        borderRadius: '50%',
+                        background: '#fff',
+                        border: '1px solid #000',
+                        pointerEvents: 'none'
+                      }}
+                    />
+                  </div>
+                )
+              })}
+
+            {planMode === 'manual' && draftWall && (
+              (() => {
+                const x1Px = draftWall.x1 * METER_TO_PIXEL_SCALE
+                const y1Px = draftWall.y1 * METER_TO_PIXEL_SCALE
+                const x2Px = draftWall.x2 * METER_TO_PIXEL_SCALE
+                const y2Px = draftWall.y2 * METER_TO_PIXEL_SCALE
+                const dx = x2Px - x1Px
+                const dy = y2Px - y1Px
+                const lengthPx = Math.sqrt(dx * dx + dy * dy)
+                const angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI
+                return (
+                  <div
+                    className="drawn-wall draft"
+                    style={{
+                      position: 'absolute',
+                      left: x1Px,
+                      top: y1Px,
+                      width: lengthPx,
+                      height: 3,
+                      background: '#4CAF50',
+                      transform: `rotate(${angleDeg}deg)`,
+                      transformOrigin: '0 50%',
+                      borderRadius: 4,
+                      opacity: 0.7,
+                      pointerEvents: 'none'
+                    }}
+                  />
+                )
+              })()
+            )}
             {placedAssets.map(asset => {
               const widthPx = asset.width * METER_TO_PIXEL_SCALE
               const heightPx = asset.depth * METER_TO_PIXEL_SCALE

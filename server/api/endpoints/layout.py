@@ -5,6 +5,7 @@ import os
 from flask import Blueprint, jsonify, request
 
 from utils.file_manager import UPLOAD_ROOT
+from services.glb_export import generate_glb
 
 logger = logging.getLogger(__name__)
 
@@ -123,18 +124,11 @@ def save_layout(venue_id: str):
 @layout_bp.route("/venue/<venue_id>/generate-glb", methods=["POST"])
 def generate_glb(venue_id: str):
     """
-    Stub GLB generator. Writes a placeholder GLB marker file and records path.
-    In a future iteration, replace with real mesh export.
+    Generate a simple GLB for the venue using saved dimensions/walls/materials.
     """
     try:
         venue_dir = os.path.join(UPLOAD_ROOT, venue_id)
         os.makedirs(venue_dir, exist_ok=True)
-        glb_path = os.path.join(venue_dir, "venue.glb")
-        # Write a minimal placeholder so the viewer can detect presence
-        with open(glb_path, "wb") as f:
-            f.write(b"venue-glb-placeholder")
-
-        # Update layout to record generated_glb path
         layout_path = os.path.join(venue_dir, "layout.json")
         layout_data = {}
         if os.path.exists(layout_path):
@@ -143,6 +137,12 @@ def generate_glb(venue_id: str):
                     layout_data = json.load(f)
             except Exception:
                 layout_data = {}
+        else:
+            return jsonify({"status": "error", "message": "No layout saved yet."}), 400
+
+        dims = layout_data.get("dimensions", {"width": 20, "height": 8, "depth": 20})
+        glb_path = generate_glb(venue_dir, dims)
+
         layout_data["generated_glb"] = f"/static/uploads/{venue_id}/venue.glb"
         with open(layout_path, "w") as f:
             json.dump(layout_data, f, indent=2)
