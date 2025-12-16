@@ -313,6 +313,17 @@ const FloorPlanner = () => {
 
   const checkCollision = (excludeId: string | null, x: number, y: number, width: number, depth: number): boolean => {
     const spacing = 1 // 1 meter spacing requirement
+
+    // First, enforce room bounds so assets cannot be placed outside the grid
+    if (
+      x < 0 ||
+      y < 0 ||
+      x + width > roomDimensions.width ||
+      y + depth > roomDimensions.depth
+    ) {
+      return true
+    }
+
     const newLeft = x - spacing / 2
     const newRight = x + width + spacing / 2
     const newTop = y - spacing / 2

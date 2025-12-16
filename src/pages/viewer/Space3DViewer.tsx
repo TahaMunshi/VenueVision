@@ -124,6 +124,31 @@ const Space3DViewer = () => {
         dirLight.position.set(10, 20, 15)
         scene.add(dirLight)
 
+        // Calculate actual floor level (room box is centered, so floor is at -height/2)
+        const floorY = -dimensions.height / 2
+        console.log('[3D Viewer] Room dimensions:', dimensions)
+        console.log('[3D Viewer] Floor level (y):', floorY)
+        
+        // Optional: Add visible floor grid at actual floor level for debugging
+        // Uncomment these lines if you want to see the floor plane
+        /*
+        const floorGrid = new THREE.GridHelper(Math.max(dimensions.width, dimensions.depth) * 2, 20, 0x00ff00, 0x444444)
+        floorGrid.position.y = floorY
+        scene.add(floorGrid)
+        
+        const floorPlaneGeometry = new THREE.PlaneGeometry(dimensions.width * 2, dimensions.depth * 2)
+        const floorPlaneMaterial = new THREE.MeshBasicMaterial({ 
+          color: 0xff0000, 
+          opacity: 0.3, 
+          transparent: true,
+          side: THREE.DoubleSide
+        })
+        const floorPlane = new THREE.Mesh(floorPlaneGeometry, floorPlaneMaterial)
+        floorPlane.rotation.x = -Math.PI / 2
+        floorPlane.position.y = floorY
+        scene.add(floorPlane)
+        */
+
         // If a server-generated GLB exists, try to load it first
         if (generatedGlb) {
           try {
@@ -275,6 +300,11 @@ const Space3DViewer = () => {
               const gltfLoader = new THREE.GLTFLoader()
               const roomWidth = layoutData.dimensions?.width || dimensions.width
               const roomDepth = layoutData.dimensions?.depth || dimensions.depth
+              const roomHeight = layoutData.dimensions?.height || dimensions.height
+              
+              // Calculate actual floor level (room box is centered, so floor is at -height/2)
+              const floorY = -roomHeight / 2
+              console.log(`[3D Viewer] Room height: ${roomHeight}, Floor level (y): ${floorY}`)
               
               // Track loading assets
               setLoadingAssets(layoutData.assets.map((a: any) => a.id || a.file))
@@ -282,15 +312,26 @@ const Space3DViewer = () => {
               layoutData.assets.forEach((asset: any) => {
                 // Convert 2D planner coordinates to 3D world coordinates
                 // Planner (0,0) is Top-Left. ThreeJS (0,0) is Center.
+                // Asset x,y in planner is the top-left corner, so we calculate the center
                 const centerX2D = asset.x + (asset.width / 2)
                 const centerY2D = asset.y + (asset.depth / 2)
                 
+                // Convert from planner space (0 to roomWidth/Depth) to world space (-roomWidth/2 to +roomWidth/2)
                 const worldX = centerX2D - (roomWidth / 2)
                 const worldZ = centerY2D - (roomDepth / 2)
                 
-                // Create group for this asset
+                console.log(`[3D Viewer] Asset positioning:`, {
+                  'planner position (top-left)': { x: asset.x, y: asset.y },
+                  'planner center': { x: centerX2D, y: centerY2D },
+                  'world position (center)': { x: worldX, z: worldZ },
+                  'asset dimensions': { width: asset.width, depth: asset.depth },
+                  'room dimensions': { width: roomWidth, depth: roomDepth },
+                  'floorY': floorY
+                })
+                
+                // Create group for this asset - position at the center of the 2D rectangle
                 const group = new THREE.Group()
-                group.position.set(worldX, 0, worldZ)
+                group.position.set(worldX, floorY, worldZ)
                 group.rotation.y = -asset.rotation * (Math.PI / 180)
                 
                 // Load the 3D model - use full URL for proper loading
@@ -301,28 +342,132 @@ const Space3DViewer = () => {
                 gltfLoader.load(
                   modelPath,
                   (gltf: any) => {
+                    console.log(`[3D Viewer] Loading asset: ${asset.file}`)
+                    console.log(`[3D Viewer] Asset dimensions from planner: width=${asset.width}, depth=${asset.depth}`)
+                    console.log(`[3D Viewer] Asset 2D position: x=${asset.x}, y=${asset.y}`)
                     
-                    // Scale model to fit dimensions
+                    // Compute initial bounds BEFORE any transformations
                     const box = new THREE.Box3().setFromObject(gltf.scene)
                     const size = new THREE.Vector3()
                     box.getSize(size)
                     const center = new THREE.Vector3()
                     box.getCenter(center)
                     
-                    gltf.scene.position.sub(center)
+                    console.log(`[3D Viewer] Initial model bounds:`, {
+                      min: box.min,
+                      max: box.max,
+                      size: { x: size.x, y: size.y, z: size.z },
+                      center: { x: center.x, y: center.y, z: center.z }
+                    })
+
+                    // STEP 1: Translate model so its BOTTOM is at y=0 BEFORE scaling
+                    // This ensures scaling happens around the bottom, not the center
+                    const initialMinY = box.min.y
+                    gltf.scene.position.y = -initialMinY
+                    console.log(`[3D Viewer] Step 1 - Translating model so bottom is at y=0:`, {
+                      initialMinY,
+                      'position.y': gltf.scene.position.y
+                    })
                     
+                    // Verify translation
+                    const afterTranslateBox = new THREE.Box3().setFromObject(gltf.scene)
+                    console.log(`[3D Viewer] After translation, bottom Y:`, afterTranslateBox.min.y)
+
+                    // STEP 2: Scale model in X/Z to match planned footprint
                     const scaleX = size.x > 0 ? asset.width / size.x : 1
                     const scaleZ = size.z > 0 ? asset.depth / size.z : 1
                     const scaleY = scaleX
-                    
+                    console.log(`[3D Viewer] Step 2 - Applying scale:`, { scaleX, scaleY, scaleZ })
                     gltf.scene.scale.set(scaleX, scaleY, scaleZ)
-                    // Fix: Position at floor level (y=0) instead of half height
-                    // The model is already centered, so just set y to 0 to sit on floor
-                    gltf.scene.position.y = 0
+
+                    // STEP 3: Center the model horizontally (X and Z only)
+                    // Recompute center after scaling to ensure accurate centering
+                    const scaledBox = new THREE.Box3().setFromObject(gltf.scene)
+                    const scaledCenter = new THREE.Vector3()
+                    scaledBox.getCenter(scaledCenter)
                     
+                    gltf.scene.position.x = -scaledCenter.x
+                    gltf.scene.position.z = -scaledCenter.z
+                    // Keep Y position as-is (should already be at 0 after translation)
+                    console.log(`[3D Viewer] Step 3 - After centering horizontally:`, {
+                      'scaled center': { x: scaledCenter.x, y: scaledCenter.y, z: scaledCenter.z },
+                      position: { x: gltf.scene.position.x, y: gltf.scene.position.y, z: gltf.scene.position.z }
+                    })
+
+                    // STEP 4: Verify final bounds - bottom should be at y=0
+                    const finalBox = new THREE.Box3().setFromObject(gltf.scene)
+                    const minY = finalBox.min.y
+                    const maxY = finalBox.max.y
+                    console.log(`[3D Viewer] Step 4 - Final bounding box:`, {
+                      min: finalBox.min,
+                      max: finalBox.max,
+                      minY,
+                      maxY,
+                      height: maxY - minY,
+                      'bottom Y': minY
+                    })
+                    
+                    // If bottom is not exactly at 0, adjust
+                    if (Math.abs(minY) > 0.001) {
+                      console.log(`[3D Viewer] WARNING: Bottom Y is ${minY}, adjusting by ${-minY}`)
+                      gltf.scene.position.y -= minY
+                      const adjustedBox = new THREE.Box3().setFromObject(gltf.scene)
+                      console.log(`[3D Viewer] After adjustment, bottom Y: ${adjustedBox.min.y}`)
+                    }
+                    
+                    // FORCE: Ensure scene's bottom is at y=0 relative to itself
+                    const verifyBox = new THREE.Box3().setFromObject(gltf.scene)
+                    if (Math.abs(verifyBox.min.y) > 0.001) {
+                      console.log(`[3D Viewer] FORCING: Scene bottom is ${verifyBox.min.y}, moving to 0`)
+                      gltf.scene.position.y -= verifyBox.min.y
+                      console.log(`[3D Viewer] Scene position.y is now: ${gltf.scene.position.y}`)
+                    }
+                    
+                    // Add scene to group
                     group.add(gltf.scene)
+                    
+                    // FORCE: Set group Y position to floor level (group is already set, but ensure it's correct)
+                    group.position.y = floorY
+                    console.log(`[3D Viewer] FORCED group.position.y to floor level: ${floorY}`)
+                    
+                    // Now check world position after adding to group
+                    const groupBox = new THREE.Box3().setFromObject(group)
+                    console.log(`[3D Viewer] Group bounding box (world space):`, {
+                      min: groupBox.min,
+                      max: groupBox.max,
+                      'bottom Y (world)': groupBox.min.y,
+                      'top Y (world)': groupBox.max.y,
+                      'group.position.y': group.position.y,
+                      'expected floor Y': floorY
+                    })
+                    
+                    // If the bottom is STILL not at floorY, force adjust the scene's Y position
+                    if (Math.abs(groupBox.min.y - floorY) > 0.001) {
+                      console.log(`[3D Viewer] CRITICAL: Bottom Y is ${groupBox.min.y}, expected ${floorY}`)
+                      const adjustment = floorY - groupBox.min.y
+                      console.log(`[3D Viewer] Adjusting scene.position.y by ${adjustment}`)
+                      gltf.scene.position.y += adjustment
+                      
+                      // Recheck
+                      const finalCheckBox = new THREE.Box3().setFromObject(group)
+                      console.log(`[3D Viewer] After critical adjustment, bottom Y: ${finalCheckBox.min.y}, expected: ${floorY}`)
+                    }
+                    
                     scene.add(group)
                     assetsRef.current.push(group)
+                    
+                    // Final check after adding to scene
+                    const sceneBox = new THREE.Box3().setFromObject(group)
+                    console.log(`[3D Viewer] ===== FINAL CHECK =====`)
+                    console.log(`[3D Viewer] Final world position in scene:`, {
+                      min: sceneBox.min,
+                      max: sceneBox.max,
+                      'bottom Y (final)': sceneBox.min.y,
+                      'expected floor Y': floorY,
+                      'group.position (world)': { x: group.position.x, y: group.position.y, z: group.position.z },
+                      'scene.position (relative to group)': { x: gltf.scene.position.x, y: gltf.scene.position.y, z: gltf.scene.position.z }
+                    })
+                    console.log(`[3D Viewer] Asset center should align with 2D rectangle center at (${worldX}, ${floorY}, ${worldZ})`)
                     
                     // Update loading state
                     setLoadingAssets((prev) => prev.filter(id => id !== assetId))
@@ -480,7 +625,8 @@ const Space3DViewer = () => {
   return (
     <div className="space-3d-viewer">
       <div className="viewer-header">
-        <button onClick={() => navigate(`/capture/${venueId}`)} className="back-button">
+        {/* Back should always take the user to the mobile home screen */}
+        <button onClick={() => navigate('/')} className="back-button">
           ← Back
         </button>
         <h1>3D Space Viewer</h1>
@@ -497,8 +643,9 @@ const Space3DViewer = () => {
       {error && (
         <div className="error-overlay">
           <p>{error}</p>
-          <button onClick={() => navigate(`/capture/${venueId}`)}>
-            Go to Capture
+          {/* On error, also send users back to the home page */}
+          <button onClick={() => navigate('/')}>
+            Go to Home
           </button>
         </div>
       )}

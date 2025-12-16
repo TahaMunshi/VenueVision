@@ -10,6 +10,70 @@ import FloorPlanner from './pages/planner/FloorPlanner'
 // Mobile Home Page - shown when accessing /mobile
 const MobileHome = () => {
   const navigate = useNavigate()
+
+  const handleFullReset = async () => {
+    // Best-effort full reset of browser-side state for this app
+    try {
+      // Clear web storage
+      try {
+        window.localStorage.clear()
+      } catch {
+        // ignore
+      }
+      try {
+        window.sessionStorage.clear()
+      } catch {
+        // ignore
+      }
+
+      // Clear IndexedDB databases (if supported)
+      try {
+        const anyIndexedDB = window.indexedDB as any
+        if (anyIndexedDB?.databases) {
+          const dbs: Array<{ name?: string } | undefined> = await anyIndexedDB.databases()
+          await Promise.all(
+            dbs
+              .filter((db) => db && db.name)
+              .map(
+                (db) =>
+                  new Promise<void>((resolve) => {
+                    const req = window.indexedDB.deleteDatabase((db as { name: string }).name)
+                    req.onsuccess = () => resolve()
+                    req.onerror = () => resolve()
+                    req.onblocked = () => resolve()
+                  })
+              )
+          )
+        }
+      } catch {
+        // ignore
+      }
+
+      // Clear Cache Storage (if any)
+      try {
+        if ('caches' in window) {
+          const keys = await caches.keys()
+          await Promise.all(keys.map((key) => caches.delete(key)))
+        }
+      } catch {
+        // ignore
+      }
+
+      // Unregister service workers (if any were registered externally)
+      try {
+        if ('serviceWorker' in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations()
+          await Promise.all(regs.map((reg) => reg.unregister()))
+        }
+      } catch {
+        // ignore
+      }
+    } finally {
+      // Reload the current page so the SPA re-mounts with a clean slate
+      // (avoids hard-coding a path that might 404 on some deployments)
+      window.location.reload()
+    }
+  }
   
   return (
     <div style={{ 
@@ -23,7 +87,31 @@ const MobileHome = () => {
       backgroundColor: '#1a1a2e',
       color: '#fff'
     }}>
-      <h1 style={{ marginBottom: '1rem' }}>Event Space Visualizer</h1>
+      <div style={{ 
+        width: '100%', 
+        maxWidth: '960px', 
+        display: 'flex', 
+        justifyContent: 'space-between', 
+        alignItems: 'center',
+        marginBottom: '1.5rem'
+      }}>
+        <h1 style={{ margin: 0 }}>Event Space Visualizer</h1>
+        <button
+          onClick={handleFullReset}
+          style={{
+            padding: '0.5rem 1rem',
+            fontSize: '0.9rem',
+            backgroundColor: 'transparent',
+            color: '#ff7675',
+            border: '1px solid rgba(255, 118, 117, 0.6)',
+            borderRadius: '999px',
+            cursor: 'pointer',
+            fontWeight: 600
+          }}
+        >
+          Reset App
+        </button>
+      </div>
       <p style={{ marginBottom: '3rem', opacity: 0.8, fontSize: '1.1rem' }}>
         Capture venue walls using guided tour or upload existing photos
       </p>
