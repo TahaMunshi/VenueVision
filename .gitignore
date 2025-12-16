@@ -35,6 +35,10 @@ instance/
 server/static/uploads/
 server/static/debug/
 
+# BUT allow demo data to be tracked (demo data is shared via git)
+!server/data/
+!server/data/**
+
 # Environment variables
 .env
 .env.local

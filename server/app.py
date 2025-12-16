@@ -7,9 +7,12 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from api.routes import api_bp
+from utils.init_demo_data import init_demo_venue
 
 # Function to create the Flask app instance
 def create_app():
+    # Initialize demo data on startup
+    init_demo_venue()
     # Path to the React app's dist folder (relative to server directory)
     # Navigates up from server/ to root fyp/ and then into dist/
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))

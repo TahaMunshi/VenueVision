@@ -1,0 +1,129 @@
+{
+  "name": "demo-venue",
+  "dimensions": {
+    "depth": 20,
+    "height": 8,
+    "width": 20
+  },
+  "assets": [
+    {
+      "depth": 2,
+      "file": "asset_table.glb",
+      "id": "placed-1765808521852",
+      "rotation": 0,
+      "type": "table",
+      "width": 4,
+      "x": 10,
+      "y": 7
+    },
+    {
+      "depth": 2,
+      "file": "asset_table.glb",
+      "id": "placed-1765808523525",
+      "rotation": 0,
+      "type": "table",
+      "width": 4,
+      "x": 12,
+      "y": 16
+    },
+    {
+      "depth": 2,
+      "file": "asset_table.glb",
+      "id": "placed-1765808525391",
+      "rotation": 0,
+      "type": "table",
+      "width": 4,
+      "x": 7,
+      "y": 4
+    },
+    {
+      "id": "placed-1765913677301",
+      "type": "table",
+      "file": "asset_table.glb",
+      "width": 4,
+      "depth": 2,
+      "x": 5,
+      "y": 10,
+      "rotation": 0
+    }
+  ],
+  "polygon": null,
+  "walls": [
+    {
+      "coordinates": [
+        26.416666666666664,
+        11.436197916666666,
+        99.58333333333331,
+        12.26953125
+      ],
+      "height": 8,
+      "id": "wall_north",
+      "length": 20,
+      "name": "North Wall",
+      "type": "straight"
+    },
+    {
+      "coordinates": [
+        0,
+        100,
+        100,
+        100
+      ],
+      "height": 8,
+      "id": "wall_south",
+      "length": 20,
+      "name": "South Wall",
+      "type": "straight"
+    },
+    {
+      "coordinates": [
+        99.58333333333333,
+        12.26953125,
+        100,
+        100
+      ],
+      "height": 8,
+      "id": "wall_east",
+      "length": 20,
+      "name": "East Wall",
+      "type": "straight"
+    },
+    {
+      "coordinates": [
+        0.08333333333333334,
+        30.269531249999996,
+        0.33333333333333337,
+        100
+      ],
+      "height": 8,
+      "id": "wall_west",
+      "length": 20,
+      "name": "West Wall",
+      "type": "straight"
+    },
+    {
+      "coordinates": [
+        0.08333333333333334,
+        30.269531249999996,
+        26.416666666666664,
+        11.436197916666666
+      ],
+      "height": 8,
+      "id": "wall_1765811242119",
+      "length": 5.742821606144492,
+      "name": "Wall 5",
+      "type": "straight"
+    }
+  ],
+  "materials": {
+    "ceiling": {
+      "color": "#f5f5f5",
+      "type": "plain"
+    },
+    "floor": {
+      "color": "#c6b39e",
+      "type": "wood"
+    }
+  },
+  "generated_glb": null
+}

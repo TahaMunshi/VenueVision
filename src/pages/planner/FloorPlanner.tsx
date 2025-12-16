@@ -89,6 +89,11 @@ const FloorPlanner = () => {
         const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/layout`)
         if (response.ok) {
           const data = await response.json()
+          console.log(`[FloorPlanner] Loaded layout for venue ${venueId}:`, {
+            hasWalls: !!data.walls,
+            wallsCount: data.walls?.length || 0,
+            walls: data.walls
+          })
           if (data.dimensions) {
             setRoomDimensions(data.dimensions)
           }
@@ -98,9 +103,11 @@ const FloorPlanner = () => {
           if (data.materials) {
             setMaterials(data.materials)
           }
-          if (data.walls && Array.isArray(data.walls)) {
+          if (data.walls && Array.isArray(data.walls) && data.walls.length > 0) {
+            console.log(`[FloorPlanner] Setting ${data.walls.length} walls`)
             setWalls(data.walls as WallSpec[])
           } else {
+            console.log(`[FloorPlanner] No walls found, using empty array`)
             setWalls(defaultWalls)
           }
           if (data.assets && Array.isArray(data.assets)) {
@@ -110,6 +117,8 @@ const FloorPlanner = () => {
             setFloorPlanUrl(data.floor_plan_url)
             setPlanMode('upload')
           }
+        } else {
+          console.error(`[FloorPlanner] Failed to load layout: ${response.status} ${response.statusText}`)
         }
       } catch (error) {
         console.error('Error loading layout:', error)
@@ -133,6 +142,15 @@ const FloorPlanner = () => {
       }
     }
   }, [venueId, API_BASE_URL])
+
+  // Debug: Log when walls change
+  useEffect(() => {
+    console.log(`[FloorPlanner] Walls state changed:`, {
+      wallsCount: walls.length,
+      planMode,
+      walls: walls.map(w => ({ id: w.id, name: w.name, hasCoords: !!w.coordinates }))
+    })
+  }, [walls, planMode])
 
   // Sidebar resize functionality - throttled for performance
   useEffect(() => {
