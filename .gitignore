@@ -1,18 +1,3 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
-# Dependencies
-node_modules
-dist
-dist-ssr
-*.local
-
 # Python
 __pycache__/
 *.py[cod]
@@ -22,44 +7,76 @@ __pycache__/
 venv/
 env/
 ENV/
-.venv
-newenv/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
 *.egg-info/
-.pytest_cache/
+.installed.cfg
+*.egg
 
-# Flask
-instance/
-.webassets-cache
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
 
-# Uploads and user data (exclude from repo)
-server/static/uploads/
-server/static/debug/
-
-# BUT allow demo data to be tracked (demo data is shared via git)
-!server/data/
-!server/data/**
+# Build outputs
+dist/
+build/
 
 # Environment variables
 .env
 .env.local
-.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
 # OS
-Thumbs.db
 .DS_Store
+Thumbs.db
 
-# Build outputs
-*.pyc
-*.pyo
-*.pyd
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Uploads and static files (except models)
+server/static/uploads/
+server/static/debug/
+
+# Keep models directory but ignore specific files
+!server/static/models/
+
+# Docker
+docker-compose.override.yml
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Temporary files
+*.tmp
+*.temp
+database_visualization.html

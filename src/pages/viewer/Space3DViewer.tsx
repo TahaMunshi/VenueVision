@@ -174,60 +174,97 @@ const Space3DViewer = () => {
         const loader = new THREE.TextureLoader()
         const cacheBuster = `?v=${Date.now()}`
         
-        // Use API-provided URLs or fallback to default paths
-        const textureUrls = {
-          wall_north: wallImageUrls.wall_north 
-            ? `${API_BASE_URL}${wallImageUrls.wall_north}${cacheBuster}`
-            : `${API_BASE_URL}/static/uploads/${venueId}/wall_north/processed_wall_north.jpg${cacheBuster}`,
-          wall_east: wallImageUrls.wall_east
-            ? `${API_BASE_URL}${wallImageUrls.wall_east}${cacheBuster}`
-            : `${API_BASE_URL}/static/uploads/${venueId}/wall_east/processed_wall_east.jpg${cacheBuster}`,
-          wall_south: wallImageUrls.wall_south
-            ? `${API_BASE_URL}${wallImageUrls.wall_south}${cacheBuster}`
-            : `${API_BASE_URL}/static/uploads/${venueId}/wall_south/processed_wall_south.jpg${cacheBuster}`,
-          wall_west: wallImageUrls.wall_west
-            ? `${API_BASE_URL}${wallImageUrls.wall_west}${cacheBuster}`
-            : `${API_BASE_URL}/static/uploads/${venueId}/wall_west/processed_wall_west.jpg${cacheBuster}`
-        }
-
         const textures: { [key: string]: any | null } = {}
         texturesRef.current = textures
         let loadedCount = 0
-        const totalTextures = 4
+        let totalTextures = 0
+        let layoutData: any = null // Store layout data until textures are loaded
+
+        const tryCreateWalls = () => {
+          // Try to create walls if we have layout data and all textures are loaded
+          if (layoutData && layoutData.walls && Array.isArray(layoutData.walls) && layoutData.walls.length > 0) {
+            if (loadedCount === totalTextures && totalTextures > 0) {
+              console.log(`[3D Viewer] All ${totalTextures} textures loaded. Creating ${layoutData.walls.length} 3D walls from floor plan`)
+              create3DWalls(layoutData.walls)
+              setLoading(false)
+            }
+          } else if (loadedCount === totalTextures && totalTextures > 0) {
+            // Only create generic room box if NO custom walls from floor plan
+            createRoom()
+            setLoading(false)
+          }
+        }
 
         const onTextureLoad = () => {
           loadedCount++
-          if (loadedCount === totalTextures) {
-            createRoom()
-            setLoading(false)
-          }
+          console.log(`[3D Viewer] Texture loaded (${loadedCount}/${totalTextures})`)
+          tryCreateWalls()
         }
 
         const onTextureError = (wall: string) => {
-          console.warn(`Failed to load texture for ${wall}, using default`)
+          console.warn(`[3D Viewer] Failed to load texture for ${wall}, using default`)
           textures[wall] = null
           loadedCount++
-          if (loadedCount === totalTextures) {
-            createRoom()
-            setLoading(false)
-          }
+          tryCreateWalls()
         }
 
-        // Load textures
-        Object.entries(textureUrls).forEach(([wall, url]) => {
-          loader.load(
-            url,
-            (texture: any) => {
-              // Optimize texture
-              texture.magFilter = THREE.LinearFilter
-              texture.minFilter = THREE.LinearMipmapLinearFilter
-              textures[wall] = texture
-              onTextureLoad()
-            },
-            undefined,
-            () => onTextureError(wall)
-          )
-        })
+        // Start by fetching layout to know which walls to load textures for
+        fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/layout`)
+          .then(res => res.json())
+          .then(data => {
+            layoutData = data
+            console.log(`[3D Viewer] Loaded layout with ${data.walls?.length || 0} walls`, data.walls)
+            console.log(`[3D Viewer] wallImageUrls available:`, wallImageUrls)
+            
+            if (!data.walls || data.walls.length === 0) {
+              console.log('[3D Viewer] No walls in layout, creating generic room')
+              createRoom()
+              setLoading(false)
+              return
+            }
+
+            // Now load textures for ALL walls in the layout
+            totalTextures = data.walls.length
+            console.log(`[3D Viewer] Will load textures for ${totalTextures} walls`)
+
+            data.walls.forEach((wall: any) => {
+              const wallId = wall.id || wall.name
+              const imageUrl = wallImageUrls[wallId]
+              
+              console.log(`[3D Viewer] Processing wall ${wallId}: imageUrl=${imageUrl}`)
+              
+              if (imageUrl) {
+                const fullUrl = `${API_BASE_URL}${imageUrl}${cacheBuster}`
+                console.log(`[3D Viewer] Loading texture for wall ${wallId}: ${fullUrl}`)
+                
+                loader.load(
+                  fullUrl,
+                  (texture: any) => {
+                    // Optimize texture
+                    texture.magFilter = THREE.LinearFilter
+                    texture.minFilter = THREE.LinearMipmapLinearFilter
+                    textures[wallId] = texture
+                    console.log(`[3D Viewer] ✓ Texture loaded for ${wallId}`)
+                    onTextureLoad()
+                  },
+                  undefined,
+                  () => {
+                    console.warn(`[3D Viewer] ✗ Failed to load texture for ${wallId}`)
+                    onTextureError(wallId)
+                  }
+                )
+              } else {
+                console.log(`[3D Viewer] No image URL for wall ${wallId}, will use gray color`)
+                textures[wallId] = null
+                onTextureLoad()
+              }
+            })
+          })
+          .catch(err => {
+            console.error('[3D Viewer] Error loading layout:', err)
+            createRoom()
+            setLoading(false)
+          })
 
         const createRoom = () => {
           // Clean up old room mesh
@@ -238,6 +275,19 @@ const Space3DViewer = () => {
               if (mat.map) mat.map.dispose()
               mat.dispose()
             })
+          }
+
+          // Get floor color from layout materials if available
+          let floorColor = 0x444444 // Default dark gray
+          if (layoutData?.materials?.floor?.color) {
+            // Convert hex string to number if needed
+            const colorStr = layoutData.materials.floor.color
+            if (colorStr.startsWith('#')) {
+              floorColor = parseInt(colorStr.substring(1), 16)
+            } else if (typeof colorStr === 'string') {
+              floorColor = parseInt(colorStr, 16)
+            }
+            console.log(`[3D Viewer] Using floor color from layout: ${colorStr} -> 0x${floorColor.toString(16)}`)
           }
 
           const currentMaterials = [
@@ -252,7 +302,7 @@ const Space3DViewer = () => {
               side: THREE.BackSide 
             }), // Left wall (-X)
             new THREE.MeshBasicMaterial({ color: 0xaaaaaa, side: THREE.BackSide }), // Top (Ceiling)
-            new THREE.MeshBasicMaterial({ color: 0x444444, side: THREE.BackSide }), // Bottom (Floor)
+            new THREE.MeshBasicMaterial({ color: floorColor, side: THREE.BackSide }), // Bottom (Floor) - uses color from layout
             new THREE.MeshBasicMaterial({ 
               map: textures.wall_south || undefined,
               color: textures.wall_south ? 0xffffff : 0x999999,
@@ -272,16 +322,95 @@ const Space3DViewer = () => {
           scene.add(roomMesh)
         }
 
+        // Create 3D walls from floor plan wall data
+        const create3DWalls = (wallsData: any[]) => {
+          if (!wallsData || wallsData.length === 0) {
+            console.log('[3D Viewer] No walls to render')
+            return
+          }
+
+          console.log(`[3D Viewer] Creating ${wallsData.length} walls from floor plan`)
+          console.log('[3D Viewer] Room dimensions:', { width: dimensions.width, depth: dimensions.depth, height: dimensions.height })
+
+          const wallHeight = dimensions.height
+          const wallThickness = 0.05 // Ultra-thin walls (5cm) to eliminate gaps between connected walls
+
+          wallsData.forEach((wall: any, idx: number) => {
+            if (!wall.coordinates) {
+              console.warn(`[3D Viewer] Wall ${idx} has no coordinates`)
+              return
+            }
+
+            const [x1Norm, y1Norm, x2Norm, y2Norm] = wall.coordinates
+            
+            // Coordinate conversion from 2D (normalized 0-100) to 3D world coordinates
+            // 2D Planner: origin at top-left, y increases downward
+            // 3D World: origin at center, z increases from back to front
+            // Conversion: world = (normalized / 100) * dimension - dimension/2
+            
+            const x1World = (x1Norm / 100) * dimensions.width - dimensions.width / 2
+            const z1World = (y1Norm / 100) * dimensions.depth - dimensions.depth / 2
+            const x2World = (x2Norm / 100) * dimensions.width - dimensions.width / 2
+            const z2World = (y2Norm / 100) * dimensions.depth - dimensions.depth / 2
+
+            console.log(`[3D Viewer] Wall ${idx} (${wall.name}): norm=(${x1Norm},${y1Norm})->(${x2Norm},${y2Norm}) world=(${x1World.toFixed(1)},${z1World.toFixed(1)})->(${x2World.toFixed(1)},${z2World.toFixed(1)})`)
+
+            // Calculate wall vector
+            const dx = x2World - x1World
+            const dz = z2World - z1World
+            const wallLength = Math.sqrt(dx * dx + dz * dz)
+            
+            if (wallLength < 0.1) {
+              console.warn(`[3D Viewer] Wall ${idx} too short (${wallLength}m)`)
+              return
+            }
+
+            // Wall geometry: length x height x thickness
+            const wallGeometry = new THREE.BoxGeometry(wallLength, wallHeight, wallThickness)
+            
+            // Apply texture to wall if available (based on wall name)
+            const wallTexture = textures[wall.id] || textures[wall.name] || null
+            const wallMaterial = new THREE.MeshPhongMaterial({ 
+              map: wallTexture || undefined,
+              color: wallTexture ? 0xffffff : 0xcccccc,
+              shininess: 30,
+              side: THREE.FrontSide
+            })
+            const wallMesh = new THREE.Mesh(wallGeometry, wallMaterial)
+
+            // Position at center of wall - use EXACT normalized coordinates to avoid rounding gaps
+            const centerX = (x1World + x2World) / 2
+            const centerZ = (z1World + z2World) / 2
+            wallMesh.position.set(centerX, 0, centerZ)
+            
+            // Rotation: angle from x-axis in xz plane
+            // Note: negate dz to compensate for the direct z-axis mapping (no negation in coordinate conversion)
+            const angle = Math.atan2(-dz, dx)
+            wallMesh.rotation.y = angle
+            
+            // Cast and receive shadows for better lighting
+            wallMesh.castShadow = true
+            wallMesh.receiveShadow = true
+
+            scene.add(wallMesh)
+            console.log(`[3D Viewer] ✓ Created wall: ${wall.name} | pos=(${centerX.toFixed(2)}, ${centerZ.toFixed(2)}) | len=${wallLength.toFixed(2)}m | ang=${(angle * 180 / Math.PI).toFixed(1)}° | thick=${wallThickness}m | textured=${!!wallTexture}`)
+          })
+        }
+
         // Load layout and assets
         const loadLayout = async () => {
           try {
             const layoutResponse = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/layout`)
-            const layoutData = await layoutResponse.json()
+            const data = await layoutResponse.json()
             
-            if (layoutData.status === 'success' && layoutData.assets && layoutData.assets.length > 0) {
+            // Store layout data - it will be used once textures are loaded
+            layoutData = data
+            console.log('[3D Viewer] Layout data loaded, waiting for textures before creating 3D walls...')
+            
+            if (data.status === 'success' && data.assets && data.assets.length > 0) {
               // Update room dimensions if provided
-              if (layoutData.dimensions) {
-                setDimensions(layoutData.dimensions)
+              if (data.dimensions) {
+                setDimensions(data.dimensions)
               }
               
               // Load GLTF loader for 3D models
@@ -298,18 +427,18 @@ const Space3DViewer = () => {
               }
               
               const gltfLoader = new THREE.GLTFLoader()
-              const roomWidth = layoutData.dimensions?.width || dimensions.width
-              const roomDepth = layoutData.dimensions?.depth || dimensions.depth
-              const roomHeight = layoutData.dimensions?.height || dimensions.height
+              const roomWidth = data.dimensions?.width || dimensions.width
+              const roomDepth = data.dimensions?.depth || dimensions.depth
+              const roomHeight = data.dimensions?.height || dimensions.height
               
               // Calculate actual floor level (room box is centered, so floor is at -height/2)
               const floorY = -roomHeight / 2
               console.log(`[3D Viewer] Room height: ${roomHeight}, Floor level (y): ${floorY}`)
               
               // Track loading assets
-              setLoadingAssets(layoutData.assets.map((a: any) => a.id || a.file))
+              setLoadingAssets(data.assets.map((a: any) => a.id || a.file))
               
-              layoutData.assets.forEach((asset: any) => {
+              data.assets.forEach((asset: any) => {
                 // Convert 2D planner coordinates to 3D world coordinates
                 // Planner (0,0) is Top-Left. ThreeJS (0,0) is Center.
                 // Asset x,y in planner is the top-left corner, so we calculate the center
@@ -317,6 +446,7 @@ const Space3DViewer = () => {
                 const centerY2D = asset.y + (asset.depth / 2)
                 
                 // Convert from planner space (0 to roomWidth/Depth) to world space (-roomWidth/2 to +roomWidth/2)
+                // No negation needed: 2D y increases down (back to front in room) = 3D z increases forward
                 const worldX = centerX2D - (roomWidth / 2)
                 const worldZ = centerY2D - (roomDepth / 2)
                 
@@ -491,6 +621,7 @@ const Space3DViewer = () => {
           }
         }
         
+        // Layout loading is now handled both here and in the texture loading logic above
         loadLayout()
 
         // Animation loop - only create one
@@ -658,6 +789,27 @@ const Space3DViewer = () => {
       )}
 
       <div ref={containerRef} className="viewer-container" />
+      
+      {/* Back button */}
+      <button 
+        onClick={() => navigate(`/venue/${venueId}`)}
+        style={{
+          position: 'absolute',
+          top: '20px',
+          left: '20px',
+          padding: '12px 24px',
+          background: 'rgba(255, 255, 255, 0.9)',
+          border: 'none',
+          borderRadius: '8px',
+          cursor: 'pointer',
+          fontSize: '14px',
+          fontWeight: '600',
+          zIndex: 1000,
+          boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
+        }}
+      >
+        ← Back to Venue
+      </button>
       
       <div className="viewer-controls">
         <div className="dimension-controls">

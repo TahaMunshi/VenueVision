@@ -1,13 +1,54 @@
 version: "3.9"
 
 services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: venuevision-db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: fyp_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Flask + React Application
   app:
     build: .
+    container_name: venuevision-app
+    restart: always
     ports:
       - "5000:5000"
     volumes:
       - ./server/static/uploads:/app/server/static/uploads
     environment:
       - FLASK_ENV=production
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/fyp_db
+      - JWT_SECRET=${JWT_SECRET:-change-this-secret-in-production}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "
+        echo 'Waiting for database to be ready...' &&
+        sleep 10 &&
+        echo 'Setting up database...' &&
+        cd /app &&
+        python server/setup_database.py &&
+        echo 'Starting Flask server...' &&
+        python server/app.py
+      "
+
+volumes:
+  postgres_data:
+    name: venuevision_postgres_data
 
 

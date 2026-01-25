@@ -26,6 +26,10 @@ def get_connection_string():
     """Get database connection string from environment or use default"""
     db_url = os.getenv('DATABASE_URL', DEFAULT_DB_URL)
     
+    # If DATABASE_URL points directly to fyp_db, extract base URL for postgres connection
+    if 'fyp_db' in db_url:
+        db_url = db_url.replace('/fyp_db', '/postgres')
+    
     # Extract components from URL
     if '@' in db_url:
         # Format: postgresql://user:password@host:port/dbname
@@ -140,34 +144,59 @@ def create_tables(conn_params):
         return False
 
 def insert_sample_data(conn_params):
-    """Insert sample data into database tables (if any)"""
+    """Insert sample data into database tables (create demo user)"""
     conn_params['database'] = DATABASE_NAME
     
     try:
         conn = psycopg2.connect(**conn_params)
         cursor = conn.cursor()
         
-        # Check if assets table exists (for backward compatibility)
+        # Check if users table exists
         cursor.execute("""
             SELECT EXISTS (
                 SELECT FROM information_schema.tables 
                 WHERE table_schema = 'public' 
-                AND table_name = 'assets'
+                AND table_name = 'users'
             )
         """)
-        table_exists = cursor.fetchone()[0]
+        users_table_exists = cursor.fetchone()[0]
         
-        if not table_exists:
-            print("[INFO] No sample data to insert (using file-based storage)")
+        if users_table_exists:
+            # Check if demo user already exists
+            cursor.execute("SELECT user_id FROM users WHERE username = 'demo'")
+            demo_exists = cursor.fetchone()
+            
+            if demo_exists:
+                print("[INFO] Demo user already exists")
+            else:
+                # Create demo user (password: demo123)
+                try:
+                    import bcrypt
+                    password_hash = bcrypt.hashpw('demo123'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+                    
+                    cursor.execute(
+                        """
+                        INSERT INTO users (username, email, password_hash, full_name)
+                        VALUES (%s, %s, %s, %s)
+                        RETURNING user_id
+                        """,
+                        ('demo', 'demo@venuevision.com', password_hash, 'Demo User')
+                    )
+                    user_id = cursor.fetchone()[0]
+                    conn.commit()
+                    print(f"[OK] Demo user created (username: demo, password: demo123, user_id: {user_id})")
+                except ImportError:
+                    print("[WARNING] bcrypt not installed. Skipping demo user creation.")
+                    print("          Install with: pip install bcrypt")
         else:
-            print("[INFO] Sample data insertion skipped (3D asset features removed)")
+            print("[INFO] Users table not found. Skipping demo user creation.")
         
         cursor.close()
         conn.close()
         return True
         
     except psycopg2.Error as e:
-        print(f"[WARNING] Could not check for sample data: {e}")
+        print(f"[WARNING] Could not create demo user: {e}")
         return True  # Non-critical, return True
 
 def update_database_url_file(conn_params):
@@ -241,9 +270,11 @@ def main():
     print("=" * 60)
     print()
     print("Next steps:")
-    print("1. Start your Flask server: python server/app.py")
-    print("2. Test the API: http://localhost:5000/api/v1/health")
-    print("3. Access mobile interface: http://localhost:5000/mobile")
+    print("1. Install Python dependencies: pip install -r requirements.txt")
+    print("2. Start your Flask server: python server/app.py")
+    print("3. Access the app: http://localhost:5000/mobile")
+    print("4. Login with: username='demo', password='demo123'")
+    print()
 
 if __name__ == '__main__':
     main()

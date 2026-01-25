@@ -1,11 +1,60 @@
-venv
+# Node
 node_modules
+npm-debug.log
 dist
-.git
+
+# Python
+venv
 __pycache__
 *.pyc
-Dockerfile*
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Docker
+Dockerfile
 docker-compose.yml
+.dockerignore
+
+# Documentation (not needed in container)
+*.md
+!README.md
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Uploads (will be mounted as volume)
+server/static/uploads/*
+
+# Temporary files
 *.log
+*.tmp
+.cache
 
-
+# Testing
+.pytest_cache
+coverage
+*.coverage

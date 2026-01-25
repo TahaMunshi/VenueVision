@@ -3,7 +3,6 @@ import { useParams, useNavigate } from 'react-router-dom'
 import './MobileCapture.css'
 import MiniMap, { type WallSegment } from '../../components/MiniMap'
 import ScannerOverlay from '../../components/ScannerOverlay'
-import FloorPlanViewer from '../../components/FloorPlanViewer'
 import { getApiBaseUrl } from '../../utils/api'
 
 // NOTE: To access the backend from your phone on the same Wi‑Fi, set VITE_API_BASE_URL in the project .env to your PC's LAN IP, e.g. http://192.168.1.42:5000
@@ -50,10 +49,10 @@ const MobileCapture = () => {
   const [cameraError, setCameraError] = useState<string | null>(null)
   const [progress, setProgress] = useState<ProgressState | null>(null)
   const [currentWall, setCurrentWall] = useState<WallSegment | null>(null)
-  const [floorPlanUrl, setFloorPlanUrl] = useState<string | null>(null)
   const [wallImages, setWallImages] = useState<Record<string, string>>({})
   const [videoReady, setVideoReady] = useState(false)
   const [loadingTimeout, setLoadingTimeout] = useState(false)
+  const [retakingWallId, setRetakingWallId] = useState<string | null>(null) // Track which wall is being retaken
 
   // All refs must be declared at the top level
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -172,15 +171,6 @@ const MobileCapture = () => {
       const wall = determineCurrentWall(dataWithCoords)
       console.log('[MobileCapture] Determined current wall:', wall)
       setCurrentWall(wall)
-      
-      if (data.floor_plan_url) {
-        const fullUrl = data.floor_plan_url.startsWith('http') 
-          ? data.floor_plan_url 
-          : `${currentApiUrl}${data.floor_plan_url}`
-        setFloorPlanUrl(fullUrl)
-      } else {
-        setFloorPlanUrl(null)
-      }
 
       // Preload wall images for review
       try {
@@ -510,17 +500,12 @@ const MobileCapture = () => {
       setShowCheck(true)
       setTimeout(() => setShowCheck(false), 1200)
 
-      // Refresh progress and wall images
+      // Clear retaking flag since new capture was made
+      setRetakingWallId(null)
+
+      // Refresh progress to update completed walls list
       await fetchProgress()
-      try {
-        const imagesRes = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/wall-images`)
-        const imagesData = await imagesRes.json()
-        if (imagesData.status === 'success' && imagesData.wall_images) {
-          setWallImages(imagesData.wall_images)
-        }
-      } catch (err) {
-        console.warn('[MobileCapture] Unable to refresh wall images after capture')
-      }
+      // DO NOT refetch wall images - the image will be loaded naturally when progress updates
     } catch (error) {
       console.error('[MobileCapture] Capture error:', error)
       if (error instanceof TypeError && error.message.includes('fetch')) {
@@ -618,7 +603,10 @@ const MobileCapture = () => {
   }
 
   const totalWalls = progress?.total_walls ?? progress?.walls?.length ?? 0
-  const completedCount = progress?.completed_walls.length ?? 0
+  // When retaking a wall, don't count it as completed until a new capture is made
+  const completedCount = retakingWallId 
+    ? (progress?.completed_walls.length ?? 0) - (progress?.completed_walls.includes(retakingWallId) ? 1 : 0)
+    : progress?.completed_walls.length ?? 0
   const stepNumber = progress?.is_complete
     ? totalWalls || completedCount
     : totalWalls
@@ -854,16 +842,7 @@ const MobileCapture = () => {
         {/* Scanner Overlay with corner brackets and scanning animation */}
         <ScannerOverlay />
 
-        {/* Floor Plan Viewer Overlay - shows floor plan with highlighted current wall */}
-        {floorPlanUrl && progress.wall_regions && progress.wall_regions.length > 0 && (
-          <div className="floor-plan-overlay">
-            <FloorPlanViewer
-              floorPlanUrl={floorPlanUrl}
-              walls={progress.wall_regions}
-              currentWallId={currentWall?.id ?? null}
-            />
-          </div>
-        )}
+        {/* Floor Plan Viewer Overlay - Removed for now, using minimap instead */}
 
         {progress?.walls?.length ? (
           <div className="minimap-overlay">
@@ -874,7 +853,7 @@ const MobileCapture = () => {
         <div className="overlay">
           <div className="overlay-header" style={{ position: 'relative' }}>
             <button
-              onClick={() => navigate('/')}
+              onClick={() => navigate(`/venue/${venueId}`)}
               style={{
                 position: 'absolute',
                 top: '0',
@@ -897,32 +876,37 @@ const MobileCapture = () => {
             <div className="capture-banner">
               {progress?.is_complete ? (
                 <div style={{ textAlign: 'center' }}>
-                  <p className="capture-banner-text">All walls captured ✔</p>
+                  <p className="capture-banner-text">✓ All walls captured! Perfect job!</p>
                   <button
                     onClick={() => {
-                      const currentApiUrl = getApiBaseUrl()
-                      window.location.href = `${currentApiUrl}/mobile/view/${targetVenue}`
+                      navigate(`/view/${targetVenue}`)
                     }}
                     style={{
                       marginTop: '10px',
                       padding: '0.75rem 1.5rem',
-                      background: '#2196F3',
+                      background: '#4CAF50',
                       color: 'white',
                       border: 'none',
                       borderRadius: '8px',
                       cursor: 'pointer',
                       fontWeight: 'bold',
-                      fontSize: '0.9rem'
+                      fontSize: '0.9rem',
+                      boxShadow: '0 4px 12px rgba(76, 175, 80, 0.3)'
                     }}
                   >
                     View 3D Space →
                   </button>
                 </div>
               ) : (
-                <p className="capture-banner-text">
-                  Step {stepNumber}/{totalWalls || '—'}:{' '}
-                  <strong>Photograph {bannerTargetName}</strong>
-                </p>
+                <>
+                  <p className="capture-banner-text">
+                    Step {stepNumber}/{totalWalls || '—'}:{' '}
+                    <strong>Photograph {bannerTargetName}</strong>
+                  </p>
+                  <div style={{ fontSize: '0.85rem', marginTop: '6px', opacity: 0.8 }}>
+                    {completedCount ? `${completedCount} captured, ${(progress?.total_walls || 0) - completedCount} remaining` : 'No walls captured yet'}
+                  </div>
+                </>
               )}
               <p className="wall-label">
                 Venue <strong>{targetVenue}</strong>
@@ -984,71 +968,60 @@ const MobileCapture = () => {
         )}
 
         {/* Review captures panel */}
-        <div
-          style={{
-            position: 'absolute',
-            bottom: '16px',
-            left: '16px',
-            right: '16px',
-            maxHeight: '32vh',
-            overflowY: 'auto',
-            background: 'rgba(0,0,0,0.6)',
-            color: '#fff',
-            padding: '12px',
-            borderRadius: '12px',
-            zIndex: 1200,
-            backdropFilter: 'blur(6px)'
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-            <div style={{ fontWeight: 700, fontSize: '0.95rem' }}>Review Captures</div>
-            <div style={{ fontSize: '0.85rem', opacity: 0.8 }}>
-              {progress?.completed_walls.length ?? 0}/{progress?.total_walls ?? progress?.walls?.length ?? 0} done
+        <div className="review-panel">
+          <div className="review-panel-header">
+            <div className="review-panel-title">Captured Walls</div>
+            <div className="review-panel-progress">
+              {progress?.completed_walls.length ?? 0}/{progress?.total_walls ?? progress?.walls?.length ?? 0}
             </div>
           </div>
-          <div style={{ display: 'grid', gap: '10px', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
+          <div className="review-panel-grid">
             {progress?.walls?.map((wall) => {
               const url = wallImages[wall.id]
+              const isCompleted = progress?.completed_walls.includes(wall.id) && retakingWallId !== wall.id
               return (
-                <div key={wall.id} style={{ background: 'rgba(255,255,255,0.08)', borderRadius: '10px', padding: '8px' }}>
-                  <div style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '6px' }}>{wall.name}</div>
-                  {url ? (
+                <div key={wall.id} className={`review-wall-card ${isCompleted ? 'captured' : ''}`} style={{ position: 'relative' }}>
+                  {isCompleted && (
+                    <div className="review-wall-status">✓</div>
+                  )}
+                  <div className="review-wall-name">{wall.name}</div>
+                  {url && retakingWallId !== wall.id ? (
                     <img
                       src={url.startsWith('http') ? url : `${API_BASE_URL}${url}`}
                       alt={wall.name}
-                      style={{ width: '100%', height: '80px', objectFit: 'cover', borderRadius: '8px', marginBottom: '6px' }}
+                      className="review-wall-image"
                     />
                   ) : (
-                    <div
-                      style={{
-                        height: '80px',
-                        borderRadius: '8px',
-                        background: 'rgba(255,255,255,0.05)',
-                        display: 'grid',
-                        placeItems: 'center',
-                        fontSize: '0.85rem',
-                        opacity: 0.8,
-                        marginBottom: '6px'
-                      }}
-                    >
-                      No image
-                    </div>
+                    <div className="review-wall-empty">{retakingWallId === wall.id ? 'Retaking...' : 'No image'}</div>
                   )}
-                  <div style={{ display: 'flex', gap: '6px' }}>
+                  <div className="review-wall-actions">
                     <button
-                      style={{ flex: 1, background: '#1e88e5', color: '#fff', border: 'none', borderRadius: '6px', padding: '6px', cursor: 'pointer', fontSize: '0.8rem' }}
-                      onClick={() => {
+                      className="review-wall-btn retake"
+                      onClick={async () => {
                         const target = progress?.walls?.find(w => w.id === wall.id) as WallSegment | undefined
                         if (target) {
+                          // Reset the processed image on the backend
+                          const currentApiUrl = getApiBaseUrl()
+                          try {
+                            await fetch(`${currentApiUrl}/api/v1/venue/${venueId}/wall/${target.id}/reset`, {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' }
+                            })
+                          } catch (err) {
+                            console.warn('[MobileCapture] Could not reset wall image:', err)
+                          }
+                          
+                          setRetakingWallId(target.id) // Mark this wall as being retaken
                           setCurrentWall(target)
                           setToast({ message: `Now capturing ${target.name}`, type: 'success' })
                         }
                       }}
+                      disabled={isUploading}
                     >
                       Retake
                     </button>
                     <button
-                      style={{ flex: 1, background: '#ff9800', color: '#fff', border: 'none', borderRadius: '6px', padding: '6px', cursor: 'pointer', fontSize: '0.8rem' }}
+                      className="review-wall-btn adjust"
                       onClick={() => navigate(`/edit/${venueId}/${wall.id}?from=capture`)}
                     >
                       Adjust
@@ -1058,7 +1031,7 @@ const MobileCapture = () => {
               )
             }) || null}
             {(!progress?.walls || progress.walls.length === 0) && (
-              <div style={{ fontSize: '0.9rem', opacity: 0.8 }}>No walls loaded yet.</div>
+              <div style={{ fontSize: '0.9rem', opacity: 0.8, gridColumn: '1 / -1' }}>No walls loaded yet.</div>
             )}
           </div>
         </div>

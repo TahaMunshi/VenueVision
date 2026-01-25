@@ -298,3 +298,191 @@
   }
 }
 
+/* Professional wall editing styles */
+.drawn-wall {
+  cursor: move;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  transition: all 0.15s ease-out;
+  z-index: 5;
+}
+
+.drawn-wall:hover {
+  height: 6px !important;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.6);
+  filter: brightness(1.2);
+}
+
+/* Wall endpoint handles - draggable circles */
+.wall-endpoint-handle {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: white;
+  border: 2px solid rgba(0, 0, 0, 0.5);
+  cursor: grab;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  transform: translate(-50%, -50%);
+  z-index: 10;
+  transition: all 0.15s ease-out;
+}
+
+.wall-endpoint-handle:hover {
+  width: 20px;
+  height: 20px;
+  background: #4CAF50;
+  border-color: white;
+  box-shadow: 0 2px 8px rgba(76, 175, 80, 0.5);
+  transform: translate(-50%, -50%) scale(1.1);
+}
+
+.wall-endpoint-handle.active {
+  width: 20px;
+  height: 20px;
+  background: #2196F3;
+  border-color: white;
+  box-shadow: 0 0 12px rgba(33, 150, 243, 0.6);
+  cursor: grabbing;
+}
+
+/* Draft wall (being drawn) */
+.draft-wall {
+  position: absolute;
+  background: #2196F3;
+  height: 2px;
+  opacity: 0.7;
+  box-shadow: 0 0 4px rgba(33, 150, 243, 0.5);
+  z-index: 4;
+}
+
+.draft-wall-start {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: #2196F3;
+  border: 2px solid white;
+  border-radius: 50%;
+  z-index: 6;
+  transform: translate(-50%, -50%);
+}
+
+/* Wall controls panel */
+.wall-controls-section {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 15px;
+  margin-bottom: 20px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.wall-controls-section h3 {
+  margin-top: 0;
+  margin-bottom: 12px;
+  font-size: 1.1rem;
+  color: #e0e0e0;
+}
+
+.wall-row {
+  background: rgba(0, 0, 0, 0.2);
+  padding: 12px;
+  margin-bottom: 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.wall-row:hover {
+  background: rgba(0, 0, 0, 0.3);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.wall-row.selected {
+  background: rgba(76, 175, 80, 0.15);
+  border-color: rgba(76, 175, 80, 0.5);
+  box-shadow: 0 0 8px rgba(76, 175, 80, 0.2);
+}
+
+.wall-row-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: #e0e0e0;
+}
+
+.wall-row-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.select-wall-btn,
+.delete-wall-btn {
+  padding: 4px 10px;
+  font-size: 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.select-wall-btn:hover {
+  background: rgba(76, 175, 80, 0.3);
+  border-color: rgba(76, 175, 80, 0.5);
+}
+
+.delete-wall-btn:hover {
+  background: rgba(244, 67, 54, 0.3);
+  border-color: rgba(244, 67, 54, 0.5);
+  color: #ff7675;
+}
+
+.form-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.form-row.compact span {
+  min-width: 100px;
+  font-size: 0.9rem;
+}
+
+.form-row.compact input,
+.form-row.compact select {
+  flex: 1;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: white;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+.form-row.compact input::placeholder {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.form-row.compact input:focus,
+.form-row.compact select:focus {
+  outline: none;
+  background: rgba(255, 255, 255, 0.15);
+  border-color: #4CAF50;
+  box-shadow: 0 0 4px rgba(76, 175, 80, 0.3);
+}
+
+/* Snap grid visualization */
+.snap-point {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  background: rgba(76, 175, 80, 0.3);
+  border-radius: 50%;
+  z-index: 3;
+  pointer-events: none;
+}
+

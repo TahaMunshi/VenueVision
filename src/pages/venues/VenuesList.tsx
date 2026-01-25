@@ -1,0 +1,201 @@
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import './VenuesList.css'
+import { getApiBaseUrl } from '../../utils/api'
+import CreateVenueModal from './CreateVenueModal'
+
+interface Venue {
+  venue_id: number
+  venue_identifier: string
+  venue_name: string
+  width: number
+  height: number
+  depth: number
+  created_at: string
+  updated_at: string
+}
+
+const VenuesList = () => {
+  const navigate = useNavigate()
+  const [venues, setVenues] = useState<Venue[]>([])
+  const [loading, setLoading] = useState(true)
+  const [user, setUser] = useState<any>(null)
+  const [showCreateModal, setShowCreateModal] = useState(false)
+
+  const API_BASE_URL = getApiBaseUrl()
+
+  useEffect(() => {
+    // Check if user is logged in
+    const token = localStorage.getItem('token')
+    const userData = localStorage.getItem('user')
+
+    if (!token || !userData) {
+      navigate('/login')
+      return
+    }
+
+    setUser(JSON.parse(userData))
+
+    // Fetch user's venues
+    fetchVenues()
+  }, [navigate])
+
+  const fetchVenues = async () => {
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch(`${API_BASE_URL}/api/v1/venues`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        setVenues(data.venues || [])
+      } else if (response.status === 401) {
+        // Token expired or invalid
+        localStorage.clear()
+        navigate('/login')
+      }
+    } catch (err) {
+      console.error('Error fetching venues:', err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleLogout = () => {
+    localStorage.clear()
+    navigate('/login')
+  }
+
+  const handleCreateVenue = () => {
+    setShowCreateModal(true)
+  }
+
+  const handleCreateSuccess = (venueId: string) => {
+    setShowCreateModal(false)
+    // Refresh venues list
+    fetchVenues()
+    // Navigate to new venue
+    navigate(`/venue/${venueId}`)
+  }
+
+  const handleVenueClick = (venueIdentifier: string) => {
+    navigate(`/venue/${venueIdentifier}`)
+  }
+
+  const getUserInitials = () => {
+    if (!user) return '?'
+    if (user.full_name) {
+      const names = user.full_name.split(' ')
+      return names.map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
+    }
+    return user.username[0].toUpperCase()
+  }
+
+  if (loading) {
+    return (
+      <div className="venues-container">
+        <div className="venues-header">
+          <div className="venues-header-left">
+            <h1>VenueVision</h1>
+          </div>
+        </div>
+        <div className="loading-state">
+          <div className="loading-spinner"></div>
+          <p>Loading your venues...</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="venues-container">
+      {showCreateModal && (
+        <CreateVenueModal
+          onClose={() => setShowCreateModal(false)}
+          onSuccess={handleCreateSuccess}
+        />
+      )}
+      
+      <div className="venues-header">
+        <div className="venues-header-left">
+          <h1>VenueVision</h1>
+          <p>Create and manage your event spaces</p>
+        </div>
+        <div className="venues-header-right">
+          {user && (
+            <div className="user-info">
+              <div className="user-avatar">{getUserInitials()}</div>
+              <span className="user-name">{user.username}</span>
+            </div>
+          )}
+          <button onClick={handleLogout} className="logout-button">
+            Logout
+          </button>
+        </div>
+      </div>
+
+      <div className="venues-content">
+        <div className="venues-actions">
+          <h2 className="venues-title">My Venues</h2>
+          <button onClick={handleCreateVenue} className="create-venue-button">
+            <span>➕</span>
+            Create New Venue
+          </button>
+        </div>
+
+        {venues.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-icon">🏢</div>
+            <h3 className="empty-title">No venues yet</h3>
+            <p className="empty-subtitle">
+              Create your first venue to get started
+            </p>
+            <button onClick={handleCreateVenue} className="create-venue-button">
+              <span>➕</span>
+              Create Your First Venue
+            </button>
+          </div>
+        ) : (
+          <div className="venues-grid">
+            {venues.map((venue) => (
+              <div
+                key={venue.venue_id}
+                className="venue-card"
+                onClick={() => handleVenueClick(venue.venue_identifier)}
+              >
+                <div className="venue-card-header">
+                  <div>
+                    <h3 className="venue-card-title">{venue.venue_name}</h3>
+                    <p className="venue-card-meta">
+                      Created {new Date(venue.created_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <div className="venue-icon">🏢</div>
+                </div>
+                <div className="venue-card-stats">
+                  <div className="venue-stat">
+                    <span className="venue-stat-label">Width</span>
+                    <span className="venue-stat-value">{venue.width}m</span>
+                  </div>
+                  <div className="venue-stat">
+                    <span className="venue-stat-label">Depth</span>
+                    <span className="venue-stat-value">{venue.depth}m</span>
+                  </div>
+                  <div className="venue-stat">
+                    <span className="venue-stat-label">Height</span>
+                    <span className="venue-stat-value">{venue.height}m</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export default VenuesList

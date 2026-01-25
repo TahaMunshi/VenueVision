@@ -203,7 +203,157 @@
   font-size: 0.95rem;
   opacity: 0.8;
 }
+/* Enhanced Review Panel Styles */
+.review-panel {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  right: 16px;
+  max-height: 32vh;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  padding: 16px;
+  border-radius: 12px;
+  z-index: 1200;
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
 
+.review-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.review-panel-title {
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.review-panel-progress {
+  font-size: 0.85rem;
+  opacity: 0.8;
+  background: rgba(76, 175, 80, 0.15);
+  padding: 4px 12px;
+  border-radius: 20px;
+  color: #81c784;
+}
+
+.review-panel-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.review-wall-card {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  transition: all 0.3s ease;
+}
+
+.review-wall-card:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(76, 175, 80, 0.4);
+  box-shadow: 0 4px 12px rgba(76, 175, 80, 0.2);
+  transform: translateY(-2px);
+}
+
+.review-wall-card.captured {
+  border-color: rgba(76, 175, 80, 0.5);
+  background: rgba(76, 175, 80, 0.08);
+}
+
+.review-wall-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: #e0e0e0;
+}
+
+.review-wall-image {
+  width: 100%;
+  height: 80px;
+  border-radius: 8px;
+  object-fit: cover;
+  margin-bottom: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.review-wall-empty {
+  height: 80px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  display: grid;
+  place-items: center;
+  font-size: 0.85rem;
+  opacity: 0.6;
+  margin-bottom: 6px;
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+}
+
+.review-wall-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.review-wall-btn {
+  flex: 1;
+  border: none;
+  border-radius: 6px;
+  padding: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+  transition: all 0.2s;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.review-wall-btn.retake {
+  background: linear-gradient(135deg, #1e88e5, #1565c0);
+  color: #fff;
+  border: 1px solid rgba(30, 136, 229, 0.5);
+}
+
+.review-wall-btn.retake:hover {
+  background: linear-gradient(135deg, #1976d2, #1565c0);
+  box-shadow: 0 4px 12px rgba(30, 136, 229, 0.3);
+}
+
+.review-wall-btn.adjust {
+  background: linear-gradient(135deg, #fb8c00, #e65100);
+  color: #fff;
+  border: 1px solid rgba(251, 140, 0, 0.5);
+}
+
+.review-wall-btn.adjust:hover {
+  background: linear-gradient(135deg, #f57c00, #e65100);
+  box-shadow: 0 4px 12px rgba(251, 140, 0, 0.3);
+}
+
+.review-wall-status {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  background: rgba(76, 175, 80, 0.9);
+  border: 2px solid white;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: bold;
+  color: white;
+}
 .overlay-footer p {
   font-size: 0.95rem;
   opacity: 0.9;

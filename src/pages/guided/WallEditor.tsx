@@ -331,8 +331,8 @@ const WallEditor = () => {
     return (
       <div className="wall-editor-container">
         <div className="wall-editor-header">
-          <button onClick={() => navigate(`/capture/${venueId}`)} className="back-button">
-            ← Back
+          <button onClick={() => navigate(`/editor/${venueId}`)} className="back-button">
+            ← Back to Editor
           </button>
           <h1>Edit Wall</h1>
           <p>Venue: {venueId} | Wall: {wallId}</p>

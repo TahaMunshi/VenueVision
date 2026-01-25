@@ -127,3 +127,76 @@ def get_wall_images(venue_id: str):
         logger.error(f"Error getting wall images: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+
+@walls_bp.route("/venue/<venue_id>/wall/<wall_id>/reset", methods=["POST"])
+def reset_wall_image(venue_id: str, wall_id: str):
+    """
+    Reset a wall's image by deleting the processed version.
+    This allows the wall to be retaken from scratch.
+    Only deletes processed_{wall_id}.jpg, leaves seq_*.jpg files intact.
+    """
+    try:
+        wall_dir = os.path.join(UPLOAD_ROOT, venue_id, wall_id)
+        
+        if not os.path.isdir(wall_dir):
+            return jsonify({"status": "error", "message": "Wall directory not found"}), 404
+        
+        # Delete the processed image file if it exists
+        processed_path = os.path.join(wall_dir, f"processed_{wall_id}.jpg")
+        if os.path.exists(processed_path):
+            try:
+                os.remove(processed_path)
+                logger.info(f"Deleted processed image for {venue_id}/{wall_id}")
+            except OSError as e:
+                logger.error(f"Failed to delete processed image: {e}")
+                return jsonify({"status": "error", "message": str(e)}), 500
+        
+        return jsonify({"status": "success", "message": "Wall reset successfully"}), 200
+    
+    except Exception as e:
+        logger.error(f"Error resetting wall image: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@walls_bp.route("/venue/<venue_id>/reset", methods=["POST"])
+def reset_venue(venue_id: str):
+    """
+    Completely reset a venue: delete all walls, layout, and captured images.
+    Starts fresh from scratch.
+    """
+    import shutil
+    
+    try:
+        venue_path = os.path.join(UPLOAD_ROOT, venue_id)
+        logger.info(f"[Reset] Attempting to reset venue {venue_id} at path: {venue_path}")
+        
+        if not os.path.isdir(venue_path):
+            logger.warning(f"[Reset] Venue directory not found: {venue_path}")
+            return jsonify({"status": "error", "message": "Venue directory not found"}), 404
+        
+        # Delete entire venue directory contents but keep the directory
+        try:
+            files_deleted = 0
+            dirs_deleted = 0
+            
+            for item in os.listdir(venue_path):
+                item_path = os.path.join(venue_path, item)
+                if os.path.isdir(item_path):
+                    logger.info(f"[Reset] Deleting directory: {item_path}")
+                    shutil.rmtree(item_path)
+                    dirs_deleted += 1
+                else:
+                    logger.info(f"[Reset] Deleting file: {item_path}")
+                    os.remove(item_path)
+                    files_deleted += 1
+            
+            logger.info(f"[Reset] Successfully reset venue {venue_id}: deleted {files_deleted} files and {dirs_deleted} directories")
+            return jsonify({"status": "success", "message": f"Venue reset successfully (deleted {files_deleted} files and {dirs_deleted} directories)"}), 200
+        
+        except Exception as e:
+            logger.error(f"[Reset] Error clearing venue directory for {venue_id}: {str(e)}", exc_info=True)
+            return jsonify({"status": "error", "message": f"Error clearing venue directory: {str(e)}"}), 500
+    
+    except Exception as e:
+        logger.error(f"[Reset] Unexpected error resetting venue {venue_id}: {str(e)}", exc_info=True)
+        return jsonify({"status": "error", "message": f"Unexpected error: {str(e)}"}), 500

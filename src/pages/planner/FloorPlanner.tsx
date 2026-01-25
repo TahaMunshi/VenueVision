@@ -193,6 +193,57 @@ const FloorPlanner = () => {
     }
   }, [isResizing, sidebarWidth])
 
+  // Keyboard shortcuts: Delete selected wall, Escape to deselect, etc.
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Only handle if focus is not in an input/textarea
+      const target = e.target as HTMLElement
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
+
+      // Delete (Del/Backspace) - remove selected wall
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedWallId) {
+        e.preventDefault()
+        setWalls(walls.filter(w => w.id !== selectedWallId))
+        setSelectedWallId(null)
+        setMessage({ text: 'Wall deleted', type: 'success' })
+        setTimeout(() => setMessage(null), 2000)
+        return
+      }
+
+      // Escape - deselect
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSelectedWallId(null)
+        setDraggingEndpoint(null)
+        setDraggingWallId(null)
+        setIsDrawingWall(false)
+        setDraftWall(null)
+        return
+      }
+
+      // Ctrl/Cmd + Z - undo (basic: remove last wall)
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        if (walls.length > 0) {
+          setWalls(walls.slice(0, -1))
+          setMessage({ text: 'Undo: wall removed', type: 'success' })
+          setTimeout(() => setMessage(null), 2000)
+        }
+        return
+      }
+
+      // Ctrl/Cmd + A - select all walls
+      if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+        e.preventDefault()
+        // Not implemented for now, but placeholder for future
+        return
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [walls, selectedWallId])
+
   useEffect(() => {
     const handleGlobalMouseMove = (e: MouseEvent) => {
       if (draggingAssetId && canvasRef.current) {
@@ -300,7 +351,7 @@ const FloorPlanner = () => {
     setPlacedAssets(placedAssets.filter(a => a.id !== assetId))
   }
 
-  const hitTestWall = (xPx: number, yPx: number, tolerancePx = 8): WallSpec | null => {
+  const hitTestWall = (xPx: number, yPx: number, tolerancePx = 10): WallSpec | null => {
     const cw = canvasRef.current
     if (!cw) return null
     const widthPx = cw.clientWidth
@@ -342,6 +393,14 @@ const FloorPlanner = () => {
       return true
     }
 
+    // Check if asset is within wall boundaries (if walls exist)
+    if (walls.length > 0) {
+      const assetInWalls = checkAssetWithinWalls(x, y, width, depth)
+      if (!assetInWalls) {
+        return true
+      }
+    }
+
     const newLeft = x - spacing / 2
     const newRight = x + width + spacing / 2
     const newTop = y - spacing / 2
@@ -361,6 +420,47 @@ const FloorPlanner = () => {
       }
     }
     return false
+  }
+
+  // Check if asset bounding box is within the walls
+  const checkAssetWithinWalls = (assetX: number, assetY: number, assetWidth: number, assetDepth: number): boolean => {
+    // If no walls defined, prevent placement (must have bounding walls)
+    if (walls.length === 0) return false
+    
+    const MIN_WALL_DISTANCE = 0.1 // 10cm minimum distance from walls
+    const assetRight = assetX + assetWidth
+    const assetBottom = assetY + assetDepth
+    
+    // Check if asset is within the bounding box formed by walls
+    let minX = Infinity, maxX = -Infinity
+    let minY = Infinity, maxY = -Infinity
+    
+    // Find bounding box of all walls
+    walls.forEach(wall => {
+      if (!wall.coordinates) return
+      const [x1, y1, x2, y2] = wall.coordinates
+      const pctX = (val: number) => (val / 100) * roomDimensions.width
+      const pctY = (val: number) => (val / 100) * roomDimensions.depth
+      
+      const x1M = pctX(x1)
+      const x2M = pctX(x2)
+      const y1M = pctY(y1)
+      const y2M = pctY(y2)
+      
+      minX = Math.min(minX, x1M, x2M)
+      maxX = Math.max(maxX, x1M, x2M)
+      minY = Math.min(minY, y1M, y2M)
+      maxY = Math.max(maxY, y1M, y2M)
+    })
+    
+    // Asset must be within wall bounds with minimum clearance
+    const isWithinBounds = 
+      assetX >= minX + MIN_WALL_DISTANCE &&
+      assetRight <= maxX - MIN_WALL_DISTANCE &&
+      assetY >= minY + MIN_WALL_DISTANCE &&
+      assetBottom <= maxY - MIN_WALL_DISTANCE
+    
+    return isWithinBounds
   }
 
   const handleSave = async () => {
@@ -387,14 +487,59 @@ const FloorPlanner = () => {
       })
 
       if (response.ok) {
-        setMessage({ text: 'Layout saved successfully!', type: 'success' })
-        setTimeout(() => setMessage(null), 3000)
+        setMessage({ text: 'Layout saved! Opening guided tour to capture wall photos...', type: 'success' })
+        setTimeout(() => {
+          // Redirect to guided tour after saving
+          navigate(`/mobile/capture/${venueId}`)
+        }, 1500)
       } else {
         setMessage({ text: 'Failed to save layout.', type: 'error' })
         setTimeout(() => setMessage(null), 3000)
       }
     } catch (error) {
       setMessage({ text: 'Error saving layout.', type: 'error' })
+      setTimeout(() => setMessage(null), 3000)
+    }
+  }
+
+  const handleReset = async () => {
+    if (!window.confirm('Are you sure you want to reset everything? This will delete all walls, photos, and layout data. This cannot be undone.')) {
+      return
+    }
+
+    try {
+      console.log(`[FloorPlanner] Resetting venue ${venueId}...`)
+      const resetUrl = `${API_BASE_URL}/api/v1/venue/${venueId}/reset`
+      console.log(`[FloorPlanner] Calling reset endpoint: ${resetUrl}`)
+      
+      const response = await fetch(resetUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      })
+
+      console.log(`[FloorPlanner] Reset response status: ${response.status}`)
+      const responseData = await response.json()
+      console.log(`[FloorPlanner] Reset response data:`, responseData)
+
+      if (response.ok) {
+        setMessage({ text: 'Venue reset successfully! Starting fresh...', type: 'success' })
+        // Reset local state
+        setWalls([])
+        setPlacedAssets([])
+        setFloorPlanUrl(null)
+        setVenueName('')
+        setRoomDimensions({ width: 20, height: 8, depth: 20 })
+        setTimeout(() => setMessage(null), 2000)
+      } else {
+        console.error(`[FloorPlanner] Reset failed: ${responseData.message}`)
+        setMessage({ text: `Failed to reset venue: ${responseData.message}`, type: 'error' })
+        setTimeout(() => setMessage(null), 3000)
+      }
+    } catch (error) {
+      console.error(`[FloorPlanner] Error resetting venue:`, error)
+      setMessage({ text: 'Error resetting venue.', type: 'error' })
       setTimeout(() => setMessage(null), 3000)
     }
   }
@@ -620,8 +765,8 @@ const FloorPlanner = () => {
   return (
     <div className="floor-planner-container">
       <div className="planner-header">
-        <button onClick={() => navigate(`/editor/${venueId}`)} className="back-button">
-          ← Back
+        <button onClick={() => navigate(`/venue/${venueId}`)} className="back-button">
+          ← Back to Venue
         </button>
         <h1>2D Floor Planner</h1>
         <p>Venue: {venueName || venueId} | Room: {roomDimensions.width}m x {roomDimensions.depth}m</p>
@@ -914,11 +1059,18 @@ const FloorPlanner = () => {
           <button onClick={handleSave} className="action-button primary">
             💾 Save Layout
           </button>
+          <button onClick={() => navigate(`/mobile/capture/${venueId}`)} className="action-button" style={{ backgroundColor: '#3498db', color: 'white' }}>
+            📸 Proceed to Guided Image Tour
+          </button>
           <button onClick={handleView3D} className="action-button secondary">
             👁️ View 3D Space
           </button>
           <button onClick={handleGenerateGlb} className="action-button secondary">
             🧊 Generate Server GLB
+          </button>
+          <hr />
+          <button onClick={handleReset} className="action-button" style={{ backgroundColor: '#e74c3c', color: 'white' }}>
+            🔄 Reset Everything
           </button>
         </div>
 
@@ -953,6 +1105,7 @@ const FloorPlanner = () => {
               // Check endpoint handles first
               const snapHandle = (x: number, y: number): { wallId: string; handle: 'start' | 'end' } | null => {
                 let found: { wallId: string; handle: 'start' | 'end' } | null = null
+                let closestDist = Infinity
                 walls.forEach((w) => {
                   if (!w.coordinates) return
                   const [x1, y1, x2, y2] = w.coordinates
@@ -963,9 +1116,15 @@ const FloorPlanner = () => {
                   const hy2 = toPx(y2, canvasHeightPx)
                   const distStart = Math.hypot(x - hx1, y - hy1)
                   const distEnd = Math.hypot(x - hx2, y - hy2)
-                  const tol = 10
-                  if (distStart <= tol) found = { wallId: w.id, handle: 'start' }
-                  if (distEnd <= tol) found = { wallId: w.id, handle: 'end' }
+                  const tol = 25 // Increased from 10px to 25px for easier endpoint selection
+                  if (distStart <= tol && distStart < closestDist) {
+                    found = { wallId: w.id, handle: 'start' }
+                    closestDist = distStart
+                  }
+                  if (distEnd <= tol && distEnd < closestDist) {
+                    found = { wallId: w.id, handle: 'end' }
+                    closestDist = distEnd
+                  }
                 })
                 return found
               }
@@ -998,36 +1157,54 @@ const FloorPlanner = () => {
               const xPx = e.clientX - rect.left
               const yPx = e.clientY - rect.top
 
-              const toNormX = (valPx: number) => Math.max(0, Math.min(100, (valPx / canvasWidthPx) * 100))
-              const toNormY = (valPx: number) => Math.max(0, Math.min(100, (valPx / canvasHeightPx) * 100))
-              const snapPx = 10
+              const toNormX = (valPx: number) => {
+                const norm = (valPx / canvasWidthPx) * 100
+                // Round to nearest 0.5% for consistency (avoids rounding errors)
+                return Math.max(0, Math.min(100, Math.round(norm * 2) / 2))
+              }
+              const toNormY = (valPx: number) => {
+                const norm = (valPx / canvasHeightPx) * 100
+                // Round to nearest 0.5% for consistency (avoids rounding errors)
+                return Math.max(0, Math.min(100, Math.round(norm * 2) / 2))
+              }
+              
+              // Increased snap tolerance from 10px to 25px for much easier snapping
+              const snapPx = 25
 
               if (draggingEndpoint) {
                 const endpoint = draggingEndpoint
                 setWalls((prevWalls) => {
-                  let updated = false
                   const nextWalls: WallSpec[] = prevWalls.map((w) => {
                     if (w.id !== endpoint.wallId || !w.coordinates) return w
                     const [x1, y1, x2, y2] = w.coordinates
 
                     let targetX = xPx
                     let targetY = yPx
+                    let snappedDistance = Infinity
+                    
+                    // Find the closest endpoint to snap to
                     prevWalls.forEach((other) => {
-                      if (!other.coordinates || other.id === w.id) return
+                      if (!other.coordinates) return
                       const [ox1, oy1, ox2, oy2] = other.coordinates
-                      const cands = [
-                        [(ox1 / 100) * canvasWidthPx, (oy1 / 100) * canvasHeightPx],
-                        [(ox2 / 100) * canvasWidthPx, (oy2 / 100) * canvasHeightPx],
+                      const endpoints = [
+                        { x: ox1, y: oy1 },
+                        { x: ox2, y: oy2 },
                       ]
-                      cands.forEach(([cx, cy]) => {
-                        if (Math.hypot(cx - xPx, cy - yPx) <= snapPx) {
+                      
+                      endpoints.forEach(({ x: oxNorm, y: oyNorm }) => {
+                        const cx = (oxNorm / 100) * canvasWidthPx
+                        const cy = (oyNorm / 100) * canvasHeightPx
+                        const dist = Math.hypot(cx - xPx, cy - yPx)
+                        
+                        // Snap to closest endpoint within tolerance
+                        if (dist <= snapPx && dist < snappedDistance) {
                           targetX = cx
                           targetY = cy
+                          snappedDistance = dist
                         }
                       })
                     })
 
-                    updated = true
                     if (endpoint.handle === 'start') {
                       const coords: [number, number, number, number] = [toNormX(targetX), toNormY(targetY), x2, y2]
                       return { ...w, coordinates: coords }
@@ -1035,12 +1212,12 @@ const FloorPlanner = () => {
                     const coords: [number, number, number, number] = [x1, y1, toNormX(targetX), toNormY(targetY)]
                     return { ...w, coordinates: coords }
                   })
-                  return updated ? nextWalls : prevWalls
+                  return nextWalls
                 })
                 return
               }
 
-              if (draggingWallId && dragWallStartRef.current) {
+              if (draggingWallId && dragWallStartRef.current && !draggingEndpoint) {
                 const start = dragWallStartRef.current
                 const dxPx = xPx - start.x
                 const dyPx = yPx - start.y
@@ -1172,42 +1349,52 @@ const FloorPlanner = () => {
                         top,
                         width: lengthPx,
                         height: 4,
-                        background: wall.id === selectedWallId ? '#4CAF50' : wall.type === 'curved' ? '#ff9800' : '#ffffff',
+                        background: wall.id === selectedWallId ? '#4CAF50' : '#ffffff',
                         transform: `rotate(${angleDeg}deg)`,
                         transformOrigin: '0 50%',
                         borderRadius: 4,
                         pointerEvents: 'none',
-                        opacity: 0.9
+                        opacity: 0.9,
+                        boxShadow: wall.id === selectedWallId ? '0 0 8px rgba(76, 175, 80, 0.8)' : 'none',
+                        transition: 'all 0.2s ease'
                       }}
                     />
-                    {/* Endpoints as white handles */}
+                    {/* Endpoints as draggable handles */}
                     <div
-                      className="wall-handle"
+                      className="wall-endpoint-handle"
                       style={{
                         position: 'absolute',
-                        left: x1Px - 5,
-                        top: y1Px - 5,
-                        width: 10,
-                        height: 10,
+                        left: x1Px - 6,
+                        top: y1Px - 6,
+                        width: 12,
+                        height: 12,
+                        background: '#4CAF50',
+                        border: '2px solid white',
                         borderRadius: '50%',
-                        background: '#fff',
-                        border: '1px solid #000',
-                        pointerEvents: 'none'
+                        cursor: draggingEndpoint?.handle === 'start' && draggingEndpoint?.wallId === wall.id ? 'grabbing' : 'grab',
+                        zIndex: draggingEndpoint?.handle === 'start' && draggingEndpoint?.wallId === wall.id ? 12 : 10,
+                        opacity: 0.8,
+                        transition: 'all 0.1s'
                       }}
+                      onMouseDown={() => {}}
                     />
                     <div
-                      className="wall-handle"
+                      className="wall-endpoint-handle"
                       style={{
                         position: 'absolute',
-                        left: x2Px - 5,
-                        top: y2Px - 5,
-                        width: 10,
-                        height: 10,
+                        left: x2Px - 6,
+                        top: y2Px - 6,
+                        width: 12,
+                        height: 12,
+                        background: '#4CAF50',
+                        border: '2px solid white',
                         borderRadius: '50%',
-                        background: '#fff',
-                        border: '1px solid #000',
-                        pointerEvents: 'none'
+                        cursor: draggingEndpoint?.handle === 'end' && draggingEndpoint?.wallId === wall.id ? 'grabbing' : 'grab',
+                        zIndex: draggingEndpoint?.handle === 'end' && draggingEndpoint?.wallId === wall.id ? 12 : 10,
+                        opacity: 0.8,
+                        transition: 'all 0.1s'
                       }}
+                      onMouseDown={() => {}}
                     />
                   </div>
                 )

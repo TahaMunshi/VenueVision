@@ -72,8 +72,8 @@ const WallSelector = () => {
   return (
     <div className="wall-selector-container">
       <div className="wall-selector-header">
-        <button onClick={() => navigate('/')} className="back-button">
-          ← Back
+        <button onClick={() => navigate(`/venue/${venueId}`)} className="back-button">
+          ← Back to Venue
         </button>
         <h1>Wall Editor</h1>
         <p>Venue: {venueId}</p>
