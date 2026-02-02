@@ -44,10 +44,10 @@ def analyze_quality(image_bytes: bytes) -> Dict[str, Any]:
     if average_brightness < BRIGHTNESS_THRESHOLD:
         return {"valid": False, "error": "Too Dark: Please turn on lights or flash."}
 
-    # 2. Blur check (Variance of Laplacian)
+    # 2. Blur check (Variance of Laplacian) – keep fairly lenient to avoid rejecting good shots
     laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
     logger.debug("Laplacian variance: %.2f", laplacian_var)
-    BLUR_THRESHOLD = 100.0
+    BLUR_THRESHOLD = 20.0
     if laplacian_var < BLUR_THRESHOLD:
         return {"valid": False, "error": "Blurry: Hold the camera steady."}
 
@@ -65,6 +65,19 @@ def analyze_quality(image_bytes: bytes) -> Dict[str, Any]:
         return {"valid": False, "error": "Structure Missing: Aim at a detailed wall surface."}
     if edge_ratio > MAX_EDGE_RATIO:
         return {"valid": False, "error": "Too Noisy: Move closer and avoid clutter."}
+
+    # 4. Angle check: discourage steep perspective (prompt for straight-on shot)
+    # 4. Angle check – currently informational only (we log but do not reject)
+    # This avoids blocking the user when the wall is usable but slightly angled.
+    try:
+        lines = cv2.HoughLines(edges, 1, np.pi / 180, threshold=180)
+        if lines is not None and len(lines) > 0:
+            angles = np.abs(np.rad2deg(lines[:, 0, 1]))
+            angles = np.minimum(angles, 180 - angles)
+            predominant = np.median(angles)
+            logger.debug("Median edge angle: %.2f", predominant)
+    except Exception as err:
+        logger.warning("Angle check failed: %s", err)
 
     return {"valid": True}
 
