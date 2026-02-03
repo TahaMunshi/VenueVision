@@ -435,34 +435,19 @@ const Space3DViewer = () => {
               const floorY = -roomHeight / 2
               console.log(`[3D Viewer] Room height: ${roomHeight}, Floor level (y): ${floorY}`)
               
+              // Split assets: root (floor) vs child (e.g. vase on table)
+              const rootAssets = data.assets.filter((a: any) => !(a.parentAssetId ?? a.parent_asset_id))
+              const childAssets = data.assets.filter((a: any) => !!(a.parentAssetId ?? a.parent_asset_id))
+              const parentSurfaceByAssetId: Record<string, { topY: number; centerX: number; centerZ: number }> = {}
+              
               // Track loading assets
               setLoadingAssets(data.assets.map((a: any) => a.id || a.file))
               
-              data.assets.forEach((asset: any) => {
-                // Convert 2D planner coordinates to 3D world coordinates
-                // Planner (0,0) is Top-Left. ThreeJS (0,0) is Center.
-                // Asset x,y in planner is the top-left corner, so we calculate the center
-                const centerX2D = asset.x + (asset.width / 2)
-                const centerY2D = asset.y + (asset.depth / 2)
-                
-                // Convert from planner space (0 to roomWidth/Depth) to world space (-roomWidth/2 to +roomWidth/2)
-                // No negation needed: 2D y increases down (back to front in room) = 3D z increases forward
-                const worldX = centerX2D - (roomWidth / 2)
-                const worldZ = centerY2D - (roomDepth / 2)
-                
-                console.log(`[3D Viewer] Asset positioning:`, {
-                  'planner position (top-left)': { x: asset.x, y: asset.y },
-                  'planner center': { x: centerX2D, y: centerY2D },
-                  'world position (center)': { x: worldX, z: worldZ },
-                  'asset dimensions': { width: asset.width, depth: asset.depth },
-                  'room dimensions': { width: roomWidth, depth: roomDepth },
-                  'floorY': floorY
-                })
-                
-                // Create group for this asset - position at the center of the 2D rectangle
-                const group = new THREE.Group()
-                group.position.set(worldX, floorY, worldZ)
-                group.rotation.y = -asset.rotation * (Math.PI / 180)
+              const loadOneAsset = (asset: any, worldX: number, worldY: number, worldZ: number, isRoot: boolean): Promise<void> =>
+                new Promise((resolve, reject) => {
+                  const group = new THREE.Group()
+                  group.position.set(worldX, worldY, worldZ)
+                  group.rotation.y = -asset.rotation * (Math.PI / 180)
                 
                 // Load the 3D model - use full URL for proper loading
                 const modelPath = `${API_BASE_URL}/static/models/${asset.file}`
@@ -553,68 +538,61 @@ const Space3DViewer = () => {
                       console.log(`[3D Viewer] Scene position.y is now: ${gltf.scene.position.y}`)
                     }
                     
-                    // Add scene to group
                     group.add(gltf.scene)
-                    
-                    // FORCE: Set group Y position to floor level (group is already set, but ensure it's correct)
-                    group.position.y = floorY
-                    console.log(`[3D Viewer] FORCED group.position.y to floor level: ${floorY}`)
-                    
-                    // Now check world position after adding to group
+                    group.updateMatrixWorld(true)
                     const groupBox = new THREE.Box3().setFromObject(group)
-                    console.log(`[3D Viewer] Group bounding box (world space):`, {
-                      min: groupBox.min,
-                      max: groupBox.max,
-                      'bottom Y (world)': groupBox.min.y,
-                      'top Y (world)': groupBox.max.y,
-                      'group.position.y': group.position.y,
-                      'expected floor Y': floorY
-                    })
-                    
-                    // If the bottom is STILL not at floorY, force adjust the scene's Y position
-                    if (Math.abs(groupBox.min.y - floorY) > 0.001) {
-                      console.log(`[3D Viewer] CRITICAL: Bottom Y is ${groupBox.min.y}, expected ${floorY}`)
-                      const adjustment = floorY - groupBox.min.y
-                      console.log(`[3D Viewer] Adjusting scene.position.y by ${adjustment}`)
+                    if (Math.abs(groupBox.min.y - worldY) > 0.001) {
+                      const adjustment = worldY - groupBox.min.y
                       gltf.scene.position.y += adjustment
-                      
-                      // Recheck
-                      const finalCheckBox = new THREE.Box3().setFromObject(group)
-                      console.log(`[3D Viewer] After critical adjustment, bottom Y: ${finalCheckBox.min.y}, expected: ${floorY}`)
                     }
-                    
                     scene.add(group)
                     assetsRef.current.push(group)
-                    
-                    // Final check after adding to scene
-                    const sceneBox = new THREE.Box3().setFromObject(group)
-                    console.log(`[3D Viewer] ===== FINAL CHECK =====`)
-                    console.log(`[3D Viewer] Final world position in scene:`, {
-                      min: sceneBox.min,
-                      max: sceneBox.max,
-                      'bottom Y (final)': sceneBox.min.y,
-                      'expected floor Y': floorY,
-                      'group.position (world)': { x: group.position.x, y: group.position.y, z: group.position.z },
-                      'scene.position (relative to group)': { x: gltf.scene.position.x, y: gltf.scene.position.y, z: gltf.scene.position.z }
-                    })
-                    console.log(`[3D Viewer] Asset center should align with 2D rectangle center at (${worldX}, ${floorY}, ${worldZ})`)
-                    
-                    // Update loading state
-                    setLoadingAssets((prev) => prev.filter(id => id !== assetId))
-                  },
-                  (progress: any) => {
-                    // Loading progress callback
-                    if (progress.lengthComputable) {
-                      const percent = (progress.loaded / progress.total) * 100
-                      console.log(`Loading ${asset.file}: ${percent.toFixed(0)}%`)
+                    if (isRoot) {
+                      group.updateMatrixWorld(true)
+                      const worldBox = new THREE.Box3().setFromObject(group)
+                      parentSurfaceByAssetId[assetId] = {
+                        topY: worldBox.max.y,
+                        centerX: (worldBox.min.x + worldBox.max.x) / 2,
+                        centerZ: (worldBox.min.z + worldBox.max.z) / 2
+                      }
                     }
-                  },
-                  (error: any) => {
-                    console.error(`Failed to load ${asset.file}:`, error)
                     setLoadingAssets((prev) => prev.filter(id => id !== assetId))
+                    resolve()
+                  },
+                  undefined,
+                  (err: any) => {
+                    console.error(`Failed to load ${asset.file}:`, err)
+                    setLoadingAssets((prev) => prev.filter(id => id !== assetId))
+                    reject(err)
                   }
                 )
-              })
+                })
+              
+              const getRootWorldPosition = (a: any) => {
+                const centerX2D = a.x + (a.width / 2)
+                const centerY2D = a.y + (a.depth / 2)
+                return {
+                  worldX: centerX2D - (roomWidth / 2),
+                  worldY: floorY,
+                  worldZ: centerY2D - (roomDepth / 2)
+                }
+              }
+              await Promise.all(
+                rootAssets.map((asset: any) => {
+                  const { worldX, worldY, worldZ } = getRootWorldPosition(asset)
+                  return loadOneAsset(asset, worldX, worldY, worldZ, true)
+                })
+              ).catch(() => {})
+              for (const asset of childAssets) {
+                const parentId = String(asset.parentAssetId ?? asset.parent_asset_id ?? '')
+                const surface = parentSurfaceByAssetId[parentId]
+                const ox = asset.offsetX ?? asset.offset_x ?? 0
+                const oy = asset.offsetY ?? asset.offset_y ?? 0
+                const worldX = surface ? surface.centerX + ox : (asset.x + asset.width / 2) - roomWidth / 2
+                const worldY = surface ? surface.topY : floorY
+                const worldZ = surface ? surface.centerZ + oy : (asset.y + asset.depth / 2) - roomDepth / 2
+                await loadOneAsset(asset, worldX, worldY, worldZ, false).catch(() => {})
+              }
             }
           } catch (error) {
             console.error('Error loading layout:', error)

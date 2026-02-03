@@ -16,6 +16,10 @@ type Asset = {
   x: number
   y: number
   rotation: number
+  /** If set, this asset is placed on top of another (e.g. vase on table). Offsets in meters from parent center. */
+  parentAssetId?: string
+  offsetX?: number
+  offsetY?: number
 }
 
 type WallSpec = {
@@ -308,7 +312,54 @@ const FloorPlanner = () => {
     const xM = snappedX / METER_TO_PIXEL_SCALE
     const yM = snappedY / METER_TO_PIXEL_SCALE
 
-    // Check for collisions
+    // If dropping a "vase" (or other place-on-table asset), check if drop is inside a table
+    const isVase = draggedAsset.file === 'blue_vase.glb'
+    let placedOnTable: Asset | null = null
+    if (isVase) {
+      for (const a of placedAssets) {
+        if (a.file !== 'asset_table.glb') continue
+        const halfW = draggedAsset.width / 2
+        const halfD = draggedAsset.depth / 2
+        // Drop point as center of vase; must be inside table and vase must fit on table
+        const vaseCenterX = xM
+        const vaseCenterY = yM
+        if (
+          vaseCenterX - halfW >= a.x &&
+          vaseCenterX + halfW <= a.x + a.width &&
+          vaseCenterY - halfD >= a.y &&
+          vaseCenterY + halfD <= a.y + a.depth
+        ) {
+          placedOnTable = a
+          break
+        }
+      }
+    }
+
+    if (placedOnTable) {
+      // Place vase on table: store parent + offset from table center (in meters)
+      const tableCenterX = placedOnTable.x + placedOnTable.width / 2
+      const tableCenterY = placedOnTable.y + placedOnTable.depth / 2
+      const offsetX = xM - tableCenterX
+      const offsetY = yM - tableCenterY
+      const newAsset: Asset = {
+        id: `placed-${Date.now()}`,
+        type: draggedAsset.type,
+        file: draggedAsset.file,
+        width: draggedAsset.width,
+        depth: draggedAsset.depth,
+        x: tableCenterX + offsetX - draggedAsset.width / 2,
+        y: tableCenterY + offsetY - draggedAsset.depth / 2,
+        rotation: 0,
+        parentAssetId: placedOnTable.id,
+        offsetX,
+        offsetY
+      }
+      setPlacedAssets([...placedAssets, newAsset])
+      setDraggedAsset(null)
+      return
+    }
+
+    // Floor placement: check collisions
     if (checkCollision(null, xM, yM, draggedAsset.width, draggedAsset.depth)) {
       setMessage({ text: 'Cannot place asset here! Assets must maintain spacing.', type: 'error' })
       setTimeout(() => setMessage(null), 3000)
@@ -794,6 +845,14 @@ const FloorPlanner = () => {
               onMouseEnter={() => handleAssetHover('asset_table.glb', 'Table (4x2m)')}
             >
               Table (4x2m)
+            </div>
+            <div
+              className="asset-item"
+              draggable
+              onDragStart={(e) => handleDragStart(e, 'vase', 0.4, 0.4, 'blue_vase.glb')}
+              onMouseEnter={() => handleAssetHover('blue_vase.glb', 'Blue Vase (place on table)')}
+            >
+              Blue Vase
             </div>
           </div>
           <div className="asset-preview-panel">
