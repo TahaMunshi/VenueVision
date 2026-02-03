@@ -2,6 +2,24 @@
 
 Get up and running with your multi-user venue visualization app in 5 minutes!
 
+## 📥 Pull the yumman branch (fresh clone or update)
+
+If you're pulling this repo (or the **yumman** branch) for the first time:
+
+```powershell
+git clone https://github.com/TahaMunshi/VenueVision.git
+cd VenueVision
+git checkout yumman
+# Or if already cloned: git fetch origin yumman && git checkout yumman && git pull origin yumman
+```
+
+Then use **Docker** (easiest) or **Manual** setup below. The yumman branch includes:
+- Auth middleware, database helpers (`execute_query` / `execute_insert`), bcrypt & PyJWT in `requirements.txt`
+- Blue vase on table (2D planner + 3D viewer), `server/static/models/blue_vase.glb`
+- All fixes needed for `docker-compose up --build` to succeed
+
+---
+
 ## ⚡ Fast Track Setup
 
 ### 1. Install Dependencies
