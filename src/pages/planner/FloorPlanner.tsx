@@ -18,6 +18,15 @@ type Asset = {
   rotation: number
 }
 
+type UserAsset = {
+  asset_id: number
+  asset_name: string
+  file_url: string
+  file_path: string
+  thumbnail_url: string | null
+  generation_status: string
+}
+
 type WallSpec = {
   id: string
   name: string
@@ -48,6 +57,8 @@ const FloorPlanner = () => {
   const [draggedAsset, setDraggedAsset] = useState<{ type: string; width: number; depth: number; file: string } | null>(null)
   const [draggingAssetId, setDraggingAssetId] = useState<string | null>(null)
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  const [userAssets, setUserAssets] = useState<UserAsset[]>([])
+  const [loadingUserAssets, setLoadingUserAssets] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(250)
   const [isResizing, setIsResizing] = useState(false)
   const sidebarRef = useRef<HTMLDivElement>(null)
@@ -125,8 +136,38 @@ const FloorPlanner = () => {
       }
     }
 
+    // Fetch user's custom assets from the asset library
+    const fetchUserAssets = async () => {
+      setLoadingUserAssets(true)
+      try {
+        const token = localStorage.getItem('token')
+        if (!token) return
+        
+        const response = await fetch(`${API_BASE_URL}/api/v1/assets`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        })
+        
+        if (response.ok) {
+          const data = await response.json()
+          // Only include completed assets
+          const completedAssets = (data.assets || []).filter(
+            (a: UserAsset) => a.generation_status === 'completed'
+          )
+          setUserAssets(completedAssets)
+          console.log(`[FloorPlanner] Loaded ${completedAssets.length} user assets`)
+        }
+      } catch (error) {
+        console.error('Error fetching user assets:', error)
+      } finally {
+        setLoadingUserAssets(false)
+      }
+    }
+
     if (venueId) {
       loadLayout()
+      fetchUserAssets()
     }
     
     // Cleanup preview on unmount
@@ -693,7 +734,10 @@ const FloorPlanner = () => {
     statusEl.textContent = 'Loading...'
     clearPreviewModel()
 
-    const modelPath = `${API_BASE_URL}/static/models/${assetFile}`
+    // Handle both default assets (in /static/models/) and user assets (full path in /static/)
+    const modelPath = assetFile.includes('/') 
+      ? `${API_BASE_URL}/static/${assetFile}` 
+      : `${API_BASE_URL}/static/models/${assetFile}`
     
     // Load from server (browser will cache automatically)
     previewState.loader.load(
@@ -787,6 +831,7 @@ const FloorPlanner = () => {
           />
           <h2>Asset Library</h2>
           <div className="asset-list">
+            <div className="asset-section-title">Default Assets</div>
             <div
               className="asset-item"
               draggable
@@ -795,6 +840,76 @@ const FloorPlanner = () => {
             >
               Table (4x2m)
             </div>
+            
+            <div className="asset-section-title" style={{ marginTop: '16px' }}>
+              My Custom Assets
+              <button 
+                className="refresh-assets-btn"
+                onClick={() => {
+                  const token = localStorage.getItem('token')
+                  if (!token) return
+                  setLoadingUserAssets(true)
+                  fetch(`${API_BASE_URL}/api/v1/assets`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                  })
+                    .then(res => res.json())
+                    .then(data => {
+                      const completed = (data.assets || []).filter((a: UserAsset) => a.generation_status === 'completed')
+                      setUserAssets(completed)
+                    })
+                    .finally(() => setLoadingUserAssets(false))
+                }}
+                title="Refresh assets"
+              >
+                🔄
+              </button>
+            </div>
+            
+            {loadingUserAssets ? (
+              <div className="asset-loading">Loading assets...</div>
+            ) : userAssets.length === 0 ? (
+              <div className="asset-empty">
+                <span>No custom assets yet</span>
+                <button 
+                  className="create-asset-link"
+                  onClick={() => navigate('/assets')}
+                >
+                  + Create Asset
+                </button>
+              </div>
+            ) : (
+              userAssets.map(asset => (
+                <div
+                  key={asset.asset_id}
+                  className="asset-item user-asset"
+                  draggable
+                  onDragStart={(e) => handleDragStart(
+                    e, 
+                    asset.asset_name.toLowerCase().replace(/\s+/g, '_'),
+                    1, // Default width 1m
+                    1, // Default depth 1m
+                    asset.file_path // Use file_path for the GLB
+                  )}
+                  onMouseEnter={() => {
+                    // For user assets, try to load preview from their path
+                    const statusEl = previewContainerRef.current?.parentElement?.querySelector('.asset-preview-status') as HTMLElement
+                    const titleEl = previewContainerRef.current?.parentElement?.querySelector('.asset-preview-title') as HTMLElement
+                    if (statusEl) statusEl.textContent = 'Custom asset preview'
+                    if (titleEl) titleEl.textContent = `Preview: ${asset.asset_name}`
+                  }}
+                >
+                  {asset.thumbnail_url && (
+                    <img 
+                      src={`${API_BASE_URL}${asset.thumbnail_url}`} 
+                      alt={asset.asset_name}
+                      className="asset-thumbnail"
+                    />
+                  )}
+                  <span className="asset-name">{asset.asset_name}</span>
+                  <span className="asset-size">1×1m</span>
+                </div>
+              ))
+            )}
           </div>
           <div className="asset-preview-panel">
             <div className="asset-preview-title">Asset Preview</div>

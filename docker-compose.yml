@@ -29,10 +29,14 @@ services:
       - "5000:5000"
     volumes:
       - ./server/static/uploads:/app/server/static/uploads
+      - ./server/static/user_assets:/app/server/static/user_assets
+      - ./server/temp:/app/server/temp
     environment:
       - FLASK_ENV=production
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/fyp_db
       - JWT_SECRET=${JWT_SECRET:-change-this-secret-in-production}
+      - TRIPO_API_KEY=${TRIPO_API_KEY:-}
+      - HF_TOKEN=${HF_TOKEN:-}
     depends_on:
       db:
         condition: service_healthy

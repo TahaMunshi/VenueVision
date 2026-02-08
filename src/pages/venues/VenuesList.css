@@ -55,6 +55,26 @@
   font-weight: 600;
 }
 
+.assets-button {
+  padding: 8px 16px;
+  background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.assets-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(72, 187, 120, 0.4);
+}
+
 .logout-button {
   padding: 8px 16px;
   background: white;
