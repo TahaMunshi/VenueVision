@@ -7,6 +7,9 @@ import FloorPlanUpload from '../../components/FloorPlanUpload'
 const METER_TO_PIXEL_SCALE = 30 // 1 meter = 30 pixels for a larger canvas
 const GRID_SIZE = METER_TO_PIXEL_SCALE
 
+/** Three vertical layers: floor (rugs/carpets), surface (middle: furniture + tabletop), ceiling (lights). */
+export type AssetLayer = 'floor' | 'surface' | 'ceiling'
+
 type Asset = {
   id: string
   type: string
@@ -20,7 +23,32 @@ type Asset = {
   parentAssetId?: string
   offsetX?: number
   offsetY?: number
+  /** Vertical layer for 2D overlap and view modes. */
+  layer?: AssetLayer
+  /** Default height in meters (e.g. 0 = floor, 0.75 = table, 2.5 = chandelier). */
+  elevation?: number
 }
+
+/**
+ * Single source of truth for draggable assets.
+ * Layers: floor = rugs/carpets only; surface = middle (furniture on ground + items on tables); ceiling = lights.
+ */
+const ASSET_CATALOG: Array<{
+  type: string
+  file: string
+  width: number
+  depth: number
+  label: string
+  layer: AssetLayer
+  elevation: number
+  /** If true, can be placed on a table (e.g. vase). */
+  placeOnTable?: boolean
+}> = [
+  { type: 'rug', file: 'rug.glb', width: 4, depth: 4, label: 'Rug (4×4m)', layer: 'floor', elevation: 0 },
+  { type: 'table', file: 'asset_table.glb', width: 4, depth: 2, label: 'Table (4×2m)', layer: 'surface', elevation: 0.75 },
+  { type: 'vase', file: 'blue_vase.glb', width: 0.4, depth: 0.4, label: 'Blue Vase (on table)', layer: 'surface', elevation: 0.8, placeOnTable: true },
+  { type: 'chandelier', file: 'chandelier.glb', width: 1.2, depth: 1.2, label: 'Chandelier (ceiling)', layer: 'ceiling', elevation: 2.5 },
+]
 
 type WallSpec = {
   id: string
@@ -32,6 +60,23 @@ type WallSpec = {
   sweep?: number
   coordinates?: [number, number, number, number] // normalized 0-100 in planner space
 }
+
+/** Resolve layer for an asset (saved layout or catalog by file). */
+function getAssetLayer(asset: Asset): AssetLayer {
+  if (asset.layer) return asset.layer
+  const catalog = ASSET_CATALOG.find((c) => c.file === asset.file)
+  return catalog?.layer ?? 'surface'
+}
+
+/** Resolve elevation in meters for an asset. */
+function getAssetElevation(asset: Asset, roomHeight: number): number {
+  if (asset.elevation != null) return asset.elevation
+  const catalog = ASSET_CATALOG.find((c) => c.file === asset.file)
+  if (catalog?.layer === 'ceiling') return Math.max(0, roomHeight - 0.5)
+  return catalog?.elevation ?? 0.75
+}
+
+const LAYER_ORDER: AssetLayer[] = ['floor', 'surface', 'ceiling']
 
 const FloorPlanner = () => {
   const { venueId } = useParams<{ venueId: string }>()
@@ -49,7 +94,16 @@ const FloorPlanner = () => {
   const [floorPlanUrl, setFloorPlanUrl] = useState<string | null>(null)
   const [planMode, setPlanMode] = useState<'upload' | 'manual'>('manual')
   const [placedAssets, setPlacedAssets] = useState<Asset[]>([])
-  const [draggedAsset, setDraggedAsset] = useState<{ type: string; width: number; depth: number; file: string } | null>(null)
+  const [viewMode, setViewMode] = useState<'all' | 'floor' | 'middle' | 'ceiling'>('all')
+  const [draggedAsset, setDraggedAsset] = useState<{
+    type: string
+    width: number
+    depth: number
+    file: string
+    layer: AssetLayer
+    elevation: number
+    placeOnTable?: boolean
+  } | null>(null)
   const [draggingAssetId, setDraggingAssetId] = useState<string | null>(null)
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(250)
@@ -266,7 +320,7 @@ const FloorPlanner = () => {
           const asset = prevAssets.find(a => a.id === draggingAssetId)
           if (!asset) return prevAssets
 
-          if (checkCollision(draggingAssetId, xM, yM, asset.width, asset.depth)) {
+          if (checkCollision(draggingAssetId, xM, yM, asset.width, asset.depth, getAssetLayer(asset))) {
             return prevAssets
           }
 
@@ -291,8 +345,19 @@ const FloorPlanner = () => {
     }
   }, [draggingAssetId]) // Removed placedAssets from dependencies
 
-  const handleDragStart = (e: React.DragEvent, assetType: string, width: number, depth: number, file: string) => {
-    setDraggedAsset({ type: assetType, width, depth, file })
+  const handleDragStart = (
+    e: React.DragEvent,
+    catalogItem: (typeof ASSET_CATALOG)[number]
+  ) => {
+    setDraggedAsset({
+      type: catalogItem.type,
+      width: catalogItem.width,
+      depth: catalogItem.depth,
+      file: catalogItem.file,
+      layer: catalogItem.layer,
+      elevation: catalogItem.elevation,
+      placeOnTable: catalogItem.placeOnTable
+    })
     e.dataTransfer.effectAllowed = 'copy'
   }
 
@@ -312,22 +377,20 @@ const FloorPlanner = () => {
     const xM = snappedX / METER_TO_PIXEL_SCALE
     const yM = snappedY / METER_TO_PIXEL_SCALE
 
-    // If dropping a "vase" (or other place-on-table asset), check if drop is inside a table
-    const isVase = draggedAsset.file === 'blue_vase.glb'
+    // If dropping a place-on-table asset (e.g. vase), check if drop is inside a table
     let placedOnTable: Asset | null = null
-    if (isVase) {
+    if (draggedAsset.placeOnTable) {
       for (const a of placedAssets) {
         if (a.file !== 'asset_table.glb') continue
         const halfW = draggedAsset.width / 2
         const halfD = draggedAsset.depth / 2
-        // Drop point as center of vase; must be inside table and vase must fit on table
-        const vaseCenterX = xM
-        const vaseCenterY = yM
+        const dropCenterX = xM
+        const dropCenterY = yM
         if (
-          vaseCenterX - halfW >= a.x &&
-          vaseCenterX + halfW <= a.x + a.width &&
-          vaseCenterY - halfD >= a.y &&
-          vaseCenterY + halfD <= a.y + a.depth
+          dropCenterX - halfW >= a.x &&
+          dropCenterX + halfW <= a.x + a.width &&
+          dropCenterY - halfD >= a.y &&
+          dropCenterY + halfD <= a.y + a.depth
         ) {
           placedOnTable = a
           break
@@ -336,7 +399,6 @@ const FloorPlanner = () => {
     }
 
     if (placedOnTable) {
-      // Place vase on table: store parent + offset from table center (in meters)
       const tableCenterX = placedOnTable.x + placedOnTable.width / 2
       const tableCenterY = placedOnTable.y + placedOnTable.depth / 2
       const offsetX = xM - tableCenterX
@@ -352,21 +414,22 @@ const FloorPlanner = () => {
         rotation: 0,
         parentAssetId: placedOnTable.id,
         offsetX,
-        offsetY
+        offsetY,
+        layer: draggedAsset.layer,
+        elevation: draggedAsset.elevation
       }
       setPlacedAssets([...placedAssets, newAsset])
       setDraggedAsset(null)
       return
     }
 
-    // Floor placement: check collisions
-    if (checkCollision(null, xM, yM, draggedAsset.width, draggedAsset.depth)) {
-      setMessage({ text: 'Cannot place asset here! Assets must maintain spacing.', type: 'error' })
+    // Same-layer collision only (different layers can share X/Y)
+    if (checkCollision(null, xM, yM, draggedAsset.width, draggedAsset.depth, draggedAsset.layer)) {
+      setMessage({ text: 'Cannot place asset here! Assets must maintain spacing on this layer.', type: 'error' })
       setTimeout(() => setMessage(null), 3000)
       return
     }
 
-    // Create new asset
     const newAsset: Asset = {
       id: `placed-${Date.now()}`,
       type: draggedAsset.type,
@@ -375,7 +438,9 @@ const FloorPlanner = () => {
       depth: draggedAsset.depth,
       x: xM,
       y: yM,
-      rotation: 0
+      rotation: 0,
+      layer: draggedAsset.layer,
+      elevation: draggedAsset.elevation
     }
 
     setPlacedAssets([...placedAssets, newAsset])
@@ -431,10 +496,17 @@ const FloorPlanner = () => {
     return null
   }
 
-  const checkCollision = (excludeId: string | null, x: number, y: number, width: number, depth: number): boolean => {
+  /** Check collision only with assets on the same layer (different layers can share X/Y). */
+  const checkCollision = (
+    excludeId: string | null,
+    x: number,
+    y: number,
+    width: number,
+    depth: number,
+    layer?: AssetLayer
+  ): boolean => {
     const spacing = 1 // 1 meter spacing requirement
 
-    // First, enforce room bounds so assets cannot be placed outside the grid
     if (
       x < 0 ||
       y < 0 ||
@@ -444,12 +516,9 @@ const FloorPlanner = () => {
       return true
     }
 
-    // Check if asset is within wall boundaries (if walls exist)
     if (walls.length > 0) {
       const assetInWalls = checkAssetWithinWalls(x, y, width, depth)
-      if (!assetInWalls) {
-        return true
-      }
+      if (!assetInWalls) return true
     }
 
     const newLeft = x - spacing / 2
@@ -459,13 +528,16 @@ const FloorPlanner = () => {
 
     for (const asset of placedAssets) {
       if (excludeId && asset.id === excludeId) continue
+      // Only collide with same layer
+      const assetLayer = getAssetLayer(asset)
+      if (layer != null && assetLayer !== layer) continue
 
       const otherLeft = asset.x - spacing / 2
       const otherRight = asset.x + asset.width + spacing / 2
       const otherTop = asset.y - spacing / 2
       const otherBottom = asset.y + asset.depth + spacing / 2
 
-      if (!(newRight <= otherLeft || newLeft >= otherRight || 
+      if (!(newRight <= otherLeft || newLeft >= otherRight ||
             newBottom <= otherTop || newTop >= otherBottom)) {
         return true
       }
@@ -838,22 +910,19 @@ const FloorPlanner = () => {
           />
           <h2>Asset Library</h2>
           <div className="asset-list">
-            <div
-              className="asset-item"
-              draggable
-              onDragStart={(e) => handleDragStart(e, 'table', 4, 2, 'asset_table.glb')}
-              onMouseEnter={() => handleAssetHover('asset_table.glb', 'Table (4x2m)')}
-            >
-              Table (4x2m)
-            </div>
-            <div
-              className="asset-item"
-              draggable
-              onDragStart={(e) => handleDragStart(e, 'vase', 0.4, 0.4, 'blue_vase.glb')}
-              onMouseEnter={() => handleAssetHover('blue_vase.glb', 'Blue Vase (place on table)')}
-            >
-              Blue Vase
-            </div>
+            {ASSET_CATALOG.map((item) => (
+              <div
+                key={item.file}
+                className="asset-item"
+                draggable
+                onDragStart={(e) => handleDragStart(e, item)}
+                onMouseEnter={() => handleAssetHover(item.file, item.label)}
+                data-layer={item.layer}
+                data-elevation={item.elevation}
+              >
+                {item.label}
+              </div>
+            ))}
           </div>
           <div className="asset-preview-panel">
             <div className="asset-preview-title">Asset Preview</div>
@@ -1135,7 +1204,43 @@ const FloorPlanner = () => {
 
         <div className="planning-area">
           <div className="controls-bar">
-            Room: {roomDimensions.width}m x {roomDimensions.depth}m x {roomDimensions.height}m (Scale: 1m = 20px) | Floor: {materials.floor.type} | Assets: {placedAssets.length}
+            <span className="controls-bar-info">
+              Room: {roomDimensions.width}m × {roomDimensions.depth}m × {roomDimensions.height}m (1m = 20px) | Floor: {materials.floor.type} | Assets: {placedAssets.length}
+            </span>
+            <div className="view-mode-toggle" role="group" aria-label="Layer view mode">
+              <button
+                type="button"
+                className={`view-mode-btn ${viewMode === 'all' ? 'active' : ''}`}
+                onClick={() => setViewMode('all')}
+                title="Show all layers"
+              >
+                All Layers
+              </button>
+              <button
+                type="button"
+                className={`view-mode-btn ${viewMode === 'floor' ? 'active' : ''}`}
+                onClick={() => setViewMode('floor')}
+                title="Focus on floor: rugs and carpets"
+              >
+                Floor (rugs)
+              </button>
+              <button
+                type="button"
+                className={`view-mode-btn ${viewMode === 'middle' ? 'active' : ''}`}
+                onClick={() => setViewMode('middle')}
+                title="Focus on middle: furniture on ground and items on tables"
+              >
+                Middle (furniture)
+              </button>
+              <button
+                type="button"
+                className={`view-mode-btn ${viewMode === 'ceiling' ? 'active' : ''}`}
+                onClick={() => setViewMode('ceiling')}
+                title="Focus on ceiling: lights and fans"
+              >
+                Ceiling (lights)
+              </button>
+            </div>
           </div>
           <div
             ref={canvasRef}
@@ -1489,42 +1594,66 @@ const FloorPlanner = () => {
                 )
               })()
             )}
-            {placedAssets.map(asset => {
-              const widthPx = asset.width * METER_TO_PIXEL_SCALE
-              const heightPx = asset.depth * METER_TO_PIXEL_SCALE
-              const leftPx = asset.x * METER_TO_PIXEL_SCALE
-              const topPx = asset.y * METER_TO_PIXEL_SCALE
-
-              return (
-                <div
-                  key={asset.id}
-                  className="placed-asset"
-                  style={{
-                    position: 'absolute',
-                    left: `${leftPx}px`,
-                    top: `${topPx}px`,
-                    width: `${widthPx}px`,
-                    height: `${heightPx}px`,
-                    transform: `rotate(${asset.rotation}deg)`
-                  }}
-                  onMouseDown={() => handleAssetDragStart(asset.id)}
-                  onContextMenu={(e) => handleAssetRightClick(e, asset.id)}
-                >
-                  <span className="asset-label">
-                    {asset.type.toUpperCase()} ({asset.width}x{asset.depth}m)
-                  </span>
-                  <button
-                    className="delete-asset-btn"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleDeleteAsset(asset.id)
+            {(() => {
+              // Smart z-order: by layer (floor → surface → ceiling), then by area descending (smaller on top)
+              const layerRank = (l: AssetLayer) => LAYER_ORDER.indexOf(l)
+              const sorted = [...placedAssets].sort((a, b) => {
+                const la = getAssetLayer(a)
+                const lb = getAssetLayer(b)
+                if (layerRank(la) !== layerRank(lb)) return layerRank(la) - layerRank(lb)
+                const areaA = a.width * a.depth
+                const areaB = b.width * b.depth
+                return areaB - areaA // larger first → smaller items get higher z-index
+              })
+              const baseZ = 20
+              return sorted.map((asset, index) => {
+                const widthPx = asset.width * METER_TO_PIXEL_SCALE
+                const heightPx = asset.depth * METER_TO_PIXEL_SCALE
+                const leftPx = asset.x * METER_TO_PIXEL_SCALE
+                const topPx = asset.y * METER_TO_PIXEL_SCALE
+                const layer = getAssetLayer(asset)
+                const elevation = getAssetElevation(asset, roomDimensions.height)
+                const isGhost =
+                  (viewMode === 'floor' && (layer === 'surface' || layer === 'ceiling')) ||
+                  (viewMode === 'middle' && (layer === 'floor' || layer === 'ceiling')) ||
+                  (viewMode === 'ceiling' && (layer === 'floor' || layer === 'surface'))
+                return (
+                  <div
+                    key={asset.id}
+                    className={`placed-asset ${isGhost ? 'placed-asset-ghost' : ''}`}
+                    data-layer={layer}
+                    data-elevation={elevation}
+                    style={{
+                      position: 'absolute',
+                      left: `${leftPx}px`,
+                      top: `${topPx}px`,
+                      width: `${widthPx}px`,
+                      height: `${heightPx}px`,
+                      transform: `rotate(${asset.rotation}deg)`,
+                      zIndex: baseZ + index,
+                      ...(isGhost ? { opacity: 0.3, pointerEvents: 'none' as const } : {})
                     }}
+                    onMouseDown={isGhost ? undefined : () => handleAssetDragStart(asset.id)}
+                    onContextMenu={isGhost ? undefined : (e) => handleAssetRightClick(e, asset.id)}
                   >
-                    ×
-                  </button>
-                </div>
-              )
-            })}
+                    <span className="asset-label">
+                      {asset.type.toUpperCase()} ({asset.width}×{asset.depth}m)
+                    </span>
+                    {!isGhost && (
+                      <button
+                        className="delete-asset-btn"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleDeleteAsset(asset.id)
+                        }}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                )
+              })
+            })()}
           </div>
         </div>
       </div>
