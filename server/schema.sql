@@ -84,6 +84,22 @@ CREATE TABLE IF NOT EXISTS venue_polygons (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- User Assets table (user's personal 3D asset library - generated via InstantMesh)
+CREATE TABLE IF NOT EXISTS user_assets (
+    asset_id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    asset_name VARCHAR(255) NOT NULL,
+    file_path VARCHAR(500) NOT NULL, -- relative path: 'user_assets/{user_id}/user_{id}_{timestamp}.glb'
+    source_image_path VARCHAR(500), -- original image used for generation
+    thumbnail_url VARCHAR(500), -- auto-generated 2D snapshot for UI
+    file_size_bytes BIGINT,
+    generation_status VARCHAR(50) DEFAULT 'pending', -- 'pending', 'processing', 'completed', 'failed'
+    generation_error TEXT, -- error message if generation failed
+    metadata JSONB DEFAULT '{}', -- additional metadata (dimensions, vertex count, etc.)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Create indices for performance
 CREATE INDEX IF NOT EXISTS idx_venues_user_id ON venues(user_id);
 CREATE INDEX IF NOT EXISTS idx_venues_identifier ON venues(venue_identifier);
@@ -91,6 +107,8 @@ CREATE INDEX IF NOT EXISTS idx_walls_venue_id ON venue_walls(venue_id);
 CREATE INDEX IF NOT EXISTS idx_assets_venue_id ON venue_assets(venue_id);
 CREATE INDEX IF NOT EXISTS idx_floor_plans_venue_id ON venue_floor_plans(venue_id);
 CREATE INDEX IF NOT EXISTS idx_polygons_venue_id ON venue_polygons(venue_id);
+CREATE INDEX IF NOT EXISTS idx_user_assets_user_id ON user_assets(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_assets_status ON user_assets(generation_status);
 
 -- Create function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -108,4 +126,8 @@ CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
 
 DROP TRIGGER IF EXISTS update_venues_updated_at ON venues;
 CREATE TRIGGER update_venues_updated_at BEFORE UPDATE ON venues
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_user_assets_updated_at ON user_assets;
+CREATE TRIGGER update_user_assets_updated_at BEFORE UPDATE ON user_assets
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

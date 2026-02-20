@@ -9,8 +9,29 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from api.routes import api_bp
 from utils.init_demo_data import init_demo_venue
 
+
+def init_directories():
+    """Initialize required directories for the application."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    directories = [
+        os.path.join(base_dir, "static", "uploads"),
+        os.path.join(base_dir, "static", "user_assets"),
+        os.path.join(base_dir, "static", "models"),
+        os.path.join(base_dir, "temp"),
+        os.path.join(base_dir, "temp", "instantmesh"),
+    ]
+    
+    for directory in directories:
+        os.makedirs(directory, exist_ok=True)
+    
+    print(f"[DEBUG] Initialized directories: {len(directories)} directories created/verified")
+
 # Function to create the Flask app instance
 def create_app():
+    # Initialize required directories
+    init_directories()
+    
     # Initialize demo data on startup
     init_demo_venue()
     # Path to the React app's dist folder (relative to server directory)

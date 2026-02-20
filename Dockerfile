@@ -42,8 +42,12 @@ COPY server ./server
 # Copy built frontend from previous stage
 COPY --from=frontend-build /app/dist ./dist
 
-# Create uploads directory
-RUN mkdir -p ./server/static/uploads
+# Create required directories
+RUN mkdir -p ./server/static/uploads \
+    && mkdir -p ./server/static/user_assets \
+    && mkdir -p ./server/static/models \
+    && mkdir -p ./server/temp/instantmesh \
+    && mkdir -p ./server/migrations
 
 # Expose port
 EXPOSE 5000

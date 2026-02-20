@@ -10,6 +10,7 @@ import Login from './pages/auth/Login'
 import Signup from './pages/auth/Signup'
 import VenuesList from './pages/venues/VenuesList'
 import VenueHome from './pages/venues/VenueHome'
+import AssetLibrary from './pages/assets/AssetLibrary'
 
 function App() {
   return (
@@ -21,6 +22,9 @@ function App() {
       {/* Venues dashboard */}
       <Route path="/venues" element={<VenuesList />} />
       <Route path="/venue/:venueId" element={<VenueHome />} />
+      
+      {/* Asset Library */}
+      <Route path="/assets" element={<AssetLibrary />} />
       
       {/* Mobile routes - these are relative to /mobile basename */}
       <Route path="/" element={<Navigate to="/venues" replace />} />

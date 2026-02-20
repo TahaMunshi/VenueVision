@@ -125,6 +125,9 @@ const VenuesList = () => {
           <p>Create and manage your event spaces</p>
         </div>
         <div className="venues-header-right">
+          <button onClick={() => navigate('/assets')} className="assets-button">
+            📦 My Assets
+          </button>
           {user && (
             <div className="user-info">
               <div className="user-avatar">{getUserInitials()}</div>

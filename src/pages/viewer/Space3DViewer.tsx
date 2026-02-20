@@ -464,8 +464,12 @@ const Space3DViewer = () => {
                 group.position.set(worldX, floorY, worldZ)
                 group.rotation.y = -asset.rotation * (Math.PI / 180)
                 
-                // Load the 3D model - use full URL for proper loading
-                const modelPath = `${API_BASE_URL}/static/models/${asset.file}`
+                // Load the 3D model - handle both default assets and user assets
+                // User assets have paths like 'user_assets/1/user_1_xxx.glb'
+                // Default assets have paths like 'asset_table.glb'
+                const modelPath = asset.file.includes('/') 
+                  ? `${API_BASE_URL}/static/${asset.file}` 
+                  : `${API_BASE_URL}/static/models/${asset.file}`
                 const assetId = asset.id || asset.file
                 
                 // Load from server (browser will cache automatically)
