@@ -47,7 +47,6 @@ const Space3DViewer = () => {
           const data = await response.json()
           if (data.status === 'success' && data.wall_images) {
             wallImageUrls = data.wall_images
-            console.log('[Space3DViewer] Wall images:', wallImageUrls)
           }
         } catch (err) {
           console.warn('[Space3DViewer] Failed to fetch wall images, will try default paths:', err)
@@ -126,9 +125,7 @@ const Space3DViewer = () => {
 
         // Calculate actual floor level (room box is centered, so floor is at -height/2)
         const floorY = -dimensions.height / 2
-        console.log('[3D Viewer] Room dimensions:', dimensions)
-        console.log('[3D Viewer] Floor level (y):', floorY)
-        
+
         // Optional: Add visible floor grid at actual floor level for debugging
         // Uncomment these lines if you want to see the floor plane
         /*
@@ -184,7 +181,6 @@ const Space3DViewer = () => {
           // Try to create walls if we have layout data and all textures are loaded
           if (layoutData && layoutData.walls && Array.isArray(layoutData.walls) && layoutData.walls.length > 0) {
             if (loadedCount === totalTextures && totalTextures > 0) {
-              console.log(`[3D Viewer] All ${totalTextures} textures loaded. Creating ${layoutData.walls.length} 3D walls from floor plan`)
               create3DWalls(layoutData.walls)
               setLoading(false)
             }
@@ -197,7 +193,6 @@ const Space3DViewer = () => {
 
         const onTextureLoad = () => {
           loadedCount++
-          console.log(`[3D Viewer] Texture loaded (${loadedCount}/${totalTextures})`)
           tryCreateWalls()
         }
 
@@ -213,30 +208,22 @@ const Space3DViewer = () => {
           .then(res => res.json())
           .then(data => {
             layoutData = data
-            console.log(`[3D Viewer] Loaded layout with ${data.walls?.length || 0} walls`, data.walls)
-            console.log(`[3D Viewer] wallImageUrls available:`, wallImageUrls)
-            
+
             if (!data.walls || data.walls.length === 0) {
-              console.log('[3D Viewer] No walls in layout, creating generic room')
               createRoom()
               setLoading(false)
               return
             }
 
-            // Now load textures for ALL walls in the layout
             totalTextures = data.walls.length
-            console.log(`[3D Viewer] Will load textures for ${totalTextures} walls`)
 
             data.walls.forEach((wall: any) => {
               const wallId = wall.id || wall.name
               const imageUrl = wallImageUrls[wallId]
-              
-              console.log(`[3D Viewer] Processing wall ${wallId}: imageUrl=${imageUrl}`)
-              
+
               if (imageUrl) {
                 const fullUrl = `${API_BASE_URL}${imageUrl}${cacheBuster}`
-                console.log(`[3D Viewer] Loading texture for wall ${wallId}: ${fullUrl}`)
-                
+
                 loader.load(
                   fullUrl,
                   (texture: any) => {
@@ -244,7 +231,6 @@ const Space3DViewer = () => {
                     texture.magFilter = THREE.LinearFilter
                     texture.minFilter = THREE.LinearMipmapLinearFilter
                     textures[wallId] = texture
-                    console.log(`[3D Viewer] ✓ Texture loaded for ${wallId}`)
                     onTextureLoad()
                   },
                   undefined,
@@ -254,7 +240,6 @@ const Space3DViewer = () => {
                   }
                 )
               } else {
-                console.log(`[3D Viewer] No image URL for wall ${wallId}, will use gray color`)
                 textures[wallId] = null
                 onTextureLoad()
               }
@@ -287,7 +272,6 @@ const Space3DViewer = () => {
             } else if (typeof colorStr === 'string') {
               floorColor = parseInt(colorStr, 16)
             }
-            console.log(`[3D Viewer] Using floor color from layout: ${colorStr} -> 0x${floorColor.toString(16)}`)
           }
 
           const currentMaterials = [
@@ -324,13 +308,7 @@ const Space3DViewer = () => {
 
         // Create 3D walls from floor plan wall data
         const create3DWalls = (wallsData: any[]) => {
-          if (!wallsData || wallsData.length === 0) {
-            console.log('[3D Viewer] No walls to render')
-            return
-          }
-
-          console.log(`[3D Viewer] Creating ${wallsData.length} walls from floor plan`)
-          console.log('[3D Viewer] Room dimensions:', { width: dimensions.width, depth: dimensions.depth, height: dimensions.height })
+          if (!wallsData || wallsData.length === 0) return
 
           const wallHeight = dimensions.height
           const wallThickness = 0.05 // Ultra-thin walls (5cm) to eliminate gaps between connected walls
@@ -352,8 +330,6 @@ const Space3DViewer = () => {
             const z1World = (y1Norm / 100) * dimensions.depth - dimensions.depth / 2
             const x2World = (x2Norm / 100) * dimensions.width - dimensions.width / 2
             const z2World = (y2Norm / 100) * dimensions.depth - dimensions.depth / 2
-
-            console.log(`[3D Viewer] Wall ${idx} (${wall.name}): norm=(${x1Norm},${y1Norm})->(${x2Norm},${y2Norm}) world=(${x1World.toFixed(1)},${z1World.toFixed(1)})->(${x2World.toFixed(1)},${z2World.toFixed(1)})`)
 
             // Calculate wall vector
             const dx = x2World - x1World
@@ -393,7 +369,6 @@ const Space3DViewer = () => {
             wallMesh.receiveShadow = true
 
             scene.add(wallMesh)
-            console.log(`[3D Viewer] ✓ Created wall: ${wall.name} | pos=(${centerX.toFixed(2)}, ${centerZ.toFixed(2)}) | len=${wallLength.toFixed(2)}m | ang=${(angle * 180 / Math.PI).toFixed(1)}° | thick=${wallThickness}m | textured=${!!wallTexture}`)
           })
         }
 
@@ -405,8 +380,7 @@ const Space3DViewer = () => {
             
             // Store layout data - it will be used once textures are loaded
             layoutData = data
-            console.log('[3D Viewer] Layout data loaded, waiting for textures before creating 3D walls...')
-            
+
             if (data.status === 'success' && data.assets && data.assets.length > 0) {
               // Update room dimensions if provided
               if (data.dimensions) {
@@ -433,12 +407,11 @@ const Space3DViewer = () => {
               
               // Calculate actual floor level (room box is centered, so floor is at -height/2)
               const floorY = -roomHeight / 2
-              console.log(`[3D Viewer] Room height: ${roomHeight}, Floor level (y): ${floorY}`)
-              
+
               // Track loading assets
               setLoadingAssets(data.assets.map((a: any) => a.id || a.file))
               
-              data.assets.forEach((asset: any) => {
+              data.assets.forEach(async (asset: any) => {
                 // Convert 2D planner coordinates to 3D world coordinates
                 // Planner (0,0) is Top-Left. ThreeJS (0,0) is Center.
                 // Asset x,y in planner is the top-left corner, so we calculate the center
@@ -449,16 +422,7 @@ const Space3DViewer = () => {
                 // No negation needed: 2D y increases down (back to front in room) = 3D z increases forward
                 const worldX = centerX2D - (roomWidth / 2)
                 const worldZ = centerY2D - (roomDepth / 2)
-                
-                console.log(`[3D Viewer] Asset positioning:`, {
-                  'planner position (top-left)': { x: asset.x, y: asset.y },
-                  'planner center': { x: centerX2D, y: centerY2D },
-                  'world position (center)': { x: worldX, z: worldZ },
-                  'asset dimensions': { width: asset.width, depth: asset.depth },
-                  'room dimensions': { width: roomWidth, depth: roomDepth },
-                  'floorY': floorY
-                })
-                
+
                 // Create group for this asset - position at the center of the 2D rectangle
                 const group = new THREE.Group()
                 group.position.set(worldX, floorY, worldZ)
@@ -471,47 +435,49 @@ const Space3DViewer = () => {
                   ? `${API_BASE_URL}/static/${asset.file}` 
                   : `${API_BASE_URL}/static/models/${asset.file}`
                 const assetId = asset.id || asset.file
+
+                // Pre-check: verify the file is accessible before loading
+                try {
+                  const headCheck = await fetch(modelPath, { method: 'HEAD' })
+                  if (!headCheck.ok) {
+                    console.error(`[3D Viewer] File not accessible (${headCheck.status}): ${modelPath}`)
+                    setLoadingAssets((prev) => prev.filter(id => id !== assetId))
+                    return
+                  }
+                } catch (fetchErr) {
+                  console.error(`[3D Viewer] Network error checking file: ${modelPath}`, fetchErr)
+                  setLoadingAssets((prev) => prev.filter(id => id !== assetId))
+                  return
+                }
+
+                // Set a timeout - if the model doesn't load within 20 seconds, remove from loading state
+                const loadTimer = setTimeout(() => {
+                  console.warn(`[3D Viewer] Timeout loading asset: ${modelPath}`)
+                  setLoadingAssets((prev) => prev.filter(id => id !== assetId))
+                }, 20000)
                 
                 // Load from server (browser will cache automatically)
                 gltfLoader.load(
                   modelPath,
                   (gltf: any) => {
-                    console.log(`[3D Viewer] Loading asset: ${asset.file}`)
-                    console.log(`[3D Viewer] Asset dimensions from planner: width=${asset.width}, depth=${asset.depth}`)
-                    console.log(`[3D Viewer] Asset 2D position: x=${asset.x}, y=${asset.y}`)
-                    
+                    clearTimeout(loadTimer)
+
                     // Compute initial bounds BEFORE any transformations
                     const box = new THREE.Box3().setFromObject(gltf.scene)
                     const size = new THREE.Vector3()
                     box.getSize(size)
                     const center = new THREE.Vector3()
                     box.getCenter(center)
-                    
-                    console.log(`[3D Viewer] Initial model bounds:`, {
-                      min: box.min,
-                      max: box.max,
-                      size: { x: size.x, y: size.y, z: size.z },
-                      center: { x: center.x, y: center.y, z: center.z }
-                    })
 
                     // STEP 1: Translate model so its BOTTOM is at y=0 BEFORE scaling
                     // This ensures scaling happens around the bottom, not the center
                     const initialMinY = box.min.y
                     gltf.scene.position.y = -initialMinY
-                    console.log(`[3D Viewer] Step 1 - Translating model so bottom is at y=0:`, {
-                      initialMinY,
-                      'position.y': gltf.scene.position.y
-                    })
-                    
-                    // Verify translation
-                    const afterTranslateBox = new THREE.Box3().setFromObject(gltf.scene)
-                    console.log(`[3D Viewer] After translation, bottom Y:`, afterTranslateBox.min.y)
 
                     // STEP 2: Scale model in X/Z to match planned footprint
                     const scaleX = size.x > 0 ? asset.width / size.x : 1
                     const scaleZ = size.z > 0 ? asset.depth / size.z : 1
                     const scaleY = scaleX
-                    console.log(`[3D Viewer] Step 2 - Applying scale:`, { scaleX, scaleY, scaleZ })
                     gltf.scene.scale.set(scaleX, scaleY, scaleZ)
 
                     // STEP 3: Center the model horizontally (X and Z only)
@@ -522,99 +488,40 @@ const Space3DViewer = () => {
                     
                     gltf.scene.position.x = -scaledCenter.x
                     gltf.scene.position.z = -scaledCenter.z
-                    // Keep Y position as-is (should already be at 0 after translation)
-                    console.log(`[3D Viewer] Step 3 - After centering horizontally:`, {
-                      'scaled center': { x: scaledCenter.x, y: scaledCenter.y, z: scaledCenter.z },
-                      position: { x: gltf.scene.position.x, y: gltf.scene.position.y, z: gltf.scene.position.z }
-                    })
 
                     // STEP 4: Verify final bounds - bottom should be at y=0
                     const finalBox = new THREE.Box3().setFromObject(gltf.scene)
                     const minY = finalBox.min.y
-                    const maxY = finalBox.max.y
-                    console.log(`[3D Viewer] Step 4 - Final bounding box:`, {
-                      min: finalBox.min,
-                      max: finalBox.max,
-                      minY,
-                      maxY,
-                      height: maxY - minY,
-                      'bottom Y': minY
-                    })
-                    
-                    // If bottom is not exactly at 0, adjust
+
                     if (Math.abs(minY) > 0.001) {
-                      console.log(`[3D Viewer] WARNING: Bottom Y is ${minY}, adjusting by ${-minY}`)
                       gltf.scene.position.y -= minY
-                      const adjustedBox = new THREE.Box3().setFromObject(gltf.scene)
-                      console.log(`[3D Viewer] After adjustment, bottom Y: ${adjustedBox.min.y}`)
                     }
-                    
-                    // FORCE: Ensure scene's bottom is at y=0 relative to itself
+
                     const verifyBox = new THREE.Box3().setFromObject(gltf.scene)
                     if (Math.abs(verifyBox.min.y) > 0.001) {
-                      console.log(`[3D Viewer] FORCING: Scene bottom is ${verifyBox.min.y}, moving to 0`)
                       gltf.scene.position.y -= verifyBox.min.y
-                      console.log(`[3D Viewer] Scene position.y is now: ${gltf.scene.position.y}`)
                     }
-                    
+
                     // Add scene to group
                     group.add(gltf.scene)
-                    
-                    // FORCE: Set group Y position to floor level (group is already set, but ensure it's correct)
                     group.position.y = floorY
-                    console.log(`[3D Viewer] FORCED group.position.y to floor level: ${floorY}`)
-                    
-                    // Now check world position after adding to group
+
                     const groupBox = new THREE.Box3().setFromObject(group)
-                    console.log(`[3D Viewer] Group bounding box (world space):`, {
-                      min: groupBox.min,
-                      max: groupBox.max,
-                      'bottom Y (world)': groupBox.min.y,
-                      'top Y (world)': groupBox.max.y,
-                      'group.position.y': group.position.y,
-                      'expected floor Y': floorY
-                    })
-                    
-                    // If the bottom is STILL not at floorY, force adjust the scene's Y position
                     if (Math.abs(groupBox.min.y - floorY) > 0.001) {
-                      console.log(`[3D Viewer] CRITICAL: Bottom Y is ${groupBox.min.y}, expected ${floorY}`)
                       const adjustment = floorY - groupBox.min.y
-                      console.log(`[3D Viewer] Adjusting scene.position.y by ${adjustment}`)
                       gltf.scene.position.y += adjustment
-                      
-                      // Recheck
-                      const finalCheckBox = new THREE.Box3().setFromObject(group)
-                      console.log(`[3D Viewer] After critical adjustment, bottom Y: ${finalCheckBox.min.y}, expected: ${floorY}`)
                     }
-                    
+
                     scene.add(group)
                     assetsRef.current.push(group)
-                    
-                    // Final check after adding to scene
-                    const sceneBox = new THREE.Box3().setFromObject(group)
-                    console.log(`[3D Viewer] ===== FINAL CHECK =====`)
-                    console.log(`[3D Viewer] Final world position in scene:`, {
-                      min: sceneBox.min,
-                      max: sceneBox.max,
-                      'bottom Y (final)': sceneBox.min.y,
-                      'expected floor Y': floorY,
-                      'group.position (world)': { x: group.position.x, y: group.position.y, z: group.position.z },
-                      'scene.position (relative to group)': { x: gltf.scene.position.x, y: gltf.scene.position.y, z: gltf.scene.position.z }
-                    })
-                    console.log(`[3D Viewer] Asset center should align with 2D rectangle center at (${worldX}, ${floorY}, ${worldZ})`)
-                    
+
                     // Update loading state
                     setLoadingAssets((prev) => prev.filter(id => id !== assetId))
                   },
-                  (progress: any) => {
-                    // Loading progress callback
-                    if (progress.lengthComputable) {
-                      const percent = (progress.loaded / progress.total) * 100
-                      console.log(`Loading ${asset.file}: ${percent.toFixed(0)}%`)
-                    }
-                  },
+                  undefined,
                   (error: any) => {
-                    console.error(`Failed to load ${asset.file}:`, error)
+                    clearTimeout(loadTimer)
+                    console.error(`[3D Viewer] Failed to load ${asset.file}:`, error)
                     setLoadingAssets((prev) => prev.filter(id => id !== assetId))
                   }
                 )
@@ -789,6 +696,16 @@ const Space3DViewer = () => {
         <div className="asset-loading-notification">
           <div className="loader" />
           <p>Loading {loadingAssets.length} asset{loadingAssets.length > 1 ? 's' : ''}...</p>
+          <button 
+            onClick={() => setLoadingAssets([])} 
+            style={{ 
+              marginLeft: 12, background: 'rgba(255,255,255,0.3)', border: 'none', 
+              color: 'white', borderRadius: 4, padding: '4px 10px', cursor: 'pointer',
+              fontSize: '12px'
+            }}
+          >
+            Dismiss
+          </button>
         </div>
       )}
 

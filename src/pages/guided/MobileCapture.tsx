@@ -86,21 +86,14 @@ const MobileCapture = () => {
     const currentApiUrl = getApiBaseUrl()
     
     try {
-      console.log(`[MobileCapture] Fetching progress for venue: ${venueId}`)
-      console.log(`[MobileCapture] API_BASE_URL: ${currentApiUrl}`)
       const url = `${currentApiUrl}/api/v1/venue/${venueId}/progress`
-      console.log(`[MobileCapture] Full URL: ${url}`)
-      
       const response = await fetch(url, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
         },
       })
-      
-      console.log(`[MobileCapture] Response status: ${response.status}`)
-      console.log(`[MobileCapture] Response ok: ${response.ok}`)
-      
+
       if (!response.ok) {
         const errorText = await response.text()
         console.error('[MobileCapture] Failed to load capture progress:', response.status, errorText)
@@ -131,8 +124,7 @@ const MobileCapture = () => {
       }
       
       const data = (await response.json()) as ProgressState
-      console.log('[MobileCapture] Progress data received:', JSON.stringify(data, null, 2))
-      
+
       if (!data || !data.walls) {
         console.error('[MobileCapture] Invalid progress data structure:', data)
         throw new Error('Invalid progress data structure')
@@ -169,7 +161,6 @@ const MobileCapture = () => {
       
       setProgress(dataWithCoords)
       const wall = determineCurrentWall(dataWithCoords)
-      console.log('[MobileCapture] Determined current wall:', wall)
       setCurrentWall(wall)
 
       // Preload wall images for review
@@ -242,11 +233,7 @@ const MobileCapture = () => {
 
       // First, stop any existing stream to release the camera
       if (streamRef.current) {
-        console.log('[MobileCapture] Stopping existing stream before requesting new one')
-        streamRef.current.getTracks().forEach((track) => {
-          track.stop()
-          console.log('[MobileCapture] Stopped track:', track.kind, track.label)
-        })
+        streamRef.current.getTracks().forEach((track) => track.stop())
         streamRef.current = null
       }
 
@@ -289,25 +276,17 @@ const MobileCapture = () => {
         }
 
         streamRef.current = stream
-        console.log('[MobileCapture] Stream obtained, active tracks:', stream.getVideoTracks().length)
-        
-        // Use setTimeout to ensure video element is mounted
+
         setTimeout(() => {
           if (videoRef.current) {
-            console.log('[MobileCapture] Setting video stream to element')
             videoRef.current.srcObject = stream
-            
+
             videoRef.current.onloadedmetadata = () => {
-              console.log('[MobileCapture] Video metadata loaded, dimensions:', videoRef.current?.videoWidth, 'x', videoRef.current?.videoHeight)
               setVideoReady(true)
-              // Force play after metadata loads
               const playPromise = videoRef.current?.play()
               if (playPromise) {
                 playPromise
-                  .then(() => {
-                    console.log('[MobileCapture] Video is playing successfully')
-                    setVideoReady(true)
-                  })
+                  .then(() => setVideoReady(true))
                   .catch(err => {
                     console.warn('[MobileCapture] Play failed:', err)
                     // Try again after a short delay
@@ -320,15 +299,8 @@ const MobileCapture = () => {
               }
             }
             
-            videoRef.current.onplay = () => {
-              console.log('[MobileCapture] Video play event fired')
-              setVideoReady(true)
-            }
-            
-            videoRef.current.onplaying = () => {
-              console.log('[MobileCapture] Video is actually playing')
-              setVideoReady(true)
-            }
+            videoRef.current.onplay = () => setVideoReady(true)
+            videoRef.current.onplaying = () => setVideoReady(true)
             
             videoRef.current.onerror = (e) => {
               console.error('[MobileCapture] Video element error:', e, videoRef.current?.error)
@@ -347,7 +319,6 @@ const MobileCapture = () => {
             // Retry setting stream after another delay
             setTimeout(() => {
               if (videoRef.current && streamRef.current) {
-                console.log('[MobileCapture] Retry: Setting video stream')
                 videoRef.current.srcObject = streamRef.current
                 videoRef.current.play().catch(e => console.warn('[MobileCapture] Retry play:', e))
               }
@@ -414,7 +385,6 @@ const MobileCapture = () => {
     const intervalId = setInterval(() => {
       retryCount++
       if (retryCount <= maxRetries) {
-        console.log(`[MobileCapture] Retrying progress fetch (attempt ${retryCount}/${maxRetries})...`)
         fetchProgress()
       } else {
         console.warn('[MobileCapture] Max retries reached, stopping polling')
@@ -445,13 +415,10 @@ const MobileCapture = () => {
     setAlertMessage(null)
 
     try {
-      console.log('[MobileCapture] Starting capture...')
       const blob = await snapshotToBlob(videoRef.current, canvasRef.current)
       if (!blob) {
         throw new Error('Unable to capture photo. Please try again.')
       }
-      
-      console.log('[MobileCapture] Photo captured, size:', blob.size, 'bytes')
 
       const formData = new FormData()
       const filename = `capture-${Date.now()}.jpg`
@@ -462,8 +429,6 @@ const MobileCapture = () => {
       // Re-detect API URL at runtime
       const currentApiUrl = getApiBaseUrl()
       const uploadUrl = `${currentApiUrl}/api/v1/capture/upload`
-      console.log('[MobileCapture] Uploading to:', uploadUrl)
-      console.log('[MobileCapture] Venue:', targetVenue, 'Wall:', activeWallId)
 
       const response = await fetch(uploadUrl, {
         method: 'POST',
@@ -471,13 +436,9 @@ const MobileCapture = () => {
         // Don't set Content-Type header - browser will set it with boundary for FormData
       })
 
-      console.log('[MobileCapture] Upload response status:', response.status)
-      console.log('[MobileCapture] Upload response ok:', response.ok)
-
       let payload: any = {}
       try {
         const responseText = await response.text()
-        console.log('[MobileCapture] Response text:', responseText)
         if (responseText) {
           payload = JSON.parse(responseText)
         }
@@ -495,7 +456,6 @@ const MobileCapture = () => {
         return
       }
 
-      console.log('[MobileCapture] Upload successful:', payload)
       setToast({ message: 'Great! Now turn right ->', type: 'success' })
       setShowCheck(true)
       setTimeout(() => setShowCheck(false), 1200)
@@ -572,7 +532,6 @@ const MobileCapture = () => {
       const firstIncomplete = progress.walls.find(w => !progress.completed_walls.includes(w.id))
       const wallToUse = firstIncomplete || progress.walls[0]
       if (wallToUse && wallSetRef.current !== wallToUse.id) {
-        console.log('[MobileCapture] Setting current wall:', wallToUse)
         wallSetRef.current = wallToUse.id
         setCurrentWall(wallToUse)
       }
@@ -613,15 +572,6 @@ const MobileCapture = () => {
     ? Math.min(completedCount + 1, totalWalls)
     : completedCount + 1
   const bannerTargetName = currentWall?.name ?? 'the next wall'
-
-  // Debug: Log render state
-  console.log('[MobileCapture] Rendering with:', {
-    hasProgress: !!progress,
-    hasCurrentWall: !!currentWall,
-    hasVideoRef: !!videoRef.current,
-    hasStream: !!streamRef.current,
-    cameraError
-  })
 
   const captureUrl = `${API_BASE_URL}/mobile/${venueId ?? ''}`
   const shareUrl = (import.meta.env as any).VITE_NGROK_URL || captureUrl
@@ -719,10 +669,7 @@ const MobileCapture = () => {
                 onClick={async () => {
                   // Properly release camera before retrying
                   if (streamRef.current) {
-                    streamRef.current.getTracks().forEach((track) => {
-                      track.stop()
-                      console.log('[MobileCapture] Stopped track on retry:', track.kind)
-                    })
+                    streamRef.current.getTracks().forEach((track) => track.stop())
                     streamRef.current = null
                   }
                   if (videoRef.current) {

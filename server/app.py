@@ -24,8 +24,6 @@ def init_directories():
     
     for directory in directories:
         os.makedirs(directory, exist_ok=True)
-    
-    print(f"[DEBUG] Initialized directories: {len(directories)} directories created/verified")
 
 # Function to create the Flask app instance
 def create_app():
@@ -38,13 +36,7 @@ def create_app():
     # Navigates up from server/ to root fyp/ and then into dist/
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     client_dist_folder = os.path.abspath(os.path.join(BASE_DIR, '..', 'dist'))
-    
-    # Debug: Print the path being used
-    print(f"[DEBUG] Serving React from: {client_dist_folder}")
-    print(f"[DEBUG] Path exists: {os.path.exists(client_dist_folder)}")
-    if os.path.exists(client_dist_folder):
-        print(f"[DEBUG] Contents: {os.listdir(client_dist_folder)}")
-    
+
     # Configure Flask to serve static files from the server/static directory
     app = Flask(__name__, static_folder='static', static_url_path='/static')
     CORS(app) 
@@ -78,15 +70,6 @@ def create_app():
     return app
 
 if __name__ == '__main__':
-    print("=" * 60)
-    print("Starting Flask server...")
-    print("=" * 60)
     app = create_app()
-    print("=" * 60)
-    print("Flask app created successfully!")
-    print("Access the React app at: http://localhost:5000/mobile")
-    print("API endpoints available at: http://localhost:5000/api/v1")
-    print("=" * 60)
-    # Bind to 0.0.0.0 so the server is reachable by other devices on the same local network
     app.run(host='0.0.0.0', debug=True, port=5000)
 

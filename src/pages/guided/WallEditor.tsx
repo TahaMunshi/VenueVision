@@ -95,16 +95,6 @@ const WallEditor = () => {
             drawCornersOnCanvas(defaultPoints)
             setCropMode(true)
               }
-              
-              console.log('Image loaded:', {
-                imageWidth: img.width,
-                imageHeight: img.height,
-                canvasWidth: canvas.width,
-                canvasHeight: canvas.height,
-                displayWidth: canvas.style.width,
-                displayHeight: canvas.style.height,
-                scale: scale
-              })
             }
             setIsLoading(false)
           }

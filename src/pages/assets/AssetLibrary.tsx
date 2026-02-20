@@ -1,7 +1,14 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import './AssetLibrary.css'
 import { getApiBaseUrl } from '../../utils/api'
+
+// Type declarations for dynamically loaded Three.js
+declare global {
+  interface Window {
+    THREE: any
+  }
+}
 
 interface Asset {
   asset_id: number
@@ -19,6 +26,8 @@ interface Asset {
 const AssetLibrary = () => {
   const navigate = useNavigate()
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const viewerRef = useRef<HTMLDivElement>(null)
+  const viewerCleanupRef = useRef<(() => void) | null>(null)
   const [assets, setAssets] = useState<Asset[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
@@ -28,6 +37,9 @@ const AssetLibrary = () => {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [showUploadModal, setShowUploadModal] = useState(false)
+  const [previewAsset, setPreviewAsset] = useState<Asset | null>(null)
+  const [viewerLoading, setViewerLoading] = useState(false)
+  const [viewerError, setViewerError] = useState<string | null>(null)
 
   const API_BASE_URL = getApiBaseUrl()
 
@@ -143,8 +155,28 @@ const AssetLibrary = () => {
         if (fileInputRef.current) {
           fileInputRef.current.value = ''
         }
-        // Refresh assets list
-        fetchAssets()
+        // Refresh assets list, then auto-open the new asset in 3D viewer
+        try {
+          const token2 = localStorage.getItem('token')
+          const refreshResponse = await fetch(`${API_BASE_URL}/api/v1/assets?include_failed=true`, {
+            headers: { 'Authorization': `Bearer ${token2}` }
+          })
+          if (refreshResponse.ok) {
+            const refreshData = await refreshResponse.json()
+            const refreshedAssets = refreshData.assets || []
+            setAssets(refreshedAssets)
+            // Auto-open the newest completed asset in the 3D viewer
+            if (data.asset && data.asset.asset_id) {
+              const newAsset = refreshedAssets.find((a: Asset) => a.asset_id === data.asset.asset_id)
+              if (newAsset && newAsset.generation_status === 'completed') {
+                setPreviewAsset(newAsset)
+                setViewerLoading(true)
+              }
+            }
+          }
+        } catch {
+          fetchAssets()
+        }
       } else {
         setError(data.error || 'Failed to generate 3D model')
       }
@@ -202,6 +234,248 @@ const AssetLibrary = () => {
   const handleBack = () => {
     navigate('/venues')
   }
+
+  // Load Three.js scripts dynamically
+  const loadThreeJS = useCallback(async () => {
+    // Load Three.js core
+    if (!window.THREE) {
+      await new Promise<void>((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'
+        script.onload = () => resolve()
+        script.onerror = () => reject(new Error('Failed to load Three.js'))
+        document.head.appendChild(script)
+      })
+    }
+    // Load OrbitControls
+    if (!window.THREE?.OrbitControls) {
+      await new Promise<void>((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js'
+        script.onload = () => resolve()
+        script.onerror = () => reject(new Error('Failed to load OrbitControls'))
+        document.head.appendChild(script)
+      })
+    }
+    // Load GLTFLoader
+    if (!window.THREE?.GLTFLoader) {
+      await new Promise<void>((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js'
+        script.onload = () => resolve()
+        script.onerror = () => reject(new Error('Failed to load GLTFLoader'))
+        document.head.appendChild(script)
+      })
+    }
+  }, [])
+
+  // Open 3D preview for an asset
+  const handlePreviewAsset = (asset: Asset) => {
+    if (asset.generation_status !== 'completed') return
+    setPreviewAsset(asset)
+    setViewerError(null)
+    setViewerLoading(true)
+  }
+
+  // Close 3D preview
+  const closePreview = useCallback(() => {
+    if (viewerCleanupRef.current) {
+      viewerCleanupRef.current()
+      viewerCleanupRef.current = null
+    }
+    setPreviewAsset(null)
+    setViewerLoading(false)
+    setViewerError(null)
+  }, [])
+
+  // Initialize 3D viewer when previewAsset changes
+  useEffect(() => {
+    if (!previewAsset || !viewerRef.current) return
+
+    let cancelled = false
+
+    const init3DViewer = async () => {
+      try {
+        await loadThreeJS()
+        if (cancelled || !viewerRef.current) return
+
+        const THREE = window.THREE
+        const container = viewerRef.current
+        const width = container.clientWidth
+        const height = container.clientHeight
+
+        // Scene
+        const scene = new THREE.Scene()
+        scene.background = new THREE.Color(0xffffff)
+
+        // Camera
+        const camera = new THREE.PerspectiveCamera(45, width / height, 0.01, 100)
+        camera.position.set(2, 1.5, 2)
+
+        // Renderer
+        const renderer = new THREE.WebGLRenderer({ antialias: true })
+        renderer.setSize(width, height)
+        renderer.setPixelRatio(window.devicePixelRatio)
+        renderer.shadowMap.enabled = true
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap
+        renderer.outputEncoding = THREE.sRGBEncoding
+        renderer.toneMapping = THREE.ACESFilmicToneMapping
+        renderer.toneMappingExposure = 1.0
+        container.appendChild(renderer.domElement)
+
+        // Orbit Controls
+        const controls = new THREE.OrbitControls(camera, renderer.domElement)
+        controls.enableDamping = true
+        controls.dampingFactor = 0.08
+        controls.autoRotate = true
+        controls.autoRotateSpeed = 2.0
+        controls.maxPolarAngle = Math.PI / 1.5
+        controls.minDistance = 0.5
+        controls.maxDistance = 10
+
+        // Lights
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6)
+        scene.add(ambientLight)
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8)
+        directionalLight.position.set(5, 10, 5)
+        directionalLight.castShadow = true
+        scene.add(directionalLight)
+
+        const fillLight = new THREE.DirectionalLight(0xffffff, 0.3)
+        fillLight.position.set(-5, 5, -5)
+        scene.add(fillLight)
+
+        // Grid helper (subtle)
+        const gridHelper = new THREE.GridHelper(4, 20, 0xe0e0e0, 0xf0f0f0)
+        scene.add(gridHelper)
+
+        // Load GLB model
+        const loader = new THREE.GLTFLoader()
+        const modelUrl = `${API_BASE_URL}${previewAsset.file_url}`
+
+        // Set a timeout for loading
+        const loadTimeout = setTimeout(() => {
+          if (!cancelled) {
+            setViewerLoading(false)
+            setViewerError('Model loading timed out. The file may be corrupted.')
+          }
+        }, 30000)
+
+        loader.load(
+          modelUrl,
+          (gltf: any) => {
+            clearTimeout(loadTimeout)
+            if (cancelled) return
+
+            const model = gltf.scene
+
+            // Compute bounding box and center/scale the model
+            const box = new THREE.Box3().setFromObject(model)
+            const size = new THREE.Vector3()
+            box.getSize(size)
+            const center = new THREE.Vector3()
+            box.getCenter(center)
+
+            // Scale to fit within a 2-unit cube
+            const maxDim = Math.max(size.x, size.y, size.z)
+            const scale = maxDim > 0 ? 2 / maxDim : 1
+            model.scale.setScalar(scale)
+
+            // Recompute after scaling
+            const scaledBox = new THREE.Box3().setFromObject(model)
+            const scaledCenter = new THREE.Vector3()
+            scaledBox.getCenter(scaledCenter)
+
+            // Center horizontally and place on ground
+            model.position.x = -scaledCenter.x
+            model.position.z = -scaledCenter.z
+            model.position.y = -scaledBox.min.y // Place bottom on ground
+
+            scene.add(model)
+
+            // Adjust camera to fit the model
+            const scaledSize = new THREE.Vector3()
+            scaledBox.getSize(scaledSize)
+            const dist = Math.max(scaledSize.x, scaledSize.y, scaledSize.z) * 1.8
+            camera.position.set(dist, dist * 0.7, dist)
+            controls.target.set(0, scaledSize.y * 0.3, 0)
+            controls.update()
+
+            setViewerLoading(false)
+          },
+          undefined,
+          (err: any) => {
+            clearTimeout(loadTimeout)
+            if (cancelled) return
+            console.error('Failed to load GLB:', err)
+            setViewerLoading(false)
+            setViewerError('Failed to load 3D model. The file may be corrupted or unavailable.')
+          }
+        )
+
+        // Animation loop
+        let animFrameId: number
+        const animate = () => {
+          animFrameId = requestAnimationFrame(animate)
+          controls.update()
+          renderer.render(scene, camera)
+        }
+        animate()
+
+        // Handle resize
+        const handleResize = () => {
+          if (!container) return
+          const w = container.clientWidth
+          const h = container.clientHeight
+          camera.aspect = w / h
+          camera.updateProjectionMatrix()
+          renderer.setSize(w, h)
+        }
+        window.addEventListener('resize', handleResize)
+
+        // Store cleanup
+        viewerCleanupRef.current = () => {
+          cancelled = true
+          window.removeEventListener('resize', handleResize)
+          cancelAnimationFrame(animFrameId)
+          controls.dispose()
+          renderer.dispose()
+          if (container.contains(renderer.domElement)) {
+            container.removeChild(renderer.domElement)
+          }
+          // Dispose scene objects
+          scene.traverse((obj: any) => {
+            if (obj.geometry) obj.geometry.dispose()
+            if (obj.material) {
+              if (Array.isArray(obj.material)) {
+                obj.material.forEach((m: any) => m.dispose())
+              } else {
+                obj.material.dispose()
+              }
+            }
+          })
+        }
+
+      } catch (err) {
+        console.error('Error initializing 3D viewer:', err)
+        if (!cancelled) {
+          setViewerLoading(false)
+          setViewerError('Failed to initialize 3D viewer')
+        }
+      }
+    }
+
+    init3DViewer()
+
+    return () => {
+      cancelled = true
+      if (viewerCleanupRef.current) {
+        viewerCleanupRef.current()
+        viewerCleanupRef.current = null
+      }
+    }
+  }, [previewAsset, API_BASE_URL, loadThreeJS])
 
   if (loading) {
     return (
@@ -342,7 +616,11 @@ const AssetLibrary = () => {
         ) : (
           <div className="assets-grid">
             {assets.map(asset => (
-              <div key={asset.asset_id} className={`asset-card ${asset.generation_status}`}>
+              <div 
+                key={asset.asset_id} 
+                className={`asset-card ${asset.generation_status} ${asset.generation_status === 'completed' ? 'clickable' : ''}`}
+                onClick={() => handlePreviewAsset(asset)}
+              >
                 <div className="asset-thumbnail">
                   {asset.thumbnail_url ? (
                     <img src={`${API_BASE_URL}${asset.thumbnail_url}`} alt={asset.asset_name} />
@@ -361,8 +639,11 @@ const AssetLibrary = () => {
                   )}
                   {asset.generation_status === 'failed' && (
                     <div className="status-overlay failed">
-                      <span>⚠️ Failed</span>
+                      <span>Failed</span>
                     </div>
+                  )}
+                  {asset.generation_status === 'completed' && (
+                    <div className="view-3d-badge">View 3D</div>
                   )}
                 </div>
                 <div className="asset-info">
@@ -381,19 +662,62 @@ const AssetLibrary = () => {
                       target="_blank" 
                       rel="noopener noreferrer"
                       className="action-button download"
+                      onClick={(e) => e.stopPropagation()}
                     >
                       Download GLB
                     </a>
                   )}
                   <button 
                     className="action-button delete"
-                    onClick={() => handleDeleteAsset(asset.asset_id)}
+                    onClick={(e) => { e.stopPropagation(); handleDeleteAsset(asset.asset_id) }}
                   >
                     Delete
                   </button>
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* 3D Preview Modal */}
+        {previewAsset && (
+          <div className="modal-overlay viewer-modal-overlay" onClick={closePreview}>
+            <div className="viewer-modal" onClick={e => e.stopPropagation()}>
+              <div className="viewer-modal-header">
+                <h2>{previewAsset.asset_name}</h2>
+                <div className="viewer-modal-actions">
+                  <a 
+                    href={`${API_BASE_URL}${previewAsset.file_url}`} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="viewer-download-btn"
+                  >
+                    Download GLB
+                  </a>
+                  <button className="close-button" onClick={closePreview}>x</button>
+                </div>
+              </div>
+              <div className="viewer-modal-body">
+                <div ref={viewerRef} className="glb-viewer-container">
+                  {viewerLoading && (
+                    <div className="viewer-loading">
+                      <div className="spinner"></div>
+                      <span>Loading 3D model...</span>
+                    </div>
+                  )}
+                  {viewerError && (
+                    <div className="viewer-error">
+                      <span>{viewerError}</span>
+                    </div>
+                  )}
+                </div>
+                <div className="viewer-modal-info">
+                  <span>Size: {formatFileSize(previewAsset.file_size_bytes)}</span>
+                  <span>Created: {formatDate(previewAsset.created_at)}</span>
+                  <span className="viewer-hint">Drag to rotate | Scroll to zoom</span>
+                </div>
+              </div>
+            </div>
           </div>
         )}
       </div>

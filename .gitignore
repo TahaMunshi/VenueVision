@@ -63,6 +63,7 @@ logs/
 
 # Uploads and static files (except models)
 server/static/uploads/
+server/static/user_assets/
 server/static/debug/
 
 # Keep models directory but ignore specific files
