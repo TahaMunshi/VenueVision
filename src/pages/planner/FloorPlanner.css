@@ -303,6 +303,42 @@
   margin-bottom: 15px;
   border-radius: 8px;
   font-size: 0.9rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.controls-bar-info {
+  margin-right: 12px;
+}
+
+.view-mode-toggle {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.view-mode-btn {
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.view-mode-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.view-mode-btn.active {
+  background: rgba(76, 175, 80, 0.4);
+  border-color: rgba(76, 175, 80, 0.8);
+  color: #fff;
 }
 
 .floor-plan-canvas {
@@ -336,6 +372,17 @@
 
 .placed-asset:hover {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+/* Ghosted in Floor Plan / Ceiling Plan view: semi-transparent and non-interactive */
+.placed-asset-ghost {
+  opacity: 0.3;
+  pointer-events: none;
+  cursor: default;
+}
+
+.placed-asset-ghost .delete-asset-btn {
+  display: none;
 }
 
 .asset-label {

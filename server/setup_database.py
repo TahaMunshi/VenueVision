@@ -135,6 +135,20 @@ def create_tables(conn_params):
         else:
             print("[INFO] schema.sql not found, skipping table creation")
         
+        # Run migrations
+        migrations_dir = os.path.join(os.path.dirname(__file__), 'migrations')
+        if os.path.isdir(migrations_dir):
+            for f in sorted(os.listdir(migrations_dir)):
+                if f.endswith('.sql'):
+                    path = os.path.join(migrations_dir, f)
+                    try:
+                        with open(path, 'r') as mf:
+                            cursor.execute(mf.read())
+                        conn.commit()
+                        print(f"[OK] Migration {f} applied")
+                    except psycopg2.Error as e:
+                        print(f"[WARN] Migration {f} skipped: {e}")
+        
         cursor.close()
         conn.close()
         return True

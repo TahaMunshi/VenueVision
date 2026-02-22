@@ -26,9 +26,22 @@ const Space3DViewer = () => {
   const cameraRef = useRef<any>(null)
   const animateRef = useRef<number | null>(null)
   const roomMeshRef = useRef<any>(null)
+  const floorPlaneRef = useRef<any>(null)
+  const ceilingPlaneRef = useRef<any>(null)
   const materialsRef = useRef<any[]>([])
   const texturesRef = useRef<{ [key: string]: any }>({})
   const assetsRef = useRef<any[]>([])
+  /** Layout dimensions and asset placement data - used to reposition assets when user changes room dimensions */
+  const layoutDataRef = useRef<{
+    layoutDimensions: { width: number; height: number; depth: number }
+    assetPlacements: Array<{
+      group: any
+      asset: any
+      isRoot: boolean
+      isCeiling: boolean
+      parentId?: string
+    }>
+  } | null>(null)
 
   const API_BASE_URL = getApiBaseUrl()
 
@@ -125,6 +138,49 @@ const Space3DViewer = () => {
 
         // Calculate actual floor level (room box is centered, so floor is at -height/2)
         const floorY = -dimensions.height / 2
+        const ceilingY = dimensions.height / 2
+
+        // Add a dedicated floor plane (beige) so the floor is always visible
+        const addWhiteFloorPlane = () => {
+          if (floorPlaneRef.current) {
+            scene.remove(floorPlaneRef.current)
+            floorPlaneRef.current.geometry?.dispose()
+            floorPlaneRef.current.material?.dispose()
+            floorPlaneRef.current = null
+          }
+          const floorGeo = new THREE.PlaneGeometry(dimensions.width, dimensions.depth)
+          const floorMat = new THREE.MeshBasicMaterial({ color: 0xc6b39e, side: THREE.DoubleSide })
+          const plane = new THREE.Mesh(floorGeo, floorMat)
+          plane.rotation.x = -Math.PI / 2
+          plane.position.y = floorY + 0.002
+          plane.renderOrder = 1
+          scene.add(plane)
+          floorPlaneRef.current = plane
+        }
+
+        // Add a translucent horizontal plane at the ceiling so the chandelier is visible
+        const addCeilingPlane = () => {
+          if (ceilingPlaneRef.current) {
+            scene.remove(ceilingPlaneRef.current)
+            ceilingPlaneRef.current.geometry?.dispose()
+            ceilingPlaneRef.current.material?.dispose()
+            ceilingPlaneRef.current = null
+          }
+          const ceilingGeo = new THREE.PlaneGeometry(dimensions.width, dimensions.depth)
+          const ceilingMat = new THREE.MeshBasicMaterial({
+            color: 0xeeeeee,
+            transparent: true,
+            opacity: 0.22,
+            side: THREE.DoubleSide,
+            depthWrite: false
+          })
+          const plane = new THREE.Mesh(ceilingGeo, ceilingMat)
+          plane.rotation.x = -Math.PI / 2
+          plane.position.y = ceilingY - 0.002
+          plane.renderOrder = 0
+          scene.add(plane)
+          ceilingPlaneRef.current = plane
+        }
 
         // Optional: Add visible floor grid at actual floor level for debugging
         // Uncomment these lines if you want to see the floor plane
@@ -155,6 +211,8 @@ const Space3DViewer = () => {
                 generatedGlb!,
                 (gltf: any) => {
                   scene.add(gltf.scene)
+                  addWhiteFloorPlane()
+                  addCeilingPlane()
                   setLoading(false)
                   resolve()
                 },
@@ -182,11 +240,15 @@ const Space3DViewer = () => {
           if (layoutData && layoutData.walls && Array.isArray(layoutData.walls) && layoutData.walls.length > 0) {
             if (loadedCount === totalTextures && totalTextures > 0) {
               create3DWalls(layoutData.walls)
+              addWhiteFloorPlane()
+              addCeilingPlane()
               setLoading(false)
             }
           } else if (loadedCount === totalTextures && totalTextures > 0) {
             // Only create generic room box if NO custom walls from floor plan
             createRoom()
+            addWhiteFloorPlane()
+            addCeilingPlane()
             setLoading(false)
           }
         }
@@ -211,6 +273,8 @@ const Space3DViewer = () => {
 
             if (!data.walls || data.walls.length === 0) {
               createRoom()
+              addWhiteFloorPlane()
+              addCeilingPlane()
               setLoading(false)
               return
             }
@@ -263,9 +327,8 @@ const Space3DViewer = () => {
           }
 
           // Get floor color from layout materials if available
-          let floorColor = 0x444444 // Default dark gray
+          let floorColor = 0x444444
           if (layoutData?.materials?.floor?.color) {
-            // Convert hex string to number if needed
             const colorStr = layoutData.materials.floor.color
             if (colorStr.startsWith('#')) {
               floorColor = parseInt(colorStr.substring(1), 16)
@@ -285,8 +348,8 @@ const Space3DViewer = () => {
               color: textures.wall_west ? 0xffffff : 0x999999,
               side: THREE.BackSide 
             }), // Left wall (-X)
-            new THREE.MeshBasicMaterial({ color: 0xaaaaaa, side: THREE.BackSide }), // Top (Ceiling)
-            new THREE.MeshBasicMaterial({ color: floorColor, side: THREE.BackSide }), // Bottom (Floor) - uses color from layout
+            new THREE.MeshBasicMaterial({ color: 0xeeeeee, transparent: true, opacity: 0.18, side: THREE.BackSide }), // Top (Ceiling) – very translucent so chandelier is visible
+            new THREE.MeshBasicMaterial({ color: floorColor, side: THREE.BackSide }), // Bottom (Floor) - beige
             new THREE.MeshBasicMaterial({ 
               map: textures.wall_south || undefined,
               color: textures.wall_south ? 0xffffff : 0x999999,
@@ -401,33 +464,30 @@ const Space3DViewer = () => {
               }
               
               const gltfLoader = new THREE.GLTFLoader()
-              const roomWidth = data.dimensions?.width || dimensions.width
-              const roomDepth = data.dimensions?.depth || dimensions.depth
-              const roomHeight = data.dimensions?.height || dimensions.height
-              
-              // Calculate actual floor level (room box is centered, so floor is at -height/2)
-              const floorY = -roomHeight / 2
+              const layoutW = data.dimensions?.width || dimensions.width
+              const layoutD = data.dimensions?.depth || dimensions.depth
+              const layoutH = data.dimensions?.height || dimensions.height
 
-              // Track loading assets
+              layoutDataRef.current = {
+                layoutDimensions: { width: layoutW, height: layoutH, depth: layoutD },
+                assetPlacements: []
+              }
+
+              // Calculate actual floor and ceiling (room box is centered: floor at -height/2, ceiling at +height/2)
+              const floorY = -layoutH / 2
+              const ceilingY = layoutH / 2
+              const isCeilingAsset = (a: any) => a.layer === 'ceiling' || a.file === 'chandelier.glb'
+              const rootAssets = data.assets.filter((a: any) => !(a.parentAssetId ?? a.parent_asset_id))
+              const childAssets = data.assets.filter((a: any) => !!(a.parentAssetId ?? a.parent_asset_id))
+              const parentSurfaceByAssetId: Record<string, { topY: number; centerX: number; centerZ: number }> = {}
               setLoadingAssets(data.assets.map((a: any) => a.id || a.file))
-              
-              data.assets.forEach(async (asset: any) => {
-                // Convert 2D planner coordinates to 3D world coordinates
-                // Planner (0,0) is Top-Left. ThreeJS (0,0) is Center.
-                // Asset x,y in planner is the top-left corner, so we calculate the center
-                const centerX2D = asset.x + (asset.width / 2)
-                const centerY2D = asset.y + (asset.depth / 2)
-                
-                // Convert from planner space (0 to roomWidth/Depth) to world space (-roomWidth/2 to +roomWidth/2)
-                // No negation needed: 2D y increases down (back to front in room) = 3D z increases forward
-                const worldX = centerX2D - (roomWidth / 2)
-                const worldZ = centerY2D - (roomDepth / 2)
 
-                // Create group for this asset - position at the center of the 2D rectangle
-                const group = new THREE.Group()
-                group.position.set(worldX, floorY, worldZ)
-                group.rotation.y = -asset.rotation * (Math.PI / 180)
-                
+              const loadOneAsset = (asset: any, worldX: number, worldY: number, worldZ: number, isRoot: boolean, onCeiling: boolean, parentId?: string): Promise<void> =>
+                new Promise((resolve, reject) => {
+                  const group = new THREE.Group()
+                  group.position.set(worldX, worldY, worldZ)
+                  group.rotation.y = -asset.rotation * (Math.PI / 180)
+
                 // Load the 3D model - handle both default assets and user assets
                 // User assets have paths like 'user_assets/1/user_1_xxx.glb'
                 // Default assets have paths like 'asset_table.glb'
@@ -436,28 +496,17 @@ const Space3DViewer = () => {
                   : `${API_BASE_URL}/static/models/${asset.file}`
                 const assetId = asset.id || asset.file
 
-                // Pre-check: verify the file is accessible before loading
-                try {
-                  const headCheck = await fetch(modelPath, { method: 'HEAD' })
-                  if (!headCheck.ok) {
-                    console.error(`[3D Viewer] File not accessible (${headCheck.status}): ${modelPath}`)
-                    setLoadingAssets((prev) => prev.filter(id => id !== assetId))
-                    return
-                  }
-                } catch (fetchErr) {
-                  console.error(`[3D Viewer] Network error checking file: ${modelPath}`, fetchErr)
-                  setLoadingAssets((prev) => prev.filter(id => id !== assetId))
-                  return
-                }
-
-                // Set a timeout - if the model doesn't load within 20 seconds, remove from loading state
-                const loadTimer = setTimeout(() => {
-                  console.warn(`[3D Viewer] Timeout loading asset: ${modelPath}`)
-                  setLoadingAssets((prev) => prev.filter(id => id !== assetId))
-                }, 20000)
-                
-                // Load from server (browser will cache automatically)
-                gltfLoader.load(
+                fetch(modelPath, { method: 'HEAD' })
+                  .then((headCheck) => {
+                    if (!headCheck.ok) {
+                      setLoadingAssets((prev) => prev.filter(id => id !== assetId))
+                      resolve()
+                      return
+                    }
+                    const loadTimer = setTimeout(() => {
+                      setLoadingAssets((prev) => prev.filter(id => id !== assetId))
+                    }, 20000)
+                    gltfLoader.load(
                   modelPath,
                   (gltf: any) => {
                     clearTimeout(loadTimer)
@@ -469,16 +518,24 @@ const Space3DViewer = () => {
                     const center = new THREE.Vector3()
                     box.getCenter(center)
 
-                    // STEP 1: Translate model so its BOTTOM is at y=0 BEFORE scaling
-                    // This ensures scaling happens around the bottom, not the center
-                    const initialMinY = box.min.y
-                    gltf.scene.position.y = -initialMinY
+                    // STEP 1: Floor assets BOTTOM at y=0; ceiling assets (chandelier) TOP at y=0 so it hangs down
+                    if (onCeiling) {
+                      gltf.scene.position.y = -box.max.y
+                    } else {
+                      gltf.scene.position.y = -box.min.y
+                    }
 
-                    // STEP 2: Scale model in X/Z to match planned footprint
-                    const scaleX = size.x > 0 ? asset.width / size.x : 1
-                    const scaleZ = size.z > 0 ? asset.depth / size.z : 1
-                    const scaleY = scaleX
-                    gltf.scene.scale.set(scaleX, scaleY, scaleZ)
+                    // STEP 2: Uniform scale from height - all axes scale proportionally
+                    const heightM = asset.height ?? asset.height_m
+                    const isFloorAsset = asset.layer === 'floor' || asset.file === 'rug.glb'
+                    const sizeBoost = onCeiling ? 1.4 : (isFloorAsset ? 1.5 : 1)
+                    let scale: number
+                    if (size.y > 0 && heightM != null && heightM > 0) {
+                      scale = (heightM / size.y) * sizeBoost
+                    } else {
+                      scale = (size.x > 0 ? asset.width / size.x : 1) * sizeBoost
+                    }
+                    gltf.scene.scale.set(scale, scale, scale)
 
                     // STEP 3: Center the model horizontally (X and Z only)
                     // Recompute center after scaling to ensure accurate centering
@@ -489,43 +546,101 @@ const Space3DViewer = () => {
                     gltf.scene.position.x = -scaledCenter.x
                     gltf.scene.position.z = -scaledCenter.z
 
-                    // STEP 4: Verify final bounds - bottom should be at y=0
+                    // STEP 4: Verify final bounds - floor: bottom at y=0; ceiling: top at y=0
                     const finalBox = new THREE.Box3().setFromObject(gltf.scene)
                     const minY = finalBox.min.y
+                    const maxY = finalBox.max.y
 
-                    if (Math.abs(minY) > 0.001) {
+                    if (onCeiling) {
+                      if (Math.abs(maxY) > 0.001) gltf.scene.position.y -= maxY
+                    } else if (Math.abs(minY) > 0.001) {
                       gltf.scene.position.y -= minY
                     }
 
                     const verifyBox = new THREE.Box3().setFromObject(gltf.scene)
-                    if (Math.abs(verifyBox.min.y) > 0.001) {
-                      gltf.scene.position.y -= verifyBox.min.y
+                    if (onCeiling) {
+                      if (Math.abs(verifyBox.max.y) > 0.001) gltf.scene.position.y -= verifyBox.max.y
+                    } else {
+                      if (Math.abs(verifyBox.min.y) > 0.001) gltf.scene.position.y -= verifyBox.min.y
                     }
 
-                    // Add scene to group
                     group.add(gltf.scene)
-                    group.position.y = floorY
-
+                    group.updateMatrixWorld(true)
                     const groupBox = new THREE.Box3().setFromObject(group)
-                    if (Math.abs(groupBox.min.y - floorY) > 0.001) {
-                      const adjustment = floorY - groupBox.min.y
-                      gltf.scene.position.y += adjustment
+                    if (onCeiling) {
+                      if (Math.abs(groupBox.max.y - worldY) > 0.001) {
+                        gltf.scene.position.y += worldY - groupBox.max.y
+                      }
+                    } else {
+                      if (Math.abs(groupBox.min.y - worldY) > 0.001) {
+                        gltf.scene.position.y += worldY - groupBox.min.y
+                      }
                     }
-
                     scene.add(group)
                     assetsRef.current.push(group)
-
-                    // Update loading state
+                    if (layoutDataRef.current) {
+                      layoutDataRef.current.assetPlacements.push({
+                        group,
+                        asset,
+                        isRoot,
+                        isCeiling: onCeiling,
+                        parentId
+                      })
+                    }
+                    if (isRoot) {
+                      group.updateMatrixWorld(true)
+                      const worldBox = new THREE.Box3().setFromObject(group)
+                      parentSurfaceByAssetId[assetId] = {
+                        topY: worldBox.max.y,
+                        centerX: (worldBox.min.x + worldBox.max.x) / 2,
+                        centerZ: (worldBox.min.z + worldBox.max.z) / 2
+                      }
+                    }
                     setLoadingAssets((prev) => prev.filter(id => id !== assetId))
+                    resolve()
                   },
                   undefined,
-                  (error: any) => {
+                  (err: any) => {
                     clearTimeout(loadTimer)
-                    console.error(`[3D Viewer] Failed to load ${asset.file}:`, error)
                     setLoadingAssets((prev) => prev.filter(id => id !== assetId))
+                    reject(err)
                   }
                 )
-              })
+                  })
+                  .catch(() => {
+                    setLoadingAssets((prev) => prev.filter(id => id !== assetId))
+                    resolve()
+                  })
+                })
+              
+              // Plane technique: same X/Z from 2D grid; Y = floor or ceiling. Floor assets slightly above floor plane so they sit on top (no z-fight).
+              const FLOOR_ASSET_OFFSET = 0.005
+              const getRootWorldPosition = (a: any) => {
+                const centerX2D = a.x + (a.width / 2)
+                const centerY2D = a.y + (a.depth / 2)
+                const worldY = isCeilingAsset(a) ? ceilingY : floorY + FLOOR_ASSET_OFFSET
+                return {
+                  worldX: centerX2D - (layoutW / 2),
+                  worldY,
+                  worldZ: centerY2D - (layoutD / 2)
+                }
+              }
+              await Promise.all(
+                rootAssets.map((asset: any) => {
+                  const { worldX, worldY, worldZ } = getRootWorldPosition(asset)
+                  return loadOneAsset(asset, worldX, worldY, worldZ, true, isCeilingAsset(asset), undefined)
+                })
+              ).catch(() => {})
+              for (const asset of childAssets) {
+                const parentId = String(asset.parentAssetId ?? asset.parent_asset_id ?? '')
+                const surface = parentSurfaceByAssetId[parentId]
+                const ox = asset.offsetX ?? asset.offset_x ?? 0
+                const oy = asset.offsetY ?? asset.offset_y ?? 0
+                const worldX = surface ? surface.centerX + ox : (asset.x + asset.width / 2) - layoutW / 2
+                const worldY = surface ? surface.topY : (isCeilingAsset(asset) ? ceilingY : floorY + FLOOR_ASSET_OFFSET)
+                const worldZ = surface ? surface.centerZ + oy : (asset.y + asset.depth / 2) - layoutD / 2
+                await loadOneAsset(asset, worldX, worldY, worldZ, false, isCeilingAsset(asset), parentId).catch(() => {})
+              }
             }
           } catch (error) {
             console.error('Error loading layout:', error)
@@ -571,6 +686,7 @@ const Space3DViewer = () => {
             }
           })
           assetsRef.current = []
+          layoutDataRef.current = null
           
           // Clean up room mesh
           if (roomMeshRef.current && sceneRef.current) {
@@ -581,6 +697,20 @@ const Space3DViewer = () => {
               mat.dispose()
             })
             materialsRef.current = []
+          }
+          // Clean up white floor plane
+          if (floorPlaneRef.current && sceneRef.current) {
+            sceneRef.current.remove(floorPlaneRef.current)
+            floorPlaneRef.current.geometry?.dispose()
+            floorPlaneRef.current.material?.dispose()
+            floorPlaneRef.current = null
+          }
+          // Clean up translucent ceiling plane
+          if (ceilingPlaneRef.current && sceneRef.current) {
+            sceneRef.current.remove(ceilingPlaneRef.current)
+            ceilingPlaneRef.current.geometry?.dispose()
+            ceilingPlaneRef.current.material?.dispose()
+            ceilingPlaneRef.current = null
           }
           
           // Clean up textures
@@ -610,17 +740,24 @@ const Space3DViewer = () => {
     loadThreeJS()
   }, [venueId])
 
-  // Separate effect for dimension changes - just update camera/room, don't rebuild scene
+  // Separate effect for dimension changes - update camera, room, floor/ceiling planes, and reposition assets
   useEffect(() => {
     if (!cameraRef.current || !roomMeshRef.current || !sceneRef.current) return
 
     const THREE = (window as any).THREE
     if (!THREE) return
 
+    const cw = dimensions.width
+    const cd = dimensions.depth
+    const ch = dimensions.height
+    const floorY = -ch / 2
+    const ceilingY = ch / 2
+    const FLOOR_ASSET_OFFSET = 0.005
+
     // Update camera position
-    cameraRef.current.position.set(0, dimensions.height / 2, dimensions.depth + 5)
+    cameraRef.current.position.set(0, ch / 2, cd + 5)
     if (controlsRef.current) {
-      controlsRef.current.target.set(0, dimensions.height / 2, 0)
+      controlsRef.current.target.set(0, ch / 2, 0)
     }
 
     // Remove old room mesh
@@ -643,8 +780,8 @@ const Space3DViewer = () => {
         color: texturesRef.current.wall_west ? 0xffffff : 0x999999,
         side: THREE.BackSide 
       }),
-      new THREE.MeshBasicMaterial({ color: 0xaaaaaa, side: THREE.BackSide }),
-      new THREE.MeshBasicMaterial({ color: 0x444444, side: THREE.BackSide }),
+      new THREE.MeshBasicMaterial({ color: 0xeeeeee, transparent: true, opacity: 0.18, side: THREE.BackSide }), // Ceiling – translucent
+      new THREE.MeshBasicMaterial({ color: 0xc6b39e, side: THREE.BackSide }), // Floor: beige
       new THREE.MeshBasicMaterial({ 
         map: texturesRef.current.wall_south || undefined,
         color: texturesRef.current.wall_south ? 0xffffff : 0x999999,
@@ -658,10 +795,98 @@ const Space3DViewer = () => {
     ]
     materialsRef.current = currentMaterials
 
-    const geometry = new THREE.BoxGeometry(dimensions.width, dimensions.height, dimensions.depth)
+    const geometry = new THREE.BoxGeometry(cw, ch, cd)
     const roomMesh = new THREE.Mesh(geometry, currentMaterials)
     roomMeshRef.current = roomMesh
     sceneRef.current.add(roomMesh)
+
+    // Recreate floor and ceiling planes with new dimensions (keeps floor/ceiling consistent with room)
+    if (floorPlaneRef.current) {
+      sceneRef.current.remove(floorPlaneRef.current)
+      floorPlaneRef.current.geometry?.dispose()
+      floorPlaneRef.current.material?.dispose()
+      floorPlaneRef.current = null
+    }
+    const floorGeo = new THREE.PlaneGeometry(cw, cd)
+    const floorMat = new THREE.MeshBasicMaterial({ color: 0xc6b39e, side: THREE.DoubleSide })
+    const floorPlane = new THREE.Mesh(floorGeo, floorMat)
+    floorPlane.rotation.x = -Math.PI / 2
+    floorPlane.position.y = floorY + 0.002
+    floorPlane.renderOrder = 1
+    sceneRef.current.add(floorPlane)
+    floorPlaneRef.current = floorPlane
+
+    if (ceilingPlaneRef.current) {
+      sceneRef.current.remove(ceilingPlaneRef.current)
+      ceilingPlaneRef.current.geometry?.dispose()
+      ceilingPlaneRef.current.material?.dispose()
+      ceilingPlaneRef.current = null
+    }
+    const ceilingGeo = new THREE.PlaneGeometry(cw, cd)
+    const ceilingMat = new THREE.MeshBasicMaterial({
+      color: 0xeeeeee,
+      transparent: true,
+      opacity: 0.22,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    })
+    const ceilingPlane = new THREE.Mesh(ceilingGeo, ceilingMat)
+    ceilingPlane.rotation.x = -Math.PI / 2
+    ceilingPlane.position.y = ceilingY - 0.002
+    ceilingPlane.renderOrder = 0
+    sceneRef.current.add(ceilingPlane)
+    ceilingPlaneRef.current = ceilingPlane
+
+    // Reposition all assets using normalized layout coords so meter scale stays in sync
+    const layout = layoutDataRef.current
+    if (layout && layout.assetPlacements.length > 0) {
+      const lw = layout.layoutDimensions.width
+      const ld = layout.layoutDimensions.depth
+      const parentSurfaceByAssetId: Record<string, { topY: number; centerX: number; centerZ: number }> = {}
+
+      for (const { group, asset, isRoot, isCeiling: onCeiling } of layout.assetPlacements) {
+        let worldX: number
+        let worldY: number
+        let worldZ: number
+
+        if (isRoot) {
+          const normX = lw > 0 ? (asset.x + (asset.width || 0) / 2) / lw : 0.5
+          const normZ = ld > 0 ? (asset.y + (asset.depth || 0) / 2) / ld : 0.5
+          worldX = normX * cw - cw / 2
+          worldZ = normZ * cd - cd / 2
+          worldY = onCeiling ? ceilingY : floorY + FLOOR_ASSET_OFFSET
+        } else {
+          const parentId = String(asset.parentAssetId ?? asset.parent_asset_id ?? '')
+          const surface = parentSurfaceByAssetId[parentId]
+          const ox = asset.offsetX ?? asset.offset_x ?? 0
+          const oy = asset.offsetY ?? asset.offset_y ?? 0
+          if (surface) {
+            worldX = surface.centerX + ox
+            worldY = surface.topY
+            worldZ = surface.centerZ + oy
+          } else {
+            const normX = lw > 0 ? (asset.x + (asset.width || 0) / 2) / lw : 0.5
+            const normZ = ld > 0 ? (asset.y + (asset.depth || 0) / 2) / ld : 0.5
+            worldX = normX * cw - cw / 2
+            worldZ = normZ * cd - cd / 2
+            worldY = onCeiling ? ceilingY : floorY + FLOOR_ASSET_OFFSET
+          }
+        }
+
+        group.position.set(worldX, worldY, worldZ)
+
+        if (isRoot) {
+          group.updateMatrixWorld(true)
+          const worldBox = new THREE.Box3().setFromObject(group)
+          const assetId = asset.id || asset.file
+          parentSurfaceByAssetId[assetId] = {
+            topY: worldBox.max.y,
+            centerX: (worldBox.min.x + worldBox.max.x) / 2,
+            centerZ: (worldBox.min.z + worldBox.max.z) / 2
+          }
+        }
+      }
+    }
   }, [dimensions])
 
   return (

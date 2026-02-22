@@ -107,7 +107,11 @@ def update_asset_status(
     thumbnail_url: Optional[str] = None,
     file_size_bytes: Optional[int] = None,
     error: Optional[str] = None,
-    metadata: Optional[Dict] = None
+    metadata: Optional[Dict] = None,
+    asset_layer: Optional[str] = None,
+    width_m: Optional[float] = None,
+    depth_m: Optional[float] = None,
+    height_m: Optional[float] = None
 ) -> bool:
     """
     Update asset generation status and related fields.
@@ -154,6 +158,22 @@ def update_asset_status(
             updates.append("metadata = %s")
             params.append(json.dumps(metadata))
         
+        if asset_layer is not None:
+            updates.append("asset_layer = %s")
+            params.append(asset_layer)
+        
+        if width_m is not None:
+            updates.append("width_m = %s")
+            params.append(width_m)
+        
+        if depth_m is not None:
+            updates.append("depth_m = %s")
+            params.append(depth_m)
+        
+        if height_m is not None:
+            updates.append("height_m = %s")
+            params.append(height_m)
+        
         params.append(asset_id)
         
         query = f"""
@@ -187,6 +207,10 @@ def get_user_assets(user_id: int, include_failed: bool = False) -> List[Dict]:
             query = """
                 SELECT asset_id, user_id, asset_name, file_path, source_image_path,
                        thumbnail_url, file_size_bytes, generation_status, generation_error,
+                       COALESCE(asset_layer, 'surface') as asset_layer,
+                       COALESCE(width_m, 1.0) as width_m,
+                       COALESCE(depth_m, 1.0) as depth_m,
+                       COALESCE(height_m, 1.0) as height_m,
                        metadata, created_at, updated_at
                 FROM user_assets
                 WHERE user_id = %s
@@ -196,6 +220,10 @@ def get_user_assets(user_id: int, include_failed: bool = False) -> List[Dict]:
             query = """
                 SELECT asset_id, user_id, asset_name, file_path, source_image_path,
                        thumbnail_url, file_size_bytes, generation_status, generation_error,
+                       COALESCE(asset_layer, 'surface') as asset_layer,
+                       COALESCE(width_m, 1.0) as width_m,
+                       COALESCE(depth_m, 1.0) as depth_m,
+                       COALESCE(height_m, 1.0) as height_m,
                        metadata, created_at, updated_at
                 FROM user_assets
                 WHERE user_id = %s AND generation_status = 'completed'
@@ -266,6 +294,50 @@ def get_asset_by_id(asset_id: int) -> Optional[Dict]:
     except Exception as e:
         logger.error(f"Error getting asset by ID: {e}")
         return None
+
+
+def update_asset_properties(
+    asset_id: int,
+    user_id: int,
+    asset_layer: Optional[str] = None,
+    width_m: Optional[float] = None,
+    depth_m: Optional[float] = None,
+    height_m: Optional[float] = None
+) -> bool:
+    """
+    Update asset layer and dimensions (verifies ownership).
+    
+    Returns:
+        True if updated, False otherwise
+    """
+    try:
+        updates = []
+        params = []
+        if asset_layer is not None:
+            if asset_layer not in ('floor', 'surface', 'ceiling'):
+                asset_layer = 'surface'
+            updates.append("asset_layer = %s")
+            params.append(asset_layer)
+        if width_m is not None:
+            updates.append("width_m = %s")
+            params.append(width_m)
+        if depth_m is not None:
+            updates.append("depth_m = %s")
+            params.append(depth_m)
+        if height_m is not None:
+            updates.append("height_m = %s")
+            params.append(height_m)
+        if not updates:
+            return True
+        params.extend([asset_id, user_id])
+        execute_query(
+            f"UPDATE user_assets SET {', '.join(updates)} WHERE asset_id = %s AND user_id = %s",
+            tuple(params)
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error updating asset properties: {e}")
+        return False
 
 
 def delete_user_asset(asset_id: int, user_id: int) -> bool:

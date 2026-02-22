@@ -20,6 +20,10 @@ interface Asset {
   file_size_bytes: number
   generation_status: 'pending' | 'processing' | 'completed' | 'failed'
   generation_error: string | null
+  asset_layer?: 'floor' | 'surface' | 'ceiling'
+  width_m?: number
+  depth_m?: number
+  height_m?: number
   created_at: string
 }
 
@@ -33,6 +37,8 @@ const AssetLibrary = () => {
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState('')
   const [assetName, setAssetName] = useState('')
+  const [assetLayer, setAssetLayer] = useState<'floor' | 'surface' | 'ceiling'>('surface')
+  const [heightM, setHeightM] = useState(1)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -40,6 +46,10 @@ const AssetLibrary = () => {
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null)
   const [viewerLoading, setViewerLoading] = useState(false)
   const [viewerError, setViewerError] = useState<string | null>(null)
+  const [editingAsset, setEditingAsset] = useState<Asset | null>(null)
+  const [editHeight, setEditHeight] = useState(1)
+  const [editLayer, setEditLayer] = useState<'floor' | 'surface' | 'ceiling'>('surface')
+  const [savingEdit, setSavingEdit] = useState(false)
 
   const API_BASE_URL = getApiBaseUrl()
 
@@ -125,6 +135,8 @@ const AssetLibrary = () => {
       const formData = new FormData()
       formData.append('file', selectedFile)
       formData.append('asset_name', assetName || 'Untitled Asset')
+      formData.append('asset_layer', assetLayer)
+      formData.append('height_m', String(heightM))
 
       setUploadProgress('Generating 3D model... This may take 30-60 seconds.')
       
@@ -151,6 +163,8 @@ const AssetLibrary = () => {
         setSelectedFile(null)
         setPreviewUrl(null)
         setAssetName('')
+        setAssetLayer('surface')
+        setHeightM(1)
         setShowUploadModal(false)
         if (fileInputRef.current) {
           fileInputRef.current.value = ''
@@ -275,6 +289,42 @@ const AssetLibrary = () => {
     setPreviewAsset(asset)
     setViewerError(null)
     setViewerLoading(true)
+  }
+
+  const openEditAsset = (asset: Asset) => {
+    setEditingAsset(asset)
+    setEditHeight(asset.height_m ?? 1)
+    setEditLayer((asset.asset_layer as 'floor' | 'surface' | 'ceiling') ?? 'surface')
+  }
+
+  const handleSaveAssetEdit = async () => {
+    if (!editingAsset) return
+    setSavingEdit(true)
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch(`${API_BASE_URL}/api/v1/assets/detail/${editingAsset.asset_id}`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          height_m: editHeight,
+          asset_layer: editLayer
+        })
+      })
+      if (res.ok) {
+        await fetchAssets()
+        setEditingAsset(null)
+      } else {
+        const data = await res.json()
+        setError(data.error || 'Failed to update')
+      }
+    } catch (err) {
+      setError('Failed to update asset')
+    } finally {
+      setSavingEdit(false)
+    }
   }
 
   // Close 3D preview
@@ -545,6 +595,35 @@ const AssetLibrary = () => {
                 </div>
 
                 <div className="form-group">
+                  <label>Category (Layer)</label>
+                  <select
+                    value={assetLayer}
+                    onChange={(e) => setAssetLayer(e.target.value as 'floor' | 'surface' | 'ceiling')}
+                    disabled={uploading}
+                  >
+                    <option value="floor">Floor (rugs, carpets)</option>
+                    <option value="surface">Surface (furniture, objects)</option>
+                    <option value="ceiling">Ceiling (lights, chandeliers)</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label>Height (meters)</label>
+                  <input
+                    type="number"
+                    min="0.1"
+                    step="0.1"
+                    value={heightM}
+                    onChange={(e) => setHeightM(parseFloat(e.target.value) || 1)}
+                    disabled={uploading}
+                    placeholder="e.g. 0.75 for a chair"
+                  />
+                  <p style={{ fontSize: '0.85em', color: '#888', marginTop: 4 }}>
+                    Enter the real-world height. Width and depth will scale proportionally.
+                  </p>
+                </div>
+
+                <div className="form-group">
                   <label>Photo</label>
                   <div 
                     className={`upload-area ${previewUrl ? 'has-preview' : ''}`}
@@ -595,6 +674,41 @@ const AssetLibrary = () => {
                 >
                   {uploading ? 'Generating...' : 'Generate 3D Model'}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Edit dimensions modal */}
+        {editingAsset && (
+          <div className="modal-overlay" onClick={() => !savingEdit && setEditingAsset(null)}>
+            <div className="upload-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 400 }}>
+              <div className="modal-header">
+                <h2>Edit dimensions: {editingAsset.asset_name}</h2>
+                {!savingEdit && (
+                  <button className="close-button" onClick={() => setEditingAsset(null)}>×</button>
+                )}
+              </div>
+              <div className="modal-body">
+                <p className="modal-description">Set the real-world height in meters. All axes scale proportionally.</p>
+                <div className="form-group">
+                  <label>Height (meters)</label>
+                  <input type="number" min="0.1" step="0.1" value={editHeight} onChange={(e) => setEditHeight(parseFloat(e.target.value) || 1)} />
+                </div>
+                <div className="form-group">
+                  <label>Layer</label>
+                  <select value={editLayer} onChange={(e) => setEditLayer(e.target.value as 'floor' | 'surface' | 'ceiling')}>
+                    <option value="floor">Floor</option>
+                    <option value="surface">Surface</option>
+                    <option value="ceiling">Ceiling</option>
+                  </select>
+                </div>
+                <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
+                  <button className="generate-button" onClick={handleSaveAssetEdit} disabled={savingEdit}>
+                    {savingEdit ? 'Saving...' : 'Save'}
+                  </button>
+                  <button onClick={() => setEditingAsset(null)} disabled={savingEdit}>Cancel</button>
+                </div>
               </div>
             </div>
           </div>
@@ -657,17 +771,26 @@ const AssetLibrary = () => {
                 </div>
                 <div className="asset-actions">
                   {asset.generation_status === 'completed' && (
-                    <a 
-                      href={`${API_BASE_URL}${asset.file_url}`} 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="action-button download"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      Download GLB
-                    </a>
+                    <>
+                      <button
+                        className="action-button"
+                        onClick={(e) => { e.stopPropagation(); openEditAsset(asset) }}
+                        title="Edit dimensions"
+                      >
+                        Edit size
+                      </button>
+                      <a
+                        href={`${API_BASE_URL}${asset.file_url}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="action-button download"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        Download
+                      </a>
+                    </>
                   )}
-                  <button 
+                  <button
                     className="action-button delete"
                     onClick={(e) => { e.stopPropagation(); handleDeleteAsset(asset.asset_id) }}
                   >

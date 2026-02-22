@@ -1,4 +1,16 @@
-# Multi-stage build for VenueVision
+# =============================================================================
+# VenueVision - Event Space Visualizer
+# =============================================================================
+#
+# To run (recommended): use docker-compose so the database starts first:
+#
+#   docker-compose up --build
+#
+# Then open http://localhost:5000/mobile
+#
+# Optional: set JWT_SECRET in the environment or in a .env file for production.
+# =============================================================================
+
 # Stage 1: Build React frontend
 FROM node:20-alpine AS frontend-build
 
@@ -23,7 +35,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install system dependencies
+# System deps: build (for some pip wheels), PostgreSQL, OpenCV runtime libs
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
@@ -32,31 +44,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
   && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Python dependencies (all app + healthcheck deps are in requirements.txt)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend code
+# Backend code
 COPY server ./server
 
-# Copy built frontend from previous stage
+# Built frontend from stage 1
 COPY --from=frontend-build /app/dist ./dist
 
-# Create required directories
+# Create required directories (uploads, user assets, models, temp, migrations)
 RUN mkdir -p ./server/static/uploads \
     && mkdir -p ./server/static/user_assets \
     && mkdir -p ./server/static/models \
     && mkdir -p ./server/temp/instantmesh \
     && mkdir -p ./server/migrations
 
-# Expose port
 EXPOSE 5000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD python -c "import requests; requests.get('http://localhost:5000/api/v1/health')" || exit 1
+# Health check (requires 'requests' in requirements.txt)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD python -c "import requests; requests.get('http://localhost:5000/api/v1/health', timeout=5)" || exit 1
 
-# Start application
+# Default: start app. Use docker-compose so DB is up and setup_database.py runs first.
 CMD ["python", "server/app.py"]
 
 

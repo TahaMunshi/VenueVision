@@ -18,7 +18,8 @@ from services.asset_service import (
     get_user_assets,
     get_asset_by_id,
     delete_user_asset,
-    get_user_asset_count
+    get_user_asset_count,
+    update_asset_properties
 )
 
 logger = logging.getLogger(__name__)
@@ -51,8 +52,14 @@ def generate_asset(current_user):
             "error": "No image file provided"
         }), 400
     
-    # Get optional asset name
+    # Get optional asset name and layer
     asset_name = request.form.get("asset_name", "").strip()
+    asset_layer = request.form.get("asset_layer", "surface").strip().lower()
+    if asset_layer not in ("floor", "surface", "ceiling"):
+        asset_layer = "surface"
+    height_m = request.form.get("height_m", type=float) or 1.0
+    # Width and depth derive from height (uniform scaling - proportions preserved)
+    width_m = depth_m = height_m
     if not asset_name:
         # Generate default name from filename
         original_filename = file.filename or "asset"
@@ -112,14 +119,18 @@ def generate_asset(current_user):
                 "asset_id": asset_id
             }), 500
         
-        # Update asset with generated file info
+        # Update asset with generated file info and layer/dimensions
         update_asset_status(
             asset_id,
             'completed',
             file_path=result['glb_path'],
             source_image_path=result.get('source_image_path'),
             thumbnail_url=result.get('thumbnail_url'),
-            file_size_bytes=result.get('file_size_bytes')
+            file_size_bytes=result.get('file_size_bytes'),
+            asset_layer=asset_layer,
+            width_m=width_m,
+            depth_m=depth_m,
+            height_m=height_m
         )
         
         # Get the complete asset record
@@ -169,18 +180,24 @@ def get_my_assets(current_user):
     
     assets = get_user_assets(user_id, include_failed=include_failed)
     
-    # Transform assets for response
+    # Transform assets for response (include file_path for 3D loading in planner/viewer)
     response_assets = []
     for asset in assets:
+        fp = asset.get('file_path') or ''
         response_assets.append({
             "asset_id": asset['asset_id'],
             "asset_name": asset['asset_name'],
-            "file_url": f"/static/{asset['file_path']}" if asset.get('file_path') else None,
+            "file_url": f"/static/{fp}" if fp else None,
+            "file_path": fp,
             "thumbnail_url": f"/static/{asset['thumbnail_url']}" if asset.get('thumbnail_url') else None,
             "source_image_url": f"/static/{asset['source_image_path']}" if asset.get('source_image_path') else None,
             "file_size_bytes": asset.get('file_size_bytes'),
             "generation_status": asset['generation_status'],
             "generation_error": asset.get('generation_error'),
+            "asset_layer": asset.get('asset_layer') or 'surface',
+            "width_m": asset.get('width_m') if asset.get('width_m') is not None else 1.0,
+            "depth_m": asset.get('depth_m') if asset.get('depth_m') is not None else 1.0,
+            "height_m": asset.get('height_m') if asset.get('height_m') is not None else 1.0,
             "metadata": asset.get('metadata', {}),
             "created_at": asset.get('created_at'),
             "updated_at": asset.get('updated_at')
@@ -288,6 +305,27 @@ def get_single_asset(current_user, asset_id):
             "updated_at": asset.get('updated_at')
         }
     }), 200
+
+
+@assets_bp.route("/assets/detail/<int:asset_id>", methods=["PATCH"])
+@token_required
+def update_asset(current_user, asset_id):
+    """
+    Update asset layer, width, depth, or height.
+    Expects JSON: { "asset_layer": "floor"|"surface"|"ceiling", "width_m": 1.5, "depth_m": 1.2, "height_m": 0.8 }
+    """
+    user_id = current_user['user_id']
+    data = request.get_json() or {}
+    layer = data.get('asset_layer')
+    width_m = data.get('width_m')
+    depth_m = data.get('depth_m')
+    height_m = data.get('height_m')
+    if layer is None and width_m is None and depth_m is None and height_m is None:
+        return jsonify({"status": "error", "error": "No update fields provided"}), 400
+    success = update_asset_properties(asset_id, user_id, asset_layer=layer, width_m=width_m, depth_m=depth_m, height_m=height_m)
+    if not success:
+        return jsonify({"status": "error", "error": "Asset not found or update failed"}), 404
+    return jsonify({"status": "success", "message": "Asset updated", "asset_id": asset_id}), 200
 
 
 @assets_bp.route("/assets/detail/<int:asset_id>", methods=["DELETE"])
