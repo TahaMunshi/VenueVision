@@ -9,6 +9,7 @@
 
 .auth-card {
   background: white;
+  color-scheme: light;
   border-radius: 16px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
   padding: 40px;
@@ -69,6 +70,9 @@
   font-size: 15px;
   border: 2px solid #e2e8f0;
   border-radius: 8px;
+  color: #1a202c;
+  background: #ffffff;
+  caret-color: #1a202c;
   transition: all 0.2s;
   outline: none;
 }
@@ -80,6 +84,13 @@
 
 .form-input::placeholder {
   color: #cbd5e0;
+}
+
+.form-input:-webkit-autofill,
+.form-input:-webkit-autofill:hover,
+.form-input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #1a202c;
+  box-shadow: 0 0 0px 1000px #ffffff inset;
 }
 
 .submit-button {

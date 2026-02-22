@@ -10,6 +10,141 @@ declare global {
   }
 }
 
+type LayoutMaterials = {
+  floor: { type: string; color: string }
+  ceiling: { type: string; color?: string }
+}
+
+const DEFAULT_LAYOUT_MATERIALS: LayoutMaterials = {
+  floor: { type: 'oak_wood', color: '#c6b39e' },
+  ceiling: { type: 'flat_white', color: '#f5f5f5' }
+}
+
+const parseColorHex = (value: unknown, fallback: string): string => {
+  if (typeof value !== 'string') return fallback
+  const trimmed = value.trim()
+  if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) return trimmed
+  if (/^[0-9a-fA-F]{6}$/.test(trimmed)) return `#${trimmed}`
+  return fallback
+}
+
+const getLayoutMaterials = (layoutData: any): LayoutMaterials => {
+  const raw = layoutData?.materials || {}
+  return {
+    floor: {
+      type: String(raw.floor?.type || DEFAULT_LAYOUT_MATERIALS.floor.type),
+      color: parseColorHex(raw.floor?.color, DEFAULT_LAYOUT_MATERIALS.floor.color)
+    },
+    ceiling: {
+      type: String(raw.ceiling?.type || DEFAULT_LAYOUT_MATERIALS.ceiling.type),
+      color: parseColorHex(raw.ceiling?.color, DEFAULT_LAYOUT_MATERIALS.ceiling.color || '#f5f5f5')
+    }
+  }
+}
+
+const createProceduralTexture = (THREE: any, preset: string, tintHex: string, size = 1024) => {
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
+
+  const rand = (min: number, max: number) => Math.random() * (max - min) + min
+  const drawNoiseDots = (count: number, alpha: number, color = '#000000') => {
+    ctx.fillStyle = color
+    ctx.globalAlpha = alpha
+    for (let i = 0; i < count; i++) {
+      const x = rand(0, size)
+      const y = rand(0, size)
+      const r = rand(0.5, 1.6)
+      ctx.beginPath()
+      ctx.arc(x, y, r, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.globalAlpha = 1
+  }
+
+  if (preset === 'oak_wood') {
+    ctx.fillStyle = tintHex || '#b88a5a'
+    ctx.fillRect(0, 0, size, size)
+    const plankH = Math.round(size / 10)
+    for (let y = 0; y < size; y += plankH) {
+      ctx.fillStyle = y / plankH % 2 === 0 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.07)'
+      ctx.fillRect(0, y, size, plankH)
+      ctx.strokeStyle = 'rgba(60,35,15,0.25)'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(0, y)
+      ctx.lineTo(size, y)
+      ctx.stroke()
+      for (let g = 0; g < 8; g++) {
+        ctx.strokeStyle = 'rgba(80,45,20,0.12)'
+        ctx.lineWidth = rand(1, 2)
+        const gy = y + rand(4, plankH - 4)
+        ctx.beginPath()
+        ctx.moveTo(0, gy)
+        ctx.bezierCurveTo(size * 0.3, gy + rand(-4, 4), size * 0.7, gy + rand(-4, 4), size, gy)
+        ctx.stroke()
+      }
+    }
+  } else if (preset === 'light_marble') {
+    // Slightly darker marble to avoid washed-out floors in the viewer.
+    ctx.fillStyle = '#cfcfcf'
+    ctx.fillRect(0, 0, size, size)
+    drawNoiseDots(12000, 0.03)
+    for (let i = 0; i < 24; i++) {
+      const x1 = rand(0, size)
+      const y1 = rand(0, size)
+      const x2 = x1 + rand(-size * 0.5, size * 0.5)
+      const y2 = y1 + rand(-size * 0.5, size * 0.5)
+      ctx.strokeStyle = i % 3 === 0 ? 'rgba(95,95,95,0.28)' : 'rgba(70,70,70,0.18)'
+      ctx.lineWidth = rand(1.5, 3)
+      ctx.beginPath()
+      ctx.moveTo(x1, y1)
+      ctx.quadraticCurveTo((x1 + x2) / 2 + rand(-30, 30), (y1 + y2) / 2 + rand(-30, 30), x2, y2)
+      ctx.stroke()
+    }
+  } else if (preset === 'concrete') {
+    ctx.fillStyle = '#b9b9b9'
+    ctx.fillRect(0, 0, size, size)
+    drawNoiseDots(17000, 0.08, '#5f5f5f')
+    drawNoiseDots(9000, 0.05, '#e7e7e7')
+  } else if (preset === 'wood_slats') {
+    ctx.fillStyle = '#e6dccd'
+    ctx.fillRect(0, 0, size, size)
+    const slatW = Math.round(size / 18)
+    for (let x = 0; x < size; x += slatW) {
+      ctx.fillStyle = x / slatW % 2 === 0 ? 'rgba(142,102,66,0.38)' : 'rgba(122,82,46,0.48)'
+      ctx.fillRect(x, 0, slatW - 2, size)
+      ctx.fillStyle = 'rgba(0,0,0,0.1)'
+      ctx.fillRect(x + slatW - 2, 0, 2, size)
+    }
+  } else if (preset === 'coffered') {
+    ctx.fillStyle = '#f5f5f5'
+    ctx.fillRect(0, 0, size, size)
+    const cell = Math.round(size / 6)
+    for (let y = 0; y < size; y += cell) {
+      for (let x = 0; x < size; x += cell) {
+        ctx.fillStyle = 'rgba(255,255,255,0.85)'
+        ctx.fillRect(x + 8, y + 8, cell - 16, cell - 16)
+        ctx.strokeStyle = 'rgba(180,180,180,0.75)'
+        ctx.lineWidth = 4
+        ctx.strokeRect(x + 8, y + 8, cell - 16, cell - 16)
+      }
+    }
+  } else {
+    ctx.fillStyle = tintHex || '#f5f5f5'
+    ctx.fillRect(0, 0, size, size)
+  }
+
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.wrapS = THREE.RepeatWrapping
+  texture.wrapT = THREE.RepeatWrapping
+  texture.anisotropy = 4
+  texture.needsUpdate = true
+  return texture
+}
+
 const Space3DViewer = () => {
   const { venueId } = useParams<{ venueId: string }>()
   const navigate = useNavigate()
@@ -28,6 +163,7 @@ const Space3DViewer = () => {
   const roomMeshRef = useRef<any>(null)
   const floorPlaneRef = useRef<any>(null)
   const ceilingPlaneRef = useRef<any>(null)
+  const materialSettingsRef = useRef<LayoutMaterials>(DEFAULT_LAYOUT_MATERIALS)
   const materialsRef = useRef<any[]>([])
   const texturesRef = useRef<{ [key: string]: any }>({})
   const assetsRef = useRef<any[]>([])
@@ -130,11 +266,15 @@ const Space3DViewer = () => {
         controlsRef.current = controls
 
         // Lights
-        const ambientLight = new THREE.AmbientLight(0xffffff, 1.5)
+        const ambientLight = new THREE.AmbientLight(0xfff3f3, 1.2)
         scene.add(ambientLight)
-        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8)
+        const dirLight = new THREE.DirectionalLight(0xfff6f0, 0.7)
         dirLight.position.set(10, 20, 15)
         scene.add(dirLight)
+        // Subtle red accent tint to match requested mood lighting.
+        const redAccentLight = new THREE.PointLight(0xff6a6a, 0.22, 80)
+        redAccentLight.position.set(-6, dimensions.height * 0.7, 6)
+        scene.add(redAccentLight)
 
         // Calculate actual floor level (room box is centered, so floor is at -height/2)
         const floorY = -dimensions.height / 2
@@ -149,7 +289,17 @@ const Space3DViewer = () => {
             floorPlaneRef.current = null
           }
           const floorGeo = new THREE.PlaneGeometry(dimensions.width, dimensions.depth)
-          const floorMat = new THREE.MeshBasicMaterial({ color: 0xc6b39e, side: THREE.DoubleSide })
+          const floorTexture = createProceduralTexture(
+            THREE,
+            materialSettingsRef.current.floor.type,
+            materialSettingsRef.current.floor.color
+          )
+          if (floorTexture) floorTexture.repeat.set(4, 4)
+          const floorMat = new THREE.MeshBasicMaterial({
+            map: floorTexture || undefined,
+            color: floorTexture ? 0xffffff : parseInt(materialSettingsRef.current.floor.color.replace('#', ''), 16),
+            side: THREE.DoubleSide
+          })
           const plane = new THREE.Mesh(floorGeo, floorMat)
           plane.rotation.x = -Math.PI / 2
           plane.position.y = floorY + 0.002
@@ -167,12 +317,16 @@ const Space3DViewer = () => {
             ceilingPlaneRef.current = null
           }
           const ceilingGeo = new THREE.PlaneGeometry(dimensions.width, dimensions.depth)
+          const ceilingTexture = createProceduralTexture(
+            THREE,
+            materialSettingsRef.current.ceiling.type,
+            materialSettingsRef.current.ceiling.color || '#f5f5f5'
+          )
+          if (ceilingTexture) ceilingTexture.repeat.set(3, 3)
           const ceilingMat = new THREE.MeshBasicMaterial({
-            color: 0xeeeeee,
-            transparent: true,
-            opacity: 0.22,
-            side: THREE.DoubleSide,
-            depthWrite: false
+            map: ceilingTexture || undefined,
+            color: ceilingTexture ? 0xffffff : parseInt((materialSettingsRef.current.ceiling.color || '#f5f5f5').replace('#', ''), 16),
+            side: THREE.DoubleSide
           })
           const plane = new THREE.Mesh(ceilingGeo, ceilingMat)
           plane.rotation.x = -Math.PI / 2
@@ -326,16 +480,16 @@ const Space3DViewer = () => {
             })
           }
 
-          // Get floor color from layout materials if available
-          let floorColor = 0x444444
-          if (layoutData?.materials?.floor?.color) {
-            const colorStr = layoutData.materials.floor.color
-            if (colorStr.startsWith('#')) {
-              floorColor = parseInt(colorStr.substring(1), 16)
-            } else if (typeof colorStr === 'string') {
-              floorColor = parseInt(colorStr, 16)
-            }
-          }
+          const resolvedMaterials = getLayoutMaterials(layoutData)
+          materialSettingsRef.current = resolvedMaterials
+          const floorTexture = createProceduralTexture(THREE, resolvedMaterials.floor.type, resolvedMaterials.floor.color)
+          const ceilingTexture = createProceduralTexture(
+            THREE,
+            resolvedMaterials.ceiling.type,
+            resolvedMaterials.ceiling.color || '#f5f5f5'
+          )
+          if (floorTexture) floorTexture.repeat.set(4, 4)
+          if (ceilingTexture) ceilingTexture.repeat.set(3, 3)
 
           const currentMaterials = [
             new THREE.MeshBasicMaterial({ 
@@ -348,8 +502,16 @@ const Space3DViewer = () => {
               color: textures.wall_west ? 0xffffff : 0x999999,
               side: THREE.BackSide 
             }), // Left wall (-X)
-            new THREE.MeshBasicMaterial({ color: 0xeeeeee, transparent: true, opacity: 0.18, side: THREE.BackSide }), // Top (Ceiling) – very translucent so chandelier is visible
-            new THREE.MeshBasicMaterial({ color: floorColor, side: THREE.BackSide }), // Bottom (Floor) - beige
+            new THREE.MeshBasicMaterial({
+              map: ceilingTexture || undefined,
+              color: ceilingTexture ? 0xffffff : parseInt((resolvedMaterials.ceiling.color || '#f5f5f5').replace('#', ''), 16),
+              side: THREE.BackSide
+            }), // Top (Ceiling)
+            new THREE.MeshBasicMaterial({
+              map: floorTexture || undefined,
+              color: floorTexture ? 0xffffff : parseInt(resolvedMaterials.floor.color.replace('#', ''), 16),
+              side: THREE.BackSide
+            }), // Bottom (Floor)
             new THREE.MeshBasicMaterial({ 
               map: textures.wall_south || undefined,
               color: textures.wall_south ? 0xffffff : 0x999999,
@@ -443,6 +605,7 @@ const Space3DViewer = () => {
             
             // Store layout data - it will be used once textures are loaded
             layoutData = data
+            materialSettingsRef.current = getLayoutMaterials(data)
 
             if (data.status === 'success' && data.assets && data.assets.length > 0) {
               // Update room dimensions if provided
@@ -525,16 +688,39 @@ const Space3DViewer = () => {
                       gltf.scene.position.y = -box.min.y
                     }
 
-                    // STEP 2: Uniform scale from height - all axes scale proportionally
-                    const heightM = asset.height ?? asset.height_m
-                    const isFloorAsset = asset.layer === 'floor' || asset.file === 'rug.glb'
-                    const sizeBoost = onCeiling ? 1.4 : (isFloorAsset ? 1.5 : 1)
-                    let scale: number
-                    if (size.y > 0 && heightM != null && heightM > 0) {
-                      scale = (heightM / size.y) * sizeBoost
-                    } else {
-                      scale = (size.x > 0 ? asset.width / size.x : 1) * sizeBoost
+                    // STEP 2: Uniform scale with type-aware sizing for better visual proportions.
+                    const assetType = String(asset.type ?? asset.asset_type ?? '').toLowerCase()
+                    const isRug = assetType === 'rug' || asset.file === 'rug.glb'
+                    const isVase = assetType === 'vase' || asset.file === 'blue_vase.glb'
+                    const isChandelier = assetType === 'chandelier' || asset.file === 'chandelier.glb'
+                    const isFloorAsset = asset.layer === 'floor' || isRug
+
+                    const targetWidth = Number(asset.width ?? asset.width_m ?? 0)
+                    const targetDepth = Number(asset.depth ?? asset.depth_m ?? 0)
+                    const targetHeight = Number(asset.height ?? asset.height_m ?? 0)
+
+                    const scaleX = size.x > 0 && targetWidth > 0 ? targetWidth / size.x : null
+                    const scaleY = size.y > 0 && targetHeight > 0 ? targetHeight / size.y : null
+                    const scaleZ = size.z > 0 && targetDepth > 0 ? targetDepth / size.z : null
+
+                    let scale = 1
+                    if (isFloorAsset && (scaleX != null || scaleZ != null)) {
+                      // Rugs should match floor footprint.
+                      scale = Math.min(scaleX ?? Number.POSITIVE_INFINITY, scaleZ ?? Number.POSITIVE_INFINITY)
+                    } else if (scaleY != null) {
+                      scale = scaleY
+                    } else if (scaleX != null || scaleZ != null) {
+                      // Fallback when height is unavailable.
+                      const candidates = [scaleX, scaleZ].filter((v): v is number => v != null)
+                      scale = candidates.reduce((sum, v) => sum + v, 0) / candidates.length
                     }
+
+                    // Targeted boosts for assets currently rendering too small.
+                    let sizeBoost = onCeiling ? 1.4 : (isFloorAsset ? 1.2 : 1)
+                    if (isRug) sizeBoost *= 2.0
+                    if (isVase) sizeBoost *= 2.2
+                    if (isChandelier) sizeBoost *= 2.0
+                    scale *= sizeBoost
                     gltf.scene.scale.set(scale, scale, scale)
 
                     // STEP 3: Center the model horizontally (X and Z only)
@@ -768,6 +954,16 @@ const Space3DViewer = () => {
       mat.dispose()
     })
 
+    const activeMaterials = materialSettingsRef.current
+    const floorTexture = createProceduralTexture(THREE, activeMaterials.floor.type, activeMaterials.floor.color)
+    const ceilingTexture = createProceduralTexture(
+      THREE,
+      activeMaterials.ceiling.type,
+      activeMaterials.ceiling.color || '#f5f5f5'
+    )
+    if (floorTexture) floorTexture.repeat.set(4, 4)
+    if (ceilingTexture) ceilingTexture.repeat.set(3, 3)
+
     // Create new room with updated dimensions
     const currentMaterials = [
       new THREE.MeshBasicMaterial({ 
@@ -780,8 +976,16 @@ const Space3DViewer = () => {
         color: texturesRef.current.wall_west ? 0xffffff : 0x999999,
         side: THREE.BackSide 
       }),
-      new THREE.MeshBasicMaterial({ color: 0xeeeeee, transparent: true, opacity: 0.18, side: THREE.BackSide }), // Ceiling – translucent
-      new THREE.MeshBasicMaterial({ color: 0xc6b39e, side: THREE.BackSide }), // Floor: beige
+      new THREE.MeshBasicMaterial({
+        map: ceilingTexture || undefined,
+        color: ceilingTexture ? 0xffffff : parseInt((activeMaterials.ceiling.color || '#f5f5f5').replace('#', ''), 16),
+        side: THREE.BackSide
+      }),
+      new THREE.MeshBasicMaterial({
+        map: floorTexture || undefined,
+        color: floorTexture ? 0xffffff : parseInt(activeMaterials.floor.color.replace('#', ''), 16),
+        side: THREE.BackSide
+      }),
       new THREE.MeshBasicMaterial({ 
         map: texturesRef.current.wall_south || undefined,
         color: texturesRef.current.wall_south ? 0xffffff : 0x999999,
@@ -808,7 +1012,13 @@ const Space3DViewer = () => {
       floorPlaneRef.current = null
     }
     const floorGeo = new THREE.PlaneGeometry(cw, cd)
-    const floorMat = new THREE.MeshBasicMaterial({ color: 0xc6b39e, side: THREE.DoubleSide })
+    const floorPlaneTexture = createProceduralTexture(THREE, activeMaterials.floor.type, activeMaterials.floor.color)
+    if (floorPlaneTexture) floorPlaneTexture.repeat.set(4, 4)
+    const floorMat = new THREE.MeshBasicMaterial({
+      map: floorPlaneTexture || undefined,
+      color: floorPlaneTexture ? 0xffffff : parseInt(activeMaterials.floor.color.replace('#', ''), 16),
+      side: THREE.DoubleSide
+    })
     const floorPlane = new THREE.Mesh(floorGeo, floorMat)
     floorPlane.rotation.x = -Math.PI / 2
     floorPlane.position.y = floorY + 0.002
@@ -823,12 +1033,16 @@ const Space3DViewer = () => {
       ceilingPlaneRef.current = null
     }
     const ceilingGeo = new THREE.PlaneGeometry(cw, cd)
+    const ceilingPlaneTexture = createProceduralTexture(
+      THREE,
+      activeMaterials.ceiling.type,
+      activeMaterials.ceiling.color || '#f5f5f5'
+    )
+    if (ceilingPlaneTexture) ceilingPlaneTexture.repeat.set(3, 3)
     const ceilingMat = new THREE.MeshBasicMaterial({
-      color: 0xeeeeee,
-      transparent: true,
-      opacity: 0.22,
-      side: THREE.DoubleSide,
-      depthWrite: false
+      map: ceilingPlaneTexture || undefined,
+      color: ceilingPlaneTexture ? 0xffffff : parseInt((activeMaterials.ceiling.color || '#f5f5f5').replace('#', ''), 16),
+      side: THREE.DoubleSide
     })
     const ceilingPlane = new THREE.Mesh(ceilingGeo, ceilingMat)
     ceilingPlane.rotation.x = -Math.PI / 2

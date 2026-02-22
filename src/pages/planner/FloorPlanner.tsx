@@ -100,8 +100,8 @@ const FloorPlanner = () => {
   const [venueName, setVenueName] = useState<string>('')
   const [roomDimensions, setRoomDimensions] = useState({ width: 20, height: 8, depth: 20 })
   const [materials, setMaterials] = useState<{ floor: { type: string; color: string }; ceiling: { type: string; color?: string } }>({
-    floor: { type: 'carpet', color: '#c6b39e' },
-    ceiling: { type: 'plain', color: '#f5f5f5' }
+    floor: { type: 'oak_wood', color: '#c6b39e' },
+    ceiling: { type: 'flat_white', color: '#f5f5f5' }
   })
   // Start with no walls by default; user draws or adds rectangle manually
   const defaultWalls: WallSpec[] = []
@@ -1122,9 +1122,9 @@ const FloorPlanner = () => {
                 value={materials.floor.type}
                 onChange={(e) => setMaterials({ ...materials, floor: { ...materials.floor, type: e.target.value } })}
               >
-                <option value="carpet">Carpet</option>
-                <option value="wood">Wood</option>
-                <option value="tile">Tile</option>
+                <option value="oak_wood">Oak Wood</option>
+                <option value="light_marble">Light Marble</option>
+                <option value="concrete">Concrete</option>
               </select>
             </label>
             <label className="form-row">
@@ -1141,8 +1141,9 @@ const FloorPlanner = () => {
                 value={materials.ceiling.type}
                 onChange={(e) => setMaterials({ ...materials, ceiling: { ...materials.ceiling, type: e.target.value } })}
               >
-                <option value="plain">Plain</option>
-                <option value="acoustic">Acoustic</option>
+                <option value="flat_white">Flat White</option>
+                <option value="wood_slats">Wood Slats</option>
+                <option value="coffered">Coffered Panels</option>
               </select>
             </label>
             <div className="walls-editor">
