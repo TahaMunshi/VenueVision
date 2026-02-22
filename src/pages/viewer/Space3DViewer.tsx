@@ -88,17 +88,18 @@ const createProceduralTexture = (THREE: any, preset: string, tintHex: string, si
       }
     }
   } else if (preset === 'light_marble') {
-    // Slightly darker marble to avoid washed-out floors in the viewer.
-    ctx.fillStyle = '#cfcfcf'
+    // Black marble with gold veining.
+    ctx.fillStyle = '#131313'
     ctx.fillRect(0, 0, size, size)
-    drawNoiseDots(12000, 0.03)
-    for (let i = 0; i < 24; i++) {
+    drawNoiseDots(14000, 0.05, '#2a2a2a')
+    drawNoiseDots(5000, 0.03, '#8f7a3b')
+    for (let i = 0; i < 30; i++) {
       const x1 = rand(0, size)
       const y1 = rand(0, size)
       const x2 = x1 + rand(-size * 0.5, size * 0.5)
       const y2 = y1 + rand(-size * 0.5, size * 0.5)
-      ctx.strokeStyle = i % 3 === 0 ? 'rgba(95,95,95,0.28)' : 'rgba(70,70,70,0.18)'
-      ctx.lineWidth = rand(1.5, 3)
+      ctx.strokeStyle = i % 3 === 0 ? 'rgba(214,175,86,0.42)' : 'rgba(172,135,53,0.28)'
+      ctx.lineWidth = rand(1.2, 3.6)
       ctx.beginPath()
       ctx.moveTo(x1, y1)
       ctx.quadraticCurveTo((x1 + x2) / 2 + rand(-30, 30), (y1 + y2) / 2 + rand(-30, 30), x2, y2)
