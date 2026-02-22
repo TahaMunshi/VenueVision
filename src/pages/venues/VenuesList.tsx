@@ -21,6 +21,8 @@ const VenuesList = () => {
   const [loading, setLoading] = useState(true)
   const [user, setUser] = useState<any>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
 
   const API_BASE_URL = getApiBaseUrl()
 
@@ -83,6 +85,34 @@ const VenuesList = () => {
 
   const handleVenueClick = (venueIdentifier: string) => {
     navigate(`/venue/${venueIdentifier}`)
+  }
+
+  const handleDeleteVenue = async (e: React.MouseEvent, venue: Venue) => {
+    e.stopPropagation()
+    if (!window.confirm(`Delete "${venue.venue_name}"? This will remove the venue and all its data (walls, images, layout). This cannot be undone.`)) {
+      return
+    }
+    setDeletingId(venue.venue_identifier)
+    setMessage(null)
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch(`${API_BASE_URL}/api/v1/venues/${venue.venue_identifier}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      const data = await response.json().catch(() => ({}))
+      if (response.ok) {
+        setMessage({ text: 'Venue deleted successfully.', type: 'success' })
+        fetchVenues()
+      } else {
+        setMessage({ text: data.error || 'Failed to delete venue', type: 'error' })
+      }
+    } catch (err) {
+      console.error('Delete venue error:', err)
+      setMessage({ text: 'Failed to delete venue.', type: 'error' })
+    } finally {
+      setDeletingId(null)
+    }
   }
 
   const getUserInitials = () => {
@@ -176,7 +206,18 @@ const VenuesList = () => {
                       Created {new Date(venue.created_at).toLocaleDateString()}
                     </p>
                   </div>
-                  <div className="venue-icon">🏢</div>
+                  <div className="venue-card-header-actions">
+                    <button
+                      type="button"
+                      className="venue-delete-button"
+                      onClick={(e) => handleDeleteVenue(e, venue)}
+                      disabled={deletingId === venue.venue_identifier}
+                      title="Delete venue"
+                    >
+                      {deletingId === venue.venue_identifier ? '…' : '🗑️'}
+                    </button>
+                    <div className="venue-icon">🏢</div>
+                  </div>
                 </div>
                 <div className="venue-card-stats">
                   <div className="venue-stat">
@@ -194,6 +235,11 @@ const VenuesList = () => {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+        {message && (
+          <div className={`venues-message ${message.type}`}>
+            {message.text}
           </div>
         )}
       </div>

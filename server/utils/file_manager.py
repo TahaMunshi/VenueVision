@@ -160,5 +160,28 @@ def reset_uploads(venue_id: Optional[str] = None) -> None:
     shutil.rmtree(target, ignore_errors=True)
 
 
+def delete_venue_wall_images(venue_id: str) -> int:
+    """
+    Delete all wall image directories for a venue (wall_north, wall_south, etc.).
+    Keeps layout.json, floor_plan.jpg, venue.glb in the venue root.
+    Returns number of directories removed.
+    """
+    import shutil
+    safe_venue = str(venue_id).strip().replace(" ", "_")
+    venue_path = os.path.join(UPLOAD_ROOT, safe_venue)
+    if not os.path.isdir(venue_path):
+        return 0
+    venue_path = os.path.abspath(venue_path)
+    if not venue_path.startswith(os.path.abspath(UPLOAD_ROOT)):
+        raise ValueError("Invalid venue path")
+    removed = 0
+    for name in os.listdir(venue_path):
+        item_path = os.path.join(venue_path, name)
+        if os.path.isdir(item_path):
+            shutil.rmtree(item_path, ignore_errors=True)
+            removed += 1
+    return removed
+
+
 
 

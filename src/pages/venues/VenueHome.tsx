@@ -19,6 +19,8 @@ const VenueHome = () => {
   const navigate = useNavigate()
   const [venue, setVenue] = useState<Venue | null>(null)
   const [loading, setLoading] = useState(true)
+  const [deletingWallImages, setDeletingWallImages] = useState(false)
+  const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
 
   const API_BASE_URL = getApiBaseUrl()
 
@@ -73,6 +75,31 @@ const VenueHome = () => {
 
   const handleViewer = () => {
     navigate(`/view/${venueId}`)
+  }
+
+  const handleDeleteAllWallImages = async () => {
+    if (!venueId || !window.confirm('Delete all wall images for this venue? Layout and floor plan will be kept. You can capture walls again later.')) {
+      return
+    }
+    setDeletingWallImages(true)
+    setMessage(null)
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/wall-images`, {
+        method: 'DELETE'
+      })
+      const data = await response.json().catch(() => ({}))
+      if (response.ok) {
+        setMessage({ text: data.message || 'All wall images deleted.', type: 'success' })
+        fetchVenue()
+      } else {
+        setMessage({ text: data.message || data.error || 'Failed to delete wall images', type: 'error' })
+      }
+    } catch (err) {
+      console.error('Delete wall images error:', err)
+      setMessage({ text: 'Failed to delete wall images.', type: 'error' })
+    } finally {
+      setDeletingWallImages(false)
+    }
   }
 
   if (loading) {
@@ -187,6 +214,24 @@ const VenueHome = () => {
             </div>
 
           </div>
+        </div>
+
+        {/* Venue actions / Danger zone */}
+        <div className="venue-actions-section">
+          <h2 className="section-title">Venue actions</h2>
+          <div className="venue-actions-buttons">
+            <button
+              type="button"
+              className="delete-wall-images-button"
+              onClick={handleDeleteAllWallImages}
+              disabled={deletingWallImages}
+            >
+              {deletingWallImages ? 'Deleting…' : 'Delete all wall images'}
+            </button>
+          </div>
+          {message && (
+            <div className={`venue-home-message ${message.type}`}>{message.text}</div>
+          )}
         </div>
       </div>
     </div>

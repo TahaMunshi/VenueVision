@@ -7,6 +7,7 @@ import logging
 
 from database import execute_query, execute_insert
 from middleware.auth_middleware import token_required
+from utils.file_manager import reset_uploads
 
 logger = logging.getLogger(__name__)
 
@@ -251,11 +252,18 @@ def delete_venue(current_user, venue_identifier: str):
         if venue['user_id'] != current_user['user_id']:
             return jsonify({'error': 'Not authorized to delete this venue'}), 403
         
-        # Delete venue (cascade will handle walls, assets, etc.)
+        # Delete venue from DB (cascade will handle walls, assets, floor plans, etc.)
         execute_query(
             "DELETE FROM venues WHERE venue_id = %s",
             (venue['venue_id'],)
         )
+        
+        # Delete all uploads for this venue (wall images, layout, floor plan, generated GLB)
+        try:
+            reset_uploads(venue_identifier)
+            logger.info(f"Deleted uploads folder for venue: {venue_identifier}")
+        except Exception as e:
+            logger.warning(f"Could not delete uploads for venue {venue_identifier}: {e}")
         
         logger.info(f"Venue deleted: {venue_identifier} by user {current_user['username']}")
         

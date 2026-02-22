@@ -186,6 +186,58 @@
   color: #667eea;
 }
 
+.venue-actions-section {
+  margin-top: 48px;
+  padding-top: 24px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.venue-actions-buttons {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.delete-wall-images-button {
+  padding: 10px 20px;
+  background: #fff;
+  border: 2px solid #e2e8f0;
+  border-radius: 8px;
+  color: #c53030;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.delete-wall-images-button:hover:not(:disabled) {
+  background: #fed7d7;
+  border-color: #fc8181;
+}
+
+.delete-wall-images-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.venue-home-message {
+  margin-top: 12px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.venue-home-message.success {
+  background: #c6f6d5;
+  color: #276749;
+}
+
+.venue-home-message.error {
+  background: #fed7d7;
+  color: #c53030;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .venue-home-header {

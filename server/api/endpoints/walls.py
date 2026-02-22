@@ -5,7 +5,7 @@ from typing import Dict, List
 from flask import Blueprint, jsonify, request
 
 from services.floor_plan_service import get_current_target_wall, get_venue_walls
-from utils.file_manager import get_floor_plan_path, UPLOAD_ROOT
+from utils.file_manager import get_floor_plan_path, UPLOAD_ROOT, delete_venue_wall_images
 from .common import completed_walls_for_venue, next_wall
 
 logger = logging.getLogger(__name__)
@@ -155,6 +155,26 @@ def reset_wall_image(venue_id: str, wall_id: str):
     
     except Exception as e:
         logger.error(f"Error resetting wall image: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@walls_bp.route("/venue/<venue_id>/wall-images", methods=["DELETE"])
+def delete_all_wall_images(venue_id: str):
+    """
+    Delete all wall image folders for this venue.
+    Keeps layout.json, floor_plan.jpg, and generated GLB in the venue root.
+    """
+    try:
+        removed = delete_venue_wall_images(venue_id)
+        return jsonify({
+            "status": "success",
+            "message": f"Deleted {removed} wall image folder(s).",
+            "removed_count": removed
+        }), 200
+    except ValueError as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error deleting wall images for {venue_id}: {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
