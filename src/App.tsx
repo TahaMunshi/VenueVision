@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import './App.css'
 import MobileCapture from './pages/guided/MobileCapture'
+import SegmentReview from './pages/guided/SegmentReview'
 import WallUpload from './pages/guided/WallUpload'
 import Space3DViewer from './pages/viewer/Space3DViewer'
 import WallSelector from './pages/guided/WallSelector'
@@ -29,6 +30,7 @@ function App() {
       {/* Mobile routes - these are relative to /mobile basename */}
       <Route path="/" element={<Navigate to="/venues" replace />} />
       <Route path="/capture/:venueId" element={<MobileCapture />} />
+      <Route path="/review/:venueId/:wallId" element={<SegmentReview />} />
       <Route path="/upload/:venueId/:wallId" element={<WallUpload />} />
       <Route path="/editor/:venueId" element={<WallSelector />} />
       <Route path="/edit/:venueId/:wallId" element={<WallEditor />} />

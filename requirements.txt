@@ -8,6 +8,8 @@ psycopg2-binary==2.9.9
 # Image/3D processing
 numpy==1.26.4
 opencv-python==4.10.0.84
+# opencv-contrib-python includes Stitcher; use it instead of opencv-python if Stitcher is needed:
+# pip install opencv-contrib-python  (replaces opencv-python, do not install both)
 pygltflib==1.16.2
 
 # Auth

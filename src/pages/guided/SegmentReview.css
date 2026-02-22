@@ -1,0 +1,240 @@
+.segment-review-container {
+  min-height: 100vh;
+  background: #1a1a2e;
+  color: #eee;
+  padding: 16px;
+}
+
+.segment-review-header {
+  margin-bottom: 24px;
+}
+
+.segment-review-header h1 {
+  font-size: 1.5rem;
+  margin: 8px 0 4px;
+}
+
+.segment-review-subtitle {
+  font-size: 0.9rem;
+  color: #aaa;
+  margin: 0;
+}
+
+.back-btn {
+  padding: 8px 16px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.back-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.segment-review-loading,
+.segment-review-error {
+  padding: 24px;
+  text-align: center;
+  font-size: 1rem;
+}
+
+.segment-review-error {
+  color: #f66;
+  background: rgba(255, 0, 0, 0.1);
+  border-radius: 8px;
+  margin-top: 16px;
+}
+
+.segments-preview {
+  margin-bottom: 24px;
+}
+
+.segments-row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.segment-cell {
+  flex: 0 0 auto;
+  max-width: 280px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.segment-label {
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 8px;
+}
+
+.segment-image-wrap {
+  position: relative;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #000;
+}
+
+.segment-thumb {
+  width: 100%;
+  height: auto;
+  display: block;
+  max-height: 200px;
+  object-fit: contain;
+}
+
+.crop-indicator {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(255, 200, 0, 0.25);
+  border-right: 2px solid #fc0;
+  pointer-events: none;
+}
+
+.segment-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.rot-btn {
+  padding: 4px 10px;
+  background: rgba(100, 150, 255, 0.3);
+  border: 1px solid rgba(100, 150, 255, 0.6);
+  border-radius: 6px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.rot-btn:hover {
+  background: rgba(100, 150, 255, 0.5);
+}
+
+.rot-value {
+  font-size: 12px;
+  color: #aaa;
+  min-width: 32px;
+}
+
+.overlap-controls {
+  margin-bottom: 24px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+}
+
+.overlap-controls h3 {
+  font-size: 1rem;
+  margin: 0 0 16px;
+  color: #ccc;
+}
+
+.overlap-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.overlap-slider-row label {
+  flex: 0 0 70px;
+  font-size: 14px;
+}
+
+.overlap-slider-row input[type="range"] {
+  flex: 1;
+  min-width: 120px;
+}
+
+.overlap-slider-row span {
+  flex: 0 0 50px;
+  font-size: 12px;
+  color: #aaa;
+}
+
+.stitch-actions {
+  margin-bottom: 24px;
+}
+
+.stitch-btn {
+  padding: 12px 24px;
+  background: linear-gradient(135deg, #4CAF50, #45a049);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.stitch-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.stitch-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.stitched-result {
+  margin-top: 24px;
+  padding: 20px;
+  background: rgba(0, 255, 0, 0.05);
+  border-radius: 12px;
+  border: 1px solid rgba(0, 255, 0, 0.2);
+}
+
+.stitched-result h3 {
+  margin: 0 0 16px;
+  font-size: 1.1rem;
+}
+
+.stitched-preview {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  display: block;
+}
+
+.stitched-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.action-btn {
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+}
+
+.action-btn.primary {
+  background: #2196F3;
+  color: white;
+}
+
+.action-btn.primary:hover {
+  filter: brightness(1.1);
+}
+
+.action-btn.secondary {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.action-btn.secondary:hover {
+  background: rgba(255, 255, 255, 0.25);
+}

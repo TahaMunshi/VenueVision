@@ -32,6 +32,7 @@ type ProgressState = {
   walls: WallSegment[]
   floor_plan_url?: string | null
   wall_regions?: WallRegion[]
+  capture_requirements?: Record<string, { required_segments: number; captured_segments: number }>
 }
 
 const MobileCapture = () => {
@@ -156,7 +157,8 @@ const MobileCapture = () => {
         is_complete: data.is_complete,
         walls: wallsWithCoords,
         floor_plan_url: data.floor_plan_url || null,
-        wall_regions: data.wall_regions || []
+        wall_regions: data.wall_regions || [],
+        capture_requirements: data.capture_requirements || {}
       }
       
       setProgress(dataWithCoords)
@@ -456,7 +458,17 @@ const MobileCapture = () => {
         return
       }
 
-      setToast({ message: 'Great! Now turn right ->', type: 'success' })
+      const capturedSegments = Number(payload?.captured_segments ?? 0)
+      const requiredSegments = Number(payload?.required_segments ?? 1)
+      const wallComplete = Boolean(payload?.wall_capture_complete)
+      if (!wallComplete && requiredSegments > 1) {
+        setToast({
+          message: `Captured ${capturedSegments}/${requiredSegments} for this wall. Take another photo of the same wall.`,
+          type: 'success',
+        })
+      } else {
+        setToast({ message: 'Great capture! Move to the next wall.', type: 'success' })
+      }
       setShowCheck(true)
       setTimeout(() => setShowCheck(false), 1200)
 
@@ -572,6 +584,9 @@ const MobileCapture = () => {
     ? Math.min(completedCount + 1, totalWalls)
     : completedCount + 1
   const bannerTargetName = currentWall?.name ?? 'the next wall'
+  const currentReq = currentWall?.id ? progress?.capture_requirements?.[currentWall.id] : undefined
+  const currentRequiredSegments = currentReq?.required_segments ?? 1
+  const currentCapturedSegments = currentReq?.captured_segments ?? 0
 
   const captureUrl = `${API_BASE_URL}/mobile/${venueId ?? ''}`
   const shareUrl = (import.meta.env as any).VITE_NGROK_URL || captureUrl
@@ -825,6 +840,23 @@ const MobileCapture = () => {
                 <div style={{ textAlign: 'center' }}>
                   <p className="capture-banner-text">✓ All walls captured! Perfect job!</p>
                   <button
+                    onClick={() => navigate(`/editor/${targetVenue}`)}
+                    style={{
+                      marginTop: '10px',
+                      marginRight: '8px',
+                      padding: '0.75rem 1.2rem',
+                      background: '#FF9800',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      fontWeight: 'bold',
+                      fontSize: '0.9rem',
+                    }}
+                  >
+                    Edit All Walls
+                  </button>
+                  <button
                     onClick={() => {
                       navigate(`/view/${targetVenue}`)
                     }}
@@ -850,8 +882,30 @@ const MobileCapture = () => {
                     Step {stepNumber}/{totalWalls || '—'}:{' '}
                     <strong>Photograph {bannerTargetName}</strong>
                   </p>
+                  {currentRequiredSegments > 1 && (
+                    <div style={{ fontSize: '0.85rem', marginTop: '6px', opacity: 0.9 }}>
+                      {`Photo ${Math.min(currentCapturedSegments + 1, currentRequiredSegments)}/${currentRequiredSegments} for this wall`}
+                    </div>
+                  )}
                   <div style={{ fontSize: '0.85rem', marginTop: '6px', opacity: 0.8 }}>
                     {completedCount ? `${completedCount} captured, ${(progress?.total_walls || 0) - completedCount} remaining` : 'No walls captured yet'}
+                  </div>
+                  <div style={{ marginTop: '8px' }}>
+                    <button
+                      onClick={() => navigate(`/editor/${targetVenue}`)}
+                      style={{
+                        padding: '0.55rem 0.9rem',
+                        background: 'rgba(255, 152, 0, 0.9)',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '8px',
+                        cursor: 'pointer',
+                        fontWeight: 700,
+                        fontSize: '0.82rem'
+                      }}
+                    >
+                      Edit Captured Walls
+                    </button>
                   </div>
                 </>
               )}

@@ -1,28 +1,39 @@
 import os
+import re
 from typing import Dict, List, Optional
 
 from utils.file_manager import UPLOAD_ROOT
 
+SEQ_PATTERN = re.compile(r"^seq_(\d+)\.jpg$", re.IGNORECASE)
 
-def completed_walls_for_venue(venue_id: str, walls: List[str]) -> List[str]:
-    """Return wall ids that already have at least one uploaded capture."""
+
+def required_photos_for_wall(wall: Dict) -> int:
+    """
+    Fallback mode: force single photo per wall for reliability.
+    """
+    return 1
+
+
+def captured_segments_for_wall(venue_id: str, wall_id: str) -> int:
+    """Count captured wall segments using seq_XX.jpg files only."""
+    wall_dir = os.path.join(UPLOAD_ROOT, str(venue_id), str(wall_id))
+    if not os.path.isdir(wall_dir):
+        return 0
+    try:
+        with os.scandir(wall_dir) as entries:
+            return sum(1 for entry in entries if entry.is_file() and SEQ_PATTERN.match(entry.name))
+    except FileNotFoundError:
+        return 0
+
+
+def completed_walls_for_venue(venue_id: str, walls: List[Dict]) -> List[str]:
+    """Return wall ids that already reached required segment count."""
     completed: List[str] = []
-    venue_dir = os.path.join(UPLOAD_ROOT, str(venue_id))
-    if not os.path.isdir(venue_dir):
-        return completed
-
     for wall in walls:
-        wall_dir = os.path.join(venue_dir, wall)
-        if not os.path.isdir(wall_dir):
-            continue
-        try:
-            with os.scandir(wall_dir) as entries:
-                has_files = any(entry.is_file() for entry in entries)
-        except FileNotFoundError:
-            has_files = False
-
-        if has_files:
-            completed.append(wall)
+        required = required_photos_for_wall(wall)
+        captured = captured_segments_for_wall(venue_id, wall["id"])
+        if captured >= required:
+            completed.append(wall["id"])
 
     return completed
 

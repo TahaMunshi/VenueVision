@@ -53,7 +53,7 @@ const WallSelector = () => {
   }, [venueId, API_BASE_URL])
 
   const handleWallSelect = (wallId: string) => {
-    navigate(`/upload/${venueId}/${wallId}`)
+    navigate(`/edit/${venueId}/${wallId}`)
   }
 
   const handleView3D = () => {
@@ -75,8 +75,8 @@ const WallSelector = () => {
         <button onClick={() => navigate(`/venue/${venueId}`)} className="back-button">
           ← Back to Venue
         </button>
-        <h1>Wall Editor</h1>
-        <p>Venue: {venueId}</p>
+        <h1>Wall Corner Editor</h1>
+        <p>Venue: {venueId} - adjust each wall texture manually</p>
       </div>
 
       <div className="wall-selector-content">
@@ -89,13 +89,6 @@ const WallSelector = () => {
                 onClick={() => handleWallSelect(wall.id)}
                 className="wall-button"
                 style={{ marginBottom: '0.5rem' }}
-              >
-                Edit Wall
-              </button>
-              <button
-                onClick={() => navigate(`/edit/${venueId}/${wall.id}`)}
-                className="wall-button"
-                style={{ background: '#FF9800' }}
               >
                 Adjust Corners
               </button>

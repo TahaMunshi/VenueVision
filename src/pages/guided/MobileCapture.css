@@ -328,6 +328,17 @@
   box-shadow: 0 4px 12px rgba(30, 136, 229, 0.3);
 }
 
+.review-wall-btn.stitch {
+  background: linear-gradient(135deg, #43a047, #2e7d32);
+  color: #fff;
+  border: 1px solid rgba(67, 160, 71, 0.5);
+}
+
+.review-wall-btn.stitch:hover {
+  background: linear-gradient(135deg, #388e3c, #2e7d32);
+  box-shadow: 0 4px 12px rgba(67, 160, 71, 0.3);
+}
+
 .review-wall-btn.adjust {
   background: linear-gradient(135deg, #fb8c00, #e65100);
   color: #fff;

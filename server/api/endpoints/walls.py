@@ -1,12 +1,14 @@
 import logging
 import os
+import time
 from typing import Dict, List
 
 from flask import Blueprint, jsonify, request
 
-from services.floor_plan_service import get_current_target_wall, get_venue_walls
+from services.floor_plan_service import get_venue_walls
+from services.wall_stitch import get_overlap_estimates, get_segment_images, stitch_segments
 from utils.file_manager import get_floor_plan_path, UPLOAD_ROOT, delete_venue_wall_images
-from .common import completed_walls_for_venue, next_wall
+from .common import completed_walls_for_venue, next_wall, required_photos_for_wall, captured_segments_for_wall
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +24,8 @@ def get_venue_progress(venue_id: str):
     """
 
     walls_metadata = get_venue_walls(venue_id)
-    wall_ids = [wall["id"] for wall in walls_metadata]
-    completed = completed_walls_for_venue(venue_id, wall_ids)
-    current_target = get_current_target_wall(venue_id)
+    completed = completed_walls_for_venue(venue_id, walls_metadata)
+    current_target = next_wall(walls_metadata, completed)
 
     floor_plan_path = get_floor_plan_path(venue_id)
     floor_plan_url = None
@@ -57,6 +58,13 @@ def get_venue_progress(venue_id: str):
         "walls": walls_metadata,
         "floor_plan_url": floor_plan_url,
         "wall_regions": wall_regions,
+        "capture_requirements": {
+            wall["id"]: {
+                "required_segments": required_photos_for_wall(wall),
+                "captured_segments": captured_segments_for_wall(venue_id, wall["id"]),
+            }
+            for wall in walls_metadata
+        },
     }
 
     return jsonify(response), 200
@@ -103,7 +111,8 @@ def get_wall_images(venue_id: str):
             else:
                 processed_path = os.path.join(wall_dir, f"processed_{wall_id}.jpg")
                 if os.path.exists(processed_path):
-                    wall_images[wall_id] = f"/static/uploads/{venue_id}/{wall_id}/processed_{wall_id}.jpg"
+                    ts = int(os.path.getmtime(processed_path)) if os.path.exists(processed_path) else int(time.time())
+                    wall_images[wall_id] = f"/static/uploads/{venue_id}/{wall_id}/processed_{wall_id}.jpg?v={ts}"
                 else:
                     seq_files = []
                     try:
@@ -119,7 +128,9 @@ def get_wall_images(venue_id: str):
                             reverse=True,
                         )
                         latest_file = seq_files[0]
-                        wall_images[wall_id] = f"/static/uploads/{venue_id}/{wall_id}/{latest_file}"
+                        seq_path = os.path.join(wall_dir, latest_file)
+                        ts = int(os.path.getmtime(seq_path)) if os.path.exists(seq_path) else int(time.time())
+                        wall_images[wall_id] = f"/static/uploads/{venue_id}/{wall_id}/{latest_file}?v={ts}"
 
         return jsonify({"status": "success", "wall_images": wall_images}), 200
 
@@ -155,6 +166,46 @@ def reset_wall_image(venue_id: str, wall_id: str):
     
     except Exception as e:
         logger.error(f"Error resetting wall image: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@walls_bp.route("/venue/<venue_id>/wall/<wall_id>/segments", methods=["GET"])
+def get_wall_segments(venue_id: str, wall_id: str):
+    """
+    Get segment image URLs for a wall (seq_01, seq_02, ...).
+    Query param overlaps=true includes overlap estimates for stitching preview.
+    """
+    try:
+        segments = get_segment_images(venue_id, wall_id)
+        if not segments:
+            return jsonify({"status": "error", "message": "No segment images found", "segments": []}), 404
+
+        resp = {"status": "success", "segments": segments}
+        if request.args.get("overlaps", "false").lower() == "true":
+            resp["overlap_estimates"] = get_overlap_estimates(venue_id, wall_id)
+        return jsonify(resp), 200
+    except Exception as e:
+        logger.error(f"Error getting segments for {venue_id}/{wall_id}: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@walls_bp.route("/venue/<venue_id>/wall/<wall_id>/stitch", methods=["POST"])
+def stitch_wall(venue_id: str, wall_id: str):
+    """
+    Stitch all segment images for a wall into one seamless image.
+    Body: optional { "rotations": [0, r2, ...], "manual_overlaps": [o1, o2, ...] }
+    """
+    try:
+        data = request.get_json() or {}
+        rotations = data.get("rotations")
+        manual_overlaps = data.get("manual_overlaps")
+
+        success, result = stitch_segments(venue_id, wall_id, rotations=rotations, manual_overlaps=manual_overlaps)
+        if not success:
+            return jsonify({"status": "error", "message": result}), 400
+        return jsonify({"status": "success", "image_url": f"{result}?v={int(time.time() * 1000)}"}), 200
+    except Exception as e:
+        logger.error(f"Error stitching {venue_id}/{wall_id}: {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 

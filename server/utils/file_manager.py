@@ -31,7 +31,8 @@ def save_wall_photo(
 ) -> str:
     """
     Save a wall photo following the structure:
-        server/static/uploads/{venue_id}/{wall_id}/seq_XX.jpg
+        server/static/uploads/{venue_id}/{wall_id}/seq_01.jpg
+    In fallback mode, only one source image is kept per wall.
 
     Args:
         venue_id: Identifier for the venue.
@@ -55,8 +56,15 @@ def save_wall_photo(
     target_dir = os.path.join(UPLOAD_ROOT, safe_venue, safe_wall)
     _ensure_directory(target_dir)
 
-    seq_num = _next_sequence_number(target_dir)
-    filename = f"seq_{seq_num:02d}.jpg"
+    # Fallback mode: keep exactly one capture image per wall.
+    # Clear previous seq_*.jpg files before saving the new one.
+    for name in os.listdir(target_dir):
+        if SEQ_PATTERN.match(name):
+            try:
+                os.remove(os.path.join(target_dir, name))
+            except OSError:
+                pass
+    filename = "seq_01.jpg"
     file_path = os.path.join(target_dir, filename)
 
     # Normalize file_obj to a readable stream
@@ -76,6 +84,14 @@ def save_wall_photo(
             destination.write(chunk)
     except OSError as exc:
         raise IOError(f"Failed to save file: {exc}") from exc
+
+    # New source image invalidates any previously processed output.
+    processed_path = os.path.join(target_dir, f"processed_{safe_wall}.jpg")
+    try:
+        if os.path.exists(processed_path):
+            os.remove(processed_path)
+    except OSError:
+        pass
 
     return file_path
 
