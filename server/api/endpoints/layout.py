@@ -31,6 +31,7 @@ def get_layout(venue_id: str):
                         "polygon": layout_data.get("polygon"),
                         "walls": layout_data.get("walls"),
                         "materials": layout_data.get("materials"),
+                        "lighting": layout_data.get("lighting", {"preset": "neutral"}),
                         "generated_glb": layout_data.get("generated_glb"),
                     }
                 ),
@@ -47,6 +48,7 @@ def get_layout(venue_id: str):
                         "polygon": None,
                         "walls": None,
                         "materials": {"floor": {"type": "carpet", "color": "#cccccc"}, "ceiling": {"type": "plain"}},
+                        "lighting": {"preset": "neutral"},
                         "generated_glb": None,
                     }
                 ),
@@ -85,6 +87,7 @@ def save_layout(venue_id: str):
             "materials",
             {"floor": {"type": "carpet", "color": "#cccccc"}, "ceiling": {"type": "plain"}},
         )
+        lighting = data.get("lighting", {"preset": "neutral"})
 
         venue_dir = os.path.join(UPLOAD_ROOT, venue_id)
         os.makedirs(venue_dir, exist_ok=True)
@@ -97,6 +100,7 @@ def save_layout(venue_id: str):
             "polygon": polygon,
             "walls": walls,
             "materials": materials,
+            "lighting": lighting,
             # Preserve previous generated_glb if exists
             "generated_glb": data.get("generated_glb"),
         }

@@ -65,6 +65,41 @@ const ASSET_CATALOG: Array<{
   { type: 'chandelier', file: 'chandelier.glb', width: 1.2, depth: 1.2, height: 0.6, label: 'Chandelier (ceiling)', layer: 'ceiling', elevation: 2.5 },
 ]
 
+type CatalogItem = (typeof ASSET_CATALOG)[number]
+type BuiltInAssetOverride = {
+  height_m?: number
+  asset_layer?: AssetLayer
+}
+const BUILTIN_OVERRIDES_KEY = 'builtin_asset_overrides_v1'
+
+const getBuiltInOverrides = (): Record<string, BuiltInAssetOverride> => {
+  try {
+    return JSON.parse(localStorage.getItem(BUILTIN_OVERRIDES_KEY) || '{}')
+  } catch {
+    return {}
+  }
+}
+
+const withCatalogOverrides = (item: CatalogItem): CatalogItem => {
+  const override = getBuiltInOverrides()[item.file]
+  if (!override) return item
+  const targetHeight = typeof override.height_m === 'number' && override.height_m > 0 ? override.height_m : item.height
+  const ratio = item.height > 0 ? targetHeight / item.height : 1
+  return {
+    ...item,
+    height: targetHeight,
+    width: item.width * ratio,
+    depth: item.depth * ratio,
+    layer: (override.asset_layer as AssetLayer) || item.layer,
+    elevation: ((override.asset_layer as AssetLayer) || item.layer) === 'ceiling'
+      ? 2.5
+      : ((override.asset_layer as AssetLayer) || item.layer) === 'floor'
+        ? 0
+        : item.elevation * ratio,
+    label: `${item.label.split(' (')[0]} (${(item.width * ratio).toFixed(2)}×${(item.depth * ratio).toFixed(2)}m)`
+  }
+}
+
 type WallSpec = {
   id: string
   name: string
@@ -92,6 +127,21 @@ function getAssetElevation(asset: Asset, roomHeight: number): number {
 }
 
 const LAYER_ORDER: AssetLayer[] = ['floor', 'surface', 'ceiling']
+type LightingPreset = 'dim' | 'warm' | 'neutral' | 'bright' | 'cool'
+const WALL_ID_ORDER: Record<string, number> = {
+  wall_north: 0,
+  wall_east: 1,
+  wall_south: 2,
+  wall_west: 3
+}
+
+const orderWallsClockwise = (walls: WallSpec[]): WallSpec[] => {
+  return [...walls].sort((a, b) => {
+    const ai = WALL_ID_ORDER[a.id] ?? 999
+    const bi = WALL_ID_ORDER[b.id] ?? 999
+    return ai - bi
+  })
+}
 
 const FloorPlanner = () => {
   const { venueId } = useParams<{ venueId: string }>()
@@ -103,6 +153,7 @@ const FloorPlanner = () => {
     floor: { type: 'oak_wood', color: '#c6b39e' },
     ceiling: { type: 'flat_white', color: '#f5f5f5' }
   })
+  const [lightingPreset, setLightingPreset] = useState<LightingPreset>('neutral')
   // Start with no walls by default; user draws or adds rectangle manually
   const defaultWalls: WallSpec[] = []
   const [walls, setWalls] = useState<WallSpec[]>(defaultWalls)
@@ -174,8 +225,11 @@ const FloorPlanner = () => {
           if (data.materials) {
             setMaterials(data.materials)
           }
+          if (data.lighting?.preset) {
+            setLightingPreset(data.lighting.preset as LightingPreset)
+          }
           if (data.walls && Array.isArray(data.walls) && data.walls.length > 0) {
-            setWalls(data.walls as WallSpec[])
+            setWalls(orderWallsClockwise(data.walls as WallSpec[]))
           } else {
             setWalls(defaultWalls)
           }
@@ -380,7 +434,7 @@ const FloorPlanner = () => {
 
   const handleDragStart = (
     e: React.DragEvent,
-    catalogItem: (typeof ASSET_CATALOG)[number]
+    catalogItem: CatalogItem
   ) => {
     setDraggedAsset({
       type: catalogItem.type,
@@ -655,6 +709,7 @@ const FloorPlanner = () => {
           dimensions: roomDimensions,
           assets: placedAssets,
           materials,
+          lighting: { preset: lightingPreset },
           walls,
           floor_plan_url: floorPlanUrl
         })
@@ -699,6 +754,7 @@ const FloorPlanner = () => {
         setFloorPlanUrl(null)
         setVenueName('')
         setRoomDimensions({ width: 20, height: 8, depth: 20 })
+        setLightingPreset('neutral')
         setTimeout(() => setMessage(null), 2000)
       } else {
         console.error(`[FloorPlanner] Reset failed: ${responseData.message}`)
@@ -959,7 +1015,9 @@ const FloorPlanner = () => {
           <h2>Asset Library</h2>
           <div className="asset-list">
             <div className="asset-section-title">Default Assets</div>
-            {ASSET_CATALOG.map((item) => (
+            {ASSET_CATALOG.map((baseItem) => {
+              const item = withCatalogOverrides(baseItem)
+              return (
               <div
                 key={item.file}
                 className="asset-item"
@@ -971,7 +1029,7 @@ const FloorPlanner = () => {
               >
                 {item.label}
               </div>
-            ))}
+            )})}
             <div className="asset-section-title" style={{ marginTop: '16px' }}>
               My Custom Assets
               <button
@@ -1146,6 +1204,19 @@ const FloorPlanner = () => {
                 <option value="coffered">Coffered Panels</option>
               </select>
             </label>
+            <label className="form-row">
+              <span>Lighting</span>
+              <select
+                value={lightingPreset}
+                onChange={(e) => setLightingPreset(e.target.value as LightingPreset)}
+              >
+                <option value="dim">Dim</option>
+                <option value="warm">Warm</option>
+                <option value="neutral">Neutral</option>
+                <option value="bright">Bright</option>
+                <option value="cool">Cool</option>
+              </select>
+            </label>
             <div className="walls-editor">
               <div className="walls-editor-header">
                 <h4>Walls</h4>
@@ -1162,20 +1233,20 @@ const FloorPlanner = () => {
                         coordinates: [0, 0, 100, 0],
                       },
                       {
-                        id: 'wall_south',
-                        name: 'South Wall',
-                        type: 'straight',
-                        length: roomDimensions.width,
-                        height: roomDimensions.height,
-                        coordinates: [0, 100, 100, 100],
-                      },
-                      {
                         id: 'wall_east',
                         name: 'East Wall',
                         type: 'straight',
                         length: roomDimensions.depth,
                         height: roomDimensions.height,
                         coordinates: [100, 0, 100, 100],
+                      },
+                      {
+                        id: 'wall_south',
+                        name: 'South Wall',
+                        type: 'straight',
+                        length: roomDimensions.width,
+                        height: roomDimensions.height,
+                        coordinates: [0, 100, 100, 100],
                       },
                       {
                         id: 'wall_west',

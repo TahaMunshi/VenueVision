@@ -25,6 +25,68 @@ interface Asset {
   depth_m?: number
   height_m?: number
   created_at: string
+  is_preloaded?: boolean
+}
+
+type BuiltInAssetDef = {
+  asset_id: number
+  asset_name: string
+  file: string
+  asset_layer: 'floor' | 'surface' | 'ceiling'
+  width_m: number
+  depth_m: number
+  height_m: number
+}
+
+type BuiltInAssetOverride = {
+  height_m?: number
+  asset_layer?: 'floor' | 'surface' | 'ceiling'
+}
+
+const BUILTIN_ASSETS: BuiltInAssetDef[] = [
+  { asset_id: -1, asset_name: 'Rug', file: 'rug.glb', asset_layer: 'floor', width_m: 4, depth_m: 4, height_m: 0.02 },
+  { asset_id: -2, asset_name: 'Table', file: 'asset_table.glb', asset_layer: 'surface', width_m: 4, depth_m: 2, height_m: 0.75 },
+  { asset_id: -3, asset_name: 'Blue Vase', file: 'blue_vase.glb', asset_layer: 'surface', width_m: 0.4, depth_m: 0.4, height_m: 0.4 },
+  { asset_id: -4, asset_name: 'Chandelier', file: 'chandelier.glb', asset_layer: 'ceiling', width_m: 1.2, depth_m: 1.2, height_m: 0.6 }
+]
+
+const BUILTIN_OVERRIDES_KEY = 'builtin_asset_overrides_v1'
+
+const getBuiltInOverrides = (): Record<string, BuiltInAssetOverride> => {
+  try {
+    return JSON.parse(localStorage.getItem(BUILTIN_OVERRIDES_KEY) || '{}')
+  } catch {
+    return {}
+  }
+}
+
+const setBuiltInOverrides = (overrides: Record<string, BuiltInAssetOverride>) => {
+  localStorage.setItem(BUILTIN_OVERRIDES_KEY, JSON.stringify(overrides))
+}
+
+const buildBuiltInAssets = (): Asset[] => {
+  const overrides = getBuiltInOverrides()
+  return BUILTIN_ASSETS.map((item) => {
+    const override = overrides[item.file] || {}
+    const height = override.height_m ?? item.height_m
+    return {
+      asset_id: item.asset_id,
+      asset_name: item.asset_name,
+      file_path: `models/${item.file}`,
+      file_url: `/static/models/${item.file}`,
+      thumbnail_url: null,
+      source_image_url: null,
+      file_size_bytes: 0,
+      generation_status: 'completed',
+      generation_error: null,
+      asset_layer: override.asset_layer ?? item.asset_layer,
+      width_m: item.width_m,
+      depth_m: item.depth_m,
+      height_m: height,
+      created_at: new Date(0).toISOString(),
+      is_preloaded: true
+    }
+  })
 }
 
 const AssetLibrary = () => {
@@ -73,7 +135,9 @@ const AssetLibrary = () => {
 
       if (response.ok) {
         const data = await response.json()
-        setAssets(data.assets || [])
+        const userAssets = data.assets || []
+        const builtInAssets = buildBuiltInAssets()
+        setAssets([...builtInAssets, ...userAssets])
       } else if (response.status === 401) {
         localStorage.clear()
         navigate('/login')
@@ -177,7 +241,7 @@ const AssetLibrary = () => {
           })
           if (refreshResponse.ok) {
             const refreshData = await refreshResponse.json()
-            const refreshedAssets = refreshData.assets || []
+            const refreshedAssets = [...buildBuiltInAssets(), ...(refreshData.assets || [])]
             setAssets(refreshedAssets)
             // Auto-open the newest completed asset in the 3D viewer
             if (data.asset && data.asset.asset_id) {
@@ -204,6 +268,11 @@ const AssetLibrary = () => {
   }
 
   const handleDeleteAsset = async (assetId: number) => {
+    const target = assets.find(a => a.asset_id === assetId)
+    if (target?.is_preloaded) {
+      setError('Built-in assets cannot be deleted')
+      return
+    }
     if (!confirm('Are you sure you want to delete this asset?')) {
       return
     }
@@ -301,6 +370,25 @@ const AssetLibrary = () => {
     if (!editingAsset) return
     setSavingEdit(true)
     try {
+      if (editingAsset.is_preloaded) {
+        const overrides = getBuiltInOverrides()
+        const fileKey = editingAsset.file_path.replace(/^models\//, '')
+        overrides[fileKey] = {
+          ...(overrides[fileKey] || {}),
+          height_m: editHeight,
+          asset_layer: editLayer
+        }
+        setBuiltInOverrides(overrides)
+        setAssets(prev =>
+          prev.map(a =>
+            a.asset_id === editingAsset.asset_id
+              ? { ...a, height_m: editHeight, asset_layer: editLayer }
+              : a
+          )
+        )
+        setEditingAsset(null)
+        return
+      }
       const token = localStorage.getItem('token')
       const res = await fetch(`${API_BASE_URL}/api/v1/assets/detail/${editingAsset.asset_id}`, {
         method: 'PATCH',
@@ -763,7 +851,7 @@ const AssetLibrary = () => {
                 <div className="asset-info">
                   <h3 className="asset-name">{asset.asset_name}</h3>
                   <p className="asset-meta">
-                    {formatFileSize(asset.file_size_bytes)} • {formatDate(asset.created_at)}
+                    {asset.is_preloaded ? 'Built-in asset' : `${formatFileSize(asset.file_size_bytes)} • ${formatDate(asset.created_at)}`}
                   </p>
                   {asset.generation_error && (
                     <p className="asset-error">{asset.generation_error}</p>
@@ -790,12 +878,14 @@ const AssetLibrary = () => {
                       </a>
                     </>
                   )}
-                  <button
-                    className="action-button delete"
-                    onClick={(e) => { e.stopPropagation(); handleDeleteAsset(asset.asset_id) }}
-                  >
-                    Delete
-                  </button>
+                  {!asset.is_preloaded && (
+                    <button
+                      className="action-button delete"
+                      onClick={(e) => { e.stopPropagation(); handleDeleteAsset(asset.asset_id) }}
+                    >
+                      Delete
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
