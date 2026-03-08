@@ -179,6 +179,8 @@ const FloorPlanner = () => {
   const [isResizing, setIsResizing] = useState(false)
   const sidebarRef = useRef<HTMLDivElement>(null)
   const previewContainerRef = useRef<HTMLDivElement>(null)
+  const previewLoadTokenRef = useRef(0)
+  const previewScriptsPromiseRef = useRef<Promise<void> | null>(null)
   const previewStateRef = useRef<{
     initialized: boolean
     scene: any
@@ -716,11 +718,8 @@ const FloorPlanner = () => {
       })
 
       if (response.ok) {
-        setMessage({ text: 'Layout saved! Opening guided tour to capture wall photos...', type: 'success' })
-        setTimeout(() => {
-          // Redirect to guided tour after saving
-          navigate(`/mobile/capture/${venueId}`)
-        }, 1500)
+        setMessage({ text: 'Layout saved successfully.', type: 'success' })
+        setTimeout(() => setMessage(null), 2000)
       } else {
         setMessage({ text: 'Failed to save layout.', type: 'error' })
         setTimeout(() => setMessage(null), 3000)
@@ -861,42 +860,82 @@ const FloorPlanner = () => {
     }
   }
 
-  const handleAssetHover = (assetFile: string, label: string) => {
+  const getPreviewElements = () => {
     const statusEl = previewContainerRef.current?.parentElement?.querySelector('.asset-preview-status') as HTMLElement
     const titleEl = previewContainerRef.current?.parentElement?.querySelector('.asset-preview-title') as HTMLElement
+    return { statusEl, titleEl }
+  }
+
+  const loadScriptOnce = (src: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null
+      if (existing) {
+        if (existing.getAttribute('data-loaded') === 'true') {
+          resolve()
+          return
+        }
+        existing.addEventListener('load', () => resolve(), { once: true })
+        existing.addEventListener('error', () => reject(new Error(`Failed to load script: ${src}`)), { once: true })
+        return
+      }
+      const script = document.createElement('script')
+      script.src = src
+      script.async = true
+      script.onload = () => {
+        script.setAttribute('data-loaded', 'true')
+        resolve()
+      }
+      script.onerror = () => reject(new Error(`Failed to load script: ${src}`))
+      document.head.appendChild(script)
+    })
+  }
+
+  const ensurePreviewDependencies = async () => {
+    if ((window as any).THREE?.GLTFLoader && (window as any).THREE?.OrbitControls) return
+    if (!previewScriptsPromiseRef.current) {
+      previewScriptsPromiseRef.current = (async () => {
+        await loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js')
+        await loadScriptOnce('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js')
+        await loadScriptOnce('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js')
+      })()
+    }
+    await previewScriptsPromiseRef.current
+  }
+
+  const handleAssetHover = async (assetFile: string, label: string) => {
+    const { statusEl, titleEl } = getPreviewElements()
 
     if (!assetFile || !statusEl || !titleEl) return
 
-    // Load Three.js if not loaded
-    if (!(window as any).THREE) {
-      const script1 = document.createElement('script')
-      script1.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'
-      script1.onload = () => {
-        const script2 = document.createElement('script')
-        script2.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js'
-        script2.onload = () => {
-          const script3 = document.createElement('script')
-          script3.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js'
-          script3.onload = () => {
-            initAssetPreview()
-            loadAssetPreview(assetFile, label)
-          }
-          document.head.appendChild(script3)
-        }
-        document.head.appendChild(script2)
-      }
-      document.head.appendChild(script1)
-      return
-    }
+    const hoverToken = ++previewLoadTokenRef.current
+    statusEl.textContent = 'Loading preview...'
 
-    initAssetPreview()
-    loadAssetPreview(assetFile, label)
+    try {
+      await ensurePreviewDependencies()
+      if (previewLoadTokenRef.current !== hoverToken) return
+      initAssetPreview()
+      loadAssetPreview(assetFile, label, hoverToken)
+    } catch (error) {
+      if (previewLoadTokenRef.current !== hoverToken) return
+      console.error('Failed to initialize asset preview', error)
+      statusEl.textContent = 'Preview unavailable.'
+    }
   }
 
-  const loadAssetPreview = (assetFile: string, label: string) => {
+  const handleAssetHoverLeave = () => {
+    // Invalidate any in-flight hover load so stale models never replace current hover.
+    previewLoadTokenRef.current += 1
     const previewState = previewStateRef.current
-    const statusEl = previewContainerRef.current?.parentElement?.querySelector('.asset-preview-status') as HTMLElement
-    const titleEl = previewContainerRef.current?.parentElement?.querySelector('.asset-preview-title') as HTMLElement
+    previewState.currentFile = null
+    clearPreviewModel()
+    const { statusEl, titleEl } = getPreviewElements()
+    if (titleEl) titleEl.textContent = 'Asset Preview'
+    if (statusEl) statusEl.textContent = 'Hover an asset to load its 3D preview.'
+  }
+
+  const loadAssetPreview = (assetFile: string, label: string, hoverToken: number) => {
+    const previewState = previewStateRef.current
+    const { statusEl, titleEl } = getPreviewElements()
 
     if (!assetFile || !statusEl || !titleEl) return
 
@@ -926,12 +965,14 @@ const FloorPlanner = () => {
     previewState.loader.load(
       modelPath,
       (gltf: any) => {
+        if (previewLoadTokenRef.current !== hoverToken || previewState.currentFile !== assetFile) return
         previewState.modelGroup = normalizeAndScaleModel(gltf.scene, 1.5, 1.5)
         previewState.scene.add(previewState.modelGroup)
         statusEl.textContent = 'Drag inside preview to rotate.'
       },
       undefined,
       (error: any) => {
+        if (previewLoadTokenRef.current !== hoverToken || previewState.currentFile !== assetFile) return
         console.error('Failed to load preview', error)
         statusEl.textContent = 'Preview unavailable.'
         previewState.currentFile = null
@@ -1023,7 +1064,8 @@ const FloorPlanner = () => {
                 className="asset-item"
                 draggable
                 onDragStart={(e) => handleDragStart(e, item)}
-                onMouseEnter={() => handleAssetHover(item.file, item.label)}
+                onMouseEnter={() => { void handleAssetHover(item.file, item.label) }}
+                onMouseLeave={handleAssetHoverLeave}
                 data-layer={item.layer}
                 data-elevation={item.elevation}
               >
@@ -1074,7 +1116,12 @@ const FloorPlanner = () => {
                   className="asset-item user-asset"
                   draggable
                   onDragStart={(e) => handleDragStartUserAsset(e, asset)}
-                  onMouseEnter={() => filePathForPreview && handleAssetHover(filePathForPreview, asset.asset_name)}
+                  onMouseEnter={() => {
+                    if (filePathForPreview) {
+                      void handleAssetHover(filePathForPreview, asset.asset_name)
+                    }
+                  }}
+                  onMouseLeave={handleAssetHoverLeave}
                 >
                   {asset.thumbnail_url && (
                     <img

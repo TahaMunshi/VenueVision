@@ -193,6 +193,21 @@ const VenueHome = () => {
                 Edit individual walls, adjust corner points, and process images for accurate detection.
               </p>
               <button className="option-button">Open Editor</button>
+              <button
+                type="button"
+                className="delete-wall-images-button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleDeleteAllWallImages()
+                }}
+                disabled={deletingWallImages}
+                style={{ marginTop: '10px', width: '100%' }}
+              >
+                {deletingWallImages ? 'Deleting…' : 'Delete all wall images'}
+              </button>
+              {message && (
+                <div className={`venue-home-message ${message.type}`}>{message.text}</div>
+              )}
             </div>
 
             <div className="option-card planner" onClick={handlePlanner}>
@@ -216,23 +231,6 @@ const VenueHome = () => {
           </div>
         </div>
 
-        {/* Venue actions / Danger zone */}
-        <div className="venue-actions-section">
-          <h2 className="section-title">Venue actions</h2>
-          <div className="venue-actions-buttons">
-            <button
-              type="button"
-              className="delete-wall-images-button"
-              onClick={handleDeleteAllWallImages}
-              disabled={deletingWallImages}
-            >
-              {deletingWallImages ? 'Deleting…' : 'Delete all wall images'}
-            </button>
-          </div>
-          {message && (
-            <div className={`venue-home-message ${message.type}`}>{message.text}</div>
-          )}
-        </div>
       </div>
     </div>
   )

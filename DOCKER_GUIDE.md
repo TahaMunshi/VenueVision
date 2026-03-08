@@ -318,6 +318,52 @@ ports:
 
 ---
 
+### Issue: "failed to copy" / "EOF" when pulling images
+
+The connection to Docker Hub is dropping during the pull. Use the following in order.
+
+**1. Use the startup script (recommended – retries pulls automatically)**  
+From the project folder, run:
+```powershell
+# Windows (PowerShell)
+.\start-docker.bat
+# or directly:
+powershell -ExecutionPolicy Bypass -File .\start-docker.ps1
+```
+The script pre-pulls images with 5 retries, then runs `docker-compose up --build`.
+
+**2. Add a registry mirror (fixes many persistent pull failures)**  
+Use a pull-through mirror so Docker fetches images from Google’s cache instead of Docker Hub.
+
+- **Windows (Docker Desktop)**  
+  1. Open **Docker Desktop** → **Settings** (gear) → **Docker Engine**.  
+  2. Add or merge this into the JSON (keep any existing keys like `"builder"`):
+     ```json
+     "registry-mirrors": ["https://mirror.gcr.io"]
+     ```
+     If the file is empty, use:
+     ```json
+     {
+       "registry-mirrors": ["https://mirror.gcr.io"]
+     }
+     ```
+  3. Click **Apply & restart**.  
+  4. Run `.\start-docker.bat` or `docker-compose up --build` again.
+
+- **Using the example file**  
+  The project includes `docker-daemon-mirror.json`. To use it:
+  1. Copy it to your Docker config (back up existing first):
+     - Windows: `%USERPROFILE%\.docker\daemon.json`
+     - If you already have a `daemon.json`, merge the `"registry-mirrors"` key into it.
+  2. Restart Docker Desktop.
+
+**3. Other checks**  
+- Disable VPN or try a different network.  
+- Ensure firewall/antivirus isn’t blocking Docker.  
+- Restart Docker Desktop and your machine, then run `.\start-docker.ps1` again.
+
+---
+
 ### Issue: Database connection errors
 
 **Check**:

@@ -69,5 +69,3 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 
 # Default: start app. Use docker-compose so DB is up and setup_database.py runs first.
 CMD ["python", "server/app.py"]
-
-

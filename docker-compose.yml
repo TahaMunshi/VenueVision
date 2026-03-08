@@ -1,9 +1,6 @@
 # VenueVision - One command to run everything.
 # From project root:  docker-compose up --build
 # Then open: http://localhost:5000/mobile
-
-version: "3.9"
-
 services:
   # PostgreSQL Database
   db:
