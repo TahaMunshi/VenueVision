@@ -146,6 +146,39 @@ const createProceduralTexture = (THREE: any, preset: string, tintHex: string, si
   return texture
 }
 
+/** Get texture for floor/ceiling: procedural preset or load custom image from server/static/textures/ */
+const getFloorOrCeilingTexture = (
+  THREE: any,
+  loader: any,
+  apiBase: string,
+  type: string,
+  tintHex: string
+): Promise<any | null> => {
+  if (type.startsWith('texture:')) {
+    const path = type.replace('texture:', '')
+    const url = `${apiBase}/static/textures/${path}`
+    return new Promise((resolve) => {
+      loader.load(
+        url,
+        (tex: any) => {
+          if (tex) {
+            tex.wrapS = THREE.RepeatWrapping
+            tex.wrapT = THREE.RepeatWrapping
+            tex.anisotropy = 4
+          }
+          resolve(tex)
+        },
+        undefined,
+        () => {
+          console.warn(`[3D Viewer] Failed to load floor/ceiling texture: ${url}`)
+          resolve(null)
+        }
+      )
+    })
+  }
+  return Promise.resolve(createProceduralTexture(THREE, type, tintHex))
+}
+
 const Space3DViewer = () => {
   const { venueId } = useParams<{ venueId: string }>()
   const navigate = useNavigate()
@@ -281,8 +314,11 @@ const Space3DViewer = () => {
         const floorY = -dimensions.height / 2
         const ceilingY = dimensions.height / 2
 
+        // Texture loader for floor/ceiling (created early for custom image textures)
+        const textureLoader = new THREE.TextureLoader()
+
         // Add a dedicated floor plane (beige) so the floor is always visible
-        const addWhiteFloorPlane = () => {
+        const addWhiteFloorPlane = async () => {
           if (floorPlaneRef.current) {
             scene.remove(floorPlaneRef.current)
             floorPlaneRef.current.geometry?.dispose()
@@ -290,8 +326,10 @@ const Space3DViewer = () => {
             floorPlaneRef.current = null
           }
           const floorGeo = new THREE.PlaneGeometry(dimensions.width, dimensions.depth)
-          const floorTexture = createProceduralTexture(
+          const floorTexture = await getFloorOrCeilingTexture(
             THREE,
+            textureLoader,
+            API_BASE_URL,
             materialSettingsRef.current.floor.type,
             materialSettingsRef.current.floor.color
           )
@@ -310,7 +348,7 @@ const Space3DViewer = () => {
         }
 
         // Add a translucent horizontal plane at the ceiling so the chandelier is visible
-        const addCeilingPlane = () => {
+        const addCeilingPlane = async () => {
           if (ceilingPlaneRef.current) {
             scene.remove(ceilingPlaneRef.current)
             ceilingPlaneRef.current.geometry?.dispose()
@@ -318,8 +356,10 @@ const Space3DViewer = () => {
             ceilingPlaneRef.current = null
           }
           const ceilingGeo = new THREE.PlaneGeometry(dimensions.width, dimensions.depth)
-          const ceilingTexture = createProceduralTexture(
+          const ceilingTexture = await getFloorOrCeilingTexture(
             THREE,
+            textureLoader,
+            API_BASE_URL,
             materialSettingsRef.current.ceiling.type,
             materialSettingsRef.current.ceiling.color || '#f5f5f5'
           )
@@ -364,10 +404,10 @@ const Space3DViewer = () => {
             await new Promise<void>((resolve, reject) => {
               gltfLoader.load(
                 generatedGlb!,
-                (gltf: any) => {
+                async (gltf: any) => {
                   scene.add(gltf.scene)
-                  addWhiteFloorPlane()
-                  addCeilingPlane()
+                  await addWhiteFloorPlane()
+                  await addCeilingPlane()
                   setLoading(false)
                   resolve()
                 },
@@ -390,20 +430,20 @@ const Space3DViewer = () => {
         let totalTextures = 0
         let layoutData: any = null // Store layout data until textures are loaded
 
-        const tryCreateWalls = () => {
+        const tryCreateWalls = async () => {
           // Try to create walls if we have layout data and all textures are loaded
           if (layoutData && layoutData.walls && Array.isArray(layoutData.walls) && layoutData.walls.length > 0) {
             if (loadedCount === totalTextures && totalTextures > 0) {
               create3DWalls(layoutData.walls)
-              addWhiteFloorPlane()
-              addCeilingPlane()
+              await addWhiteFloorPlane()
+              await addCeilingPlane()
               setLoading(false)
             }
           } else if (loadedCount === totalTextures && totalTextures > 0) {
             // Only create generic room box if NO custom walls from floor plan
-            createRoom()
-            addWhiteFloorPlane()
-            addCeilingPlane()
+            await createRoom()
+            await addWhiteFloorPlane()
+            await addCeilingPlane()
             setLoading(false)
           }
         }
@@ -423,13 +463,13 @@ const Space3DViewer = () => {
         // Start by fetching layout to know which walls to load textures for
         fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/layout`)
           .then(res => res.json())
-          .then(data => {
+          .then(async (data) => {
             layoutData = data
 
             if (!data.walls || data.walls.length === 0) {
-              createRoom()
-              addWhiteFloorPlane()
-              addCeilingPlane()
+              await createRoom()
+              await addWhiteFloorPlane()
+              await addCeilingPlane()
               setLoading(false)
               return
             }
@@ -464,13 +504,13 @@ const Space3DViewer = () => {
               }
             })
           })
-          .catch(err => {
+          .catch(async (err) => {
             console.error('[3D Viewer] Error loading layout:', err)
-            createRoom()
+            await createRoom()
             setLoading(false)
           })
 
-        const createRoom = () => {
+        const createRoom = async () => {
           // Clean up old room mesh
           if (roomMeshRef.current) {
             scene.remove(roomMeshRef.current)
@@ -483,12 +523,10 @@ const Space3DViewer = () => {
 
           const resolvedMaterials = getLayoutMaterials(layoutData)
           materialSettingsRef.current = resolvedMaterials
-          const floorTexture = createProceduralTexture(THREE, resolvedMaterials.floor.type, resolvedMaterials.floor.color)
-          const ceilingTexture = createProceduralTexture(
-            THREE,
-            resolvedMaterials.ceiling.type,
-            resolvedMaterials.ceiling.color || '#f5f5f5'
-          )
+          const [floorTexture, ceilingTexture] = await Promise.all([
+            getFloorOrCeilingTexture(THREE, textureLoader, API_BASE_URL, resolvedMaterials.floor.type, resolvedMaterials.floor.color),
+            getFloorOrCeilingTexture(THREE, textureLoader, API_BASE_URL, resolvedMaterials.ceiling.type, resolvedMaterials.ceiling.color || '#f5f5f5')
+          ])
           if (floorTexture) floorTexture.repeat.set(4, 4)
           if (ceilingTexture) ceilingTexture.repeat.set(3, 3)
 

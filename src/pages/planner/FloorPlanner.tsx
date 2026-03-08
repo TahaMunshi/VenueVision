@@ -1122,9 +1122,17 @@ const FloorPlanner = () => {
                 value={materials.floor.type}
                 onChange={(e) => setMaterials({ ...materials, floor: { ...materials.floor, type: e.target.value } })}
               >
-                <option value="oak_wood">Oak Wood</option>
-                <option value="light_marble">Light Marble</option>
-                <option value="concrete">Concrete</option>
+                <optgroup label="Procedural">
+                  <option value="oak_wood">Oak Wood</option>
+                  <option value="light_marble">Light Marble</option>
+                  <option value="concrete">Concrete</option>
+                </optgroup>
+                <optgroup label="Custom (place files in server/static/textures/floor/)">
+                  <option value="texture:floor/interior_tiles_diff_4k.jpg">Interior Tiles</option>
+                  <option value="texture:floor/rubber_tiles_diff_4k.jpg">Rubber Tiles</option>
+                  <option value="texture:floor/wood_floor_worn_diff_4k.jpg">Wood Floor Worn</option>
+                  <option value="texture:floor/wood_table_001_diff_4k.jpg">Wood Table</option>
+                </optgroup>
               </select>
             </label>
             <label className="form-row">
@@ -1141,9 +1149,15 @@ const FloorPlanner = () => {
                 value={materials.ceiling.type}
                 onChange={(e) => setMaterials({ ...materials, ceiling: { ...materials.ceiling, type: e.target.value } })}
               >
-                <option value="flat_white">Flat White</option>
-                <option value="wood_slats">Wood Slats</option>
-                <option value="coffered">Coffered Panels</option>
+                <optgroup label="Procedural">
+                  <option value="flat_white">Flat White</option>
+                  <option value="wood_slats">Wood Slats</option>
+                  <option value="coffered">Coffered Panels</option>
+                </optgroup>
+                <optgroup label="Custom (place files in server/static/textures/ceiling/)">
+                  <option value="texture:ceiling/plank_flooring_04_diff_4k.jpg">Plank Flooring</option>
+                  <option value="texture:ceiling/plastered_wall_02_diff_4k.jpg">Plastered Wall</option>
+                </optgroup>
               </select>
             </label>
             <div className="walls-editor">
