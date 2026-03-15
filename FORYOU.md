@@ -111,7 +111,7 @@ INPAINT_SPACE_URL=TahaMunshi03/venuevision-inpaint
 
 The object removal uses **TahaMunshi03/venuevision-inpaint** on Hugging Face. It must be deployed and running. If you need to deploy your own:
 
-- Copy `hf_inpaint_space/` or `venuevision-inpaint/` to a new HF Space
+- Copy `hf_inpaint_space/` to a new HF Space
 - Push to `https://huggingface.co/spaces/YOUR_USERNAME/venuevision-inpaint`
 - Update `INPAINT_SPACE_URL` in `.env`
 
