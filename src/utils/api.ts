@@ -32,3 +32,9 @@ export const getApiBaseUrl = () => {
   return 'http://localhost:5000'
 }
 
+/** Returns Authorization header if user is logged in. Use for protected API calls. */
+export const getAuthHeaders = (): Record<string, string> => {
+  const token = localStorage.getItem('token')
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+

@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import './WallUpload.css'
-import { getApiBaseUrl } from '../../utils/api'
+import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
 
 const enforceRectangle = (points: CornerPoint[]): CornerPoint[] => {
   if (points.length < 2) return points
@@ -223,6 +223,7 @@ const WallUpload = () => {
 
       const response = await fetch(`${API_BASE_URL}/api/v1/wall/process`, {
         method: 'POST',
+        headers: getAuthHeaders(),
         body: formData
       })
 

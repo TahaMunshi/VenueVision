@@ -41,6 +41,7 @@ services:
       - JWT_SECRET=${JWT_SECRET:-change-this-secret-in-production}
       - TRIPO_API_KEY=${TRIPO_API_KEY:-}
       - HF_TOKEN=${HF_TOKEN:-}
+      - INPAINT_SPACE_URL=${INPAINT_SPACE_URL:-TahaMunshi03/venuevision-inpaint}
     depends_on:
       db:
         condition: service_healthy

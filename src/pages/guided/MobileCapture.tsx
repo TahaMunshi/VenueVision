@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import './MobileCapture.css'
 import MiniMap, { type WallSegment } from '../../components/MiniMap'
 import ScannerOverlay from '../../components/ScannerOverlay'
-import { getApiBaseUrl } from '../../utils/api'
+import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
 
 // NOTE: To access the backend from your phone on the same Wi‑Fi, set VITE_API_BASE_URL in the project .env to your PC's LAN IP, e.g. http://192.168.1.42:5000
 
@@ -90,9 +90,7 @@ const MobileCapture = () => {
       const url = `${currentApiUrl}/api/v1/venue/${venueId}/progress`
       const response = await fetch(url, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: getAuthHeaders(),
       })
 
       if (!response.ok) {
@@ -167,7 +165,9 @@ const MobileCapture = () => {
 
       // Preload wall images for review
       try {
-        const imagesRes = await fetch(`${currentApiUrl}/api/v1/venue/${venueId}/wall-images`)
+        const imagesRes = await fetch(`${currentApiUrl}/api/v1/venue/${venueId}/wall-images`, {
+          headers: getAuthHeaders()
+        })
         const imagesData = await imagesRes.json()
         if (imagesData.status === 'success' && imagesData.wall_images) {
           setWallImages(imagesData.wall_images)
@@ -434,6 +434,7 @@ const MobileCapture = () => {
 
       const response = await fetch(uploadUrl, {
         method: 'POST',
+        headers: getAuthHeaders(),
         body: formData
         // Don't set Content-Type header - browser will set it with boundary for FormData
       })
@@ -466,6 +467,9 @@ const MobileCapture = () => {
           message: `Captured ${capturedSegments}/${requiredSegments} for this wall. Take another photo of the same wall.`,
           type: 'success',
         })
+      } else if (wallComplete && activeWallId) {
+        setToast({ message: 'All photos captured! Stitch & review.', type: 'success' })
+        navigate(`/review/${venueId}/${activeWallId}`)
       } else {
         setToast({ message: 'Great capture! Move to the next wall.', type: 'success' })
       }

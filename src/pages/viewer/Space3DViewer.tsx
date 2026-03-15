@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import './Space3DViewer.css'
-import { getApiBaseUrl } from '../../utils/api'
+import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
 
 // Type declarations for dynamically loaded Three.js
 declare global {
@@ -226,7 +226,9 @@ const Space3DViewer = () => {
         let wallImageUrls: { [key: string]: string } = {}
         let generatedGlb: string | null = null
         try {
-          const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/wall-images`)
+          const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/wall-images`, {
+            headers: getAuthHeaders()
+          })
           const data = await response.json()
           if (data.status === 'success' && data.wall_images) {
             wallImageUrls = data.wall_images
@@ -235,8 +237,11 @@ const Space3DViewer = () => {
           console.warn('[Space3DViewer] Failed to fetch wall images, will try default paths:', err)
         }
         try {
-          const layoutResponse = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/layout`)
+          const layoutResponse = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/layout`, {
+            headers: getAuthHeaders()
+          })
           const layoutData = await layoutResponse.json()
+          materialSettingsRef.current = getLayoutMaterials(layoutData)
           if (layoutData.status === 'success' && layoutData.generated_glb) {
             generatedGlb = `${API_BASE_URL}${layoutData.generated_glb}`
           }
@@ -434,6 +439,7 @@ const Space3DViewer = () => {
           // Try to create walls if we have layout data and all textures are loaded
           if (layoutData && layoutData.walls && Array.isArray(layoutData.walls) && layoutData.walls.length > 0) {
             if (loadedCount === totalTextures && totalTextures > 0) {
+              materialSettingsRef.current = getLayoutMaterials(layoutData)
               create3DWalls(layoutData.walls)
               await addWhiteFloorPlane()
               await addCeilingPlane()
@@ -461,7 +467,9 @@ const Space3DViewer = () => {
         }
 
         // Start by fetching layout to know which walls to load textures for
-        fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/layout`)
+        fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/layout`, {
+          headers: getAuthHeaders()
+        })
           .then(res => res.json())
           .then(async (data) => {
             layoutData = data
@@ -639,7 +647,9 @@ const Space3DViewer = () => {
         // Load layout and assets
         const loadLayout = async () => {
           try {
-            const layoutResponse = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/layout`)
+            const layoutResponse = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/layout`, {
+              headers: getAuthHeaders()
+            })
             const data = await layoutResponse.json()
             
             // Store layout data - it will be used once textures are loaded

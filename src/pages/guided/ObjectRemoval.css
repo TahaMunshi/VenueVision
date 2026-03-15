@@ -1,0 +1,116 @@
+.object-removal-container {
+  min-height: 100vh;
+  background: #1a1a2e;
+  color: #eee;
+  padding: 16px;
+}
+
+.object-removal-header {
+  margin-bottom: 24px;
+}
+
+.object-removal-header h1 {
+  font-size: 1.5rem;
+  margin: 8px 0 4px;
+}
+
+.object-removal-subtitle {
+  font-size: 0.9rem;
+  color: #aaa;
+  margin: 0 0 16px;
+}
+
+.back-btn {
+  padding: 8px 16px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.back-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.object-removal-loading,
+.object-removal-error {
+  padding: 24px;
+  text-align: center;
+  font-size: 1rem;
+}
+
+.object-removal-error {
+  color: #f66;
+  background: rgba(255, 0, 0, 0.1);
+  border-radius: 8px;
+  margin: 16px 0;
+}
+
+.object-removal-image-wrap {
+  position: relative;
+  margin-bottom: 24px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000;
+  max-width: 100%;
+}
+
+.object-removal-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  max-height: 70vh;
+  object-fit: contain;
+}
+
+.object-removal-image.removing {
+  opacity: 0.7;
+}
+
+.object-removal-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 1.2rem;
+  pointer-events: none;
+}
+
+.object-removal-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.object-removal-actions .action-btn {
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+}
+
+.object-removal-actions .action-btn.primary {
+  background: #4CAF50;
+  color: white;
+}
+
+.object-removal-actions .action-btn.primary:hover {
+  background: #45a049;
+}
+
+.object-removal-actions .action-btn.secondary {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.object-removal-actions .action-btn.secondary:hover {
+  background: rgba(255, 255, 255, 0.25);
+}

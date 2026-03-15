@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import './WallSelector.css'
-import { getApiBaseUrl } from '../../utils/api'
+import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
 
 type Wall = {
   id: string
@@ -19,7 +19,9 @@ const WallSelector = () => {
   useEffect(() => {
     const fetchWalls = async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/progress`)
+        const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/progress`, {
+          headers: getAuthHeaders()
+        })
         const data = await response.json()
         
         if (data.walls && Array.isArray(data.walls)) {
