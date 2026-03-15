@@ -9,9 +9,20 @@ SEQ_PATTERN = re.compile(r"^seq_(\d+)\.jpg$", re.IGNORECASE)
 
 def required_photos_for_wall(wall: Dict) -> int:
     """
-    Fallback mode: force single photo per wall for reliability.
+    Photos per wall: 1 for 0-10m, 2 for 10-20m, etc.
+    Rule: ceil(length_m / 10), minimum 1.
     """
-    return 1
+    import math
+    length = wall.get("length")
+    if length is None:
+        return 1
+    try:
+        length_m = float(length)
+        if length_m <= 0:
+            return 1
+        return max(1, int(math.ceil(length_m / 10)))
+    except (TypeError, ValueError):
+        return 1
 
 
 def captured_segments_for_wall(venue_id: str, wall_id: str) -> int:
@@ -27,14 +38,16 @@ def captured_segments_for_wall(venue_id: str, wall_id: str) -> int:
 
 
 def completed_walls_for_venue(venue_id: str, walls: List[Dict]) -> List[str]:
-    """Return wall ids that already reached required segment count."""
+    """
+    Return wall ids that have been fully processed (stitch + remove + corners).
+    A wall is complete only when processed_{wall_id}.jpg exists.
+    """
     completed: List[str] = []
     for wall in walls:
-        required = required_photos_for_wall(wall)
-        captured = captured_segments_for_wall(venue_id, wall["id"])
-        if captured >= required:
+        wall_dir = os.path.join(UPLOAD_ROOT, str(venue_id), str(wall["id"]))
+        processed_path = os.path.join(wall_dir, f"processed_{wall['id']}.jpg")
+        if os.path.isfile(processed_path):
             completed.append(wall["id"])
-
     return completed
 
 

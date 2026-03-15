@@ -4,7 +4,9 @@ import os
 
 from flask import Blueprint, jsonify, request
 
+from middleware.auth_middleware import token_required
 from utils.file_manager import UPLOAD_ROOT
+from utils.venue_auth import require_venue_access
 from services.glb_export import generate_glb
 
 logger = logging.getLogger(__name__)
@@ -13,8 +15,12 @@ layout_bp = Blueprint("layout", __name__)
 
 
 @layout_bp.route("/venue/<venue_id>/layout", methods=["GET"])
-def get_layout(venue_id: str):
+@token_required
+def get_layout(current_user, venue_id: str):
     """Get the layout (dimensions, walls, assets, materials) for a venue."""
+    venue, err = require_venue_access(venue_id, current_user, require_owner=False)
+    if err:
+        return err[0], err[1]
     try:
         layout_path = os.path.join(UPLOAD_ROOT, venue_id, "layout.json")
 
@@ -61,7 +67,8 @@ def get_layout(venue_id: str):
 
 
 @layout_bp.route("/venue/<venue_id>/layout", methods=["POST"])
-def save_layout(venue_id: str):
+@token_required
+def save_layout(current_user, venue_id: str):
     """
     Save the layout (dimensions, walls, materials, assets) for a venue.
     Expects JSON body with:
@@ -72,6 +79,9 @@ def save_layout(venue_id: str):
         - walls: array of walls (optional, supports curved metadata)
         - materials: {floor: {type, color}, ceiling: {type, color?}}
     """
+    venue, err = require_venue_access(venue_id, current_user, require_owner=True)
+    if err:
+        return err[0], err[1]
     try:
         data = request.get_json()
 
@@ -126,10 +136,14 @@ def save_layout(venue_id: str):
 
 
 @layout_bp.route("/venue/<venue_id>/generate-glb", methods=["POST"])
-def generate_glb(venue_id: str):
+@token_required
+def generate_glb_endpoint(current_user, venue_id: str):
     """
     Generate a simple GLB for the venue using saved dimensions/walls/materials.
     """
+    venue, err = require_venue_access(venue_id, current_user, require_owner=True)
+    if err:
+        return err[0], err[1]
     try:
         venue_dir = os.path.join(UPLOAD_ROOT, venue_id)
         os.makedirs(venue_dir, exist_ok=True)
@@ -145,7 +159,9 @@ def generate_glb(venue_id: str):
             return jsonify({"status": "error", "message": "No layout saved yet."}), 400
 
         dims = layout_data.get("dimensions", {"width": 20, "height": 8, "depth": 20})
-        glb_path = generate_glb(venue_dir, dims)
+        walls = layout_data.get("walls", [])
+        materials = layout_data.get("materials", {})
+        glb_path = generate_glb(venue_dir, dims, walls=walls, materials=materials)
 
         layout_data["generated_glb"] = f"/static/uploads/{venue_id}/venue.glb"
         with open(layout_path, "w") as f:

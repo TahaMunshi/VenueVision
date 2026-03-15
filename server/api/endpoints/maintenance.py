@@ -2,6 +2,7 @@ import logging
 
 from flask import Blueprint, jsonify, request
 
+from middleware.auth_middleware import token_required
 from utils.file_manager import reset_uploads
 from utils.asset_cleanup import (
     cleanup_temp_files,
@@ -18,7 +19,8 @@ maintenance_bp = Blueprint("maintenance", __name__)
 
 
 @maintenance_bp.route("/reset", methods=["POST"])
-def reset_all():
+@token_required
+def reset_all(current_user):
     """
     Reset all uploads and layouts. Optional JSON body {"venue_id": "..."} to reset one venue.
     """
@@ -33,7 +35,8 @@ def reset_all():
 
 
 @maintenance_bp.route("/cleanup/temp", methods=["POST"])
-def cleanup_temp():
+@token_required
+def cleanup_temp(current_user):
     """
     Clean up temporary files older than specified age.
     
@@ -57,7 +60,8 @@ def cleanup_temp():
 
 
 @maintenance_bp.route("/cleanup/stale-assets", methods=["POST"])
-def cleanup_stale():
+@token_required
+def cleanup_stale(current_user):
     """
     Mark assets that have been processing too long as failed.
     
@@ -81,7 +85,8 @@ def cleanup_stale():
 
 
 @maintenance_bp.route("/cleanup/orphans", methods=["GET"])
-def check_orphans():
+@token_required
+def check_orphans(current_user):
     """
     Check for orphaned files (files without database records).
     Does not delete - just reports.
@@ -103,7 +108,8 @@ def check_orphans():
 
 
 @maintenance_bp.route("/cleanup/orphans", methods=["DELETE"])
-def delete_orphans():
+@token_required
+def delete_orphans(current_user):
     """
     Delete orphaned files (files without database records).
     
@@ -133,7 +139,8 @@ def delete_orphans():
 
 
 @maintenance_bp.route("/cleanup/full", methods=["POST"])
-def full_cleanup():
+@token_required
+def full_cleanup(current_user):
     """
     Run a complete cleanup process.
     
@@ -162,7 +169,8 @@ def full_cleanup():
 
 
 @maintenance_bp.route("/storage/stats", methods=["GET"])
-def storage_stats():
+@token_required
+def storage_stats(current_user):
     """
     Get storage usage statistics for user assets.
     """

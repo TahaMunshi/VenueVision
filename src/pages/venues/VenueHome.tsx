@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import './VenueHome.css'
-import { getApiBaseUrl } from '../../utils/api'
+import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
 
 interface Venue {
   venue_id: number
@@ -85,7 +85,8 @@ const VenueHome = () => {
     setMessage(null)
     try {
       const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/wall-images`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: getAuthHeaders()
       })
       const data = await response.json().catch(() => ({}))
       if (response.ok) {

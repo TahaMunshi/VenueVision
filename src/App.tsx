@@ -6,6 +6,7 @@ import WallUpload from './pages/guided/WallUpload'
 import Space3DViewer from './pages/viewer/Space3DViewer'
 import WallSelector from './pages/guided/WallSelector'
 import WallEditor from './pages/guided/WallEditor'
+import ObjectRemoval from './pages/guided/ObjectRemoval'
 import FloorPlanner from './pages/planner/FloorPlanner'
 import Login from './pages/auth/Login'
 import Signup from './pages/auth/Signup'
@@ -31,6 +32,7 @@ function App() {
       <Route path="/" element={<Navigate to="/venues" replace />} />
       <Route path="/capture/:venueId" element={<MobileCapture />} />
       <Route path="/review/:venueId/:wallId" element={<SegmentReview />} />
+      <Route path="/remove/:venueId/:wallId" element={<ObjectRemoval />} />
       <Route path="/upload/:venueId/:wallId" element={<WallUpload />} />
       <Route path="/editor/:venueId" element={<WallSelector />} />
       <Route path="/edit/:venueId/:wallId" element={<WallEditor />} />

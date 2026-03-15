@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import './SegmentReview.css'
-import { getApiBaseUrl } from '../../utils/api'
+import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
 
 const SegmentReview = () => {
   const { venueId, wallId } = useParams<{ venueId: string; wallId: string }>()
@@ -20,7 +20,8 @@ const SegmentReview = () => {
     if (!venueId || !wallId) return
     try {
       const res = await fetch(
-        `${API_BASE_URL}/api/v1/venue/${venueId}/wall/${wallId}/segments?overlaps=true`
+        `${API_BASE_URL}/api/v1/venue/${venueId}/wall/${wallId}/segments?overlaps=true`,
+        { headers: getAuthHeaders() }
       )
       const data = await res.json()
       if (data.status === 'success') {
@@ -75,7 +76,7 @@ const SegmentReview = () => {
         `${API_BASE_URL}/api/v1/venue/${venueId}/wall/${wallId}/stitch`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         }
       )
@@ -215,10 +216,16 @@ const SegmentReview = () => {
             <img src={fullUrl(stitchedUrl)} alt="Stitched wall" className="stitched-preview" />
             <div className="stitched-actions">
               <button
-                onClick={() => navigate(`/edit/${venueId}/${wallId}`)}
+                onClick={() => navigate(`/remove/${venueId}/${wallId}`)}
                 className="action-btn primary"
               >
-                Edit corners
+                Remove objects
+              </button>
+              <button
+                onClick={() => navigate(`/edit/${venueId}/${wallId}?step=corners`)}
+                className="action-btn secondary"
+              >
+                Skip to corners
               </button>
               <button
                 onClick={() => navigate(`/capture/${venueId}`)}

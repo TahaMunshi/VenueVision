@@ -5,9 +5,13 @@ from typing import Dict, List
 
 from flask import Blueprint, jsonify, request
 
+from middleware.auth_middleware import token_required
+from utils.venue_auth import require_venue_access
 from services.floor_plan_service import get_venue_walls
 from services.wall_stitch import get_overlap_estimates, get_segment_images, stitch_segments
-from utils.file_manager import get_floor_plan_path, UPLOAD_ROOT, delete_venue_wall_images
+from services.wall_processing import process_wall_image
+from services.object_removal_service import remove_object_at_point
+from utils.file_manager import UPLOAD_ROOT, delete_venue_wall_images
 from .common import completed_walls_for_venue, next_wall, required_photos_for_wall, captured_segments_for_wall
 
 logger = logging.getLogger(__name__)
@@ -16,21 +20,21 @@ walls_bp = Blueprint("walls", __name__)
 
 
 @walls_bp.route("/venue/<venue_id>/progress", methods=["GET"])
-def get_venue_progress(venue_id: str):
+@token_required
+def get_venue_progress(current_user, venue_id: str):
     """
     Return capture progress for a venue to guide the wall-by-wall workflow.
     Guarantees a valid current_target for new venues (always returns first wall).
     Includes floor plan URL and wall regions if floor plan exists.
     """
-
+    _, err = require_venue_access(venue_id, current_user, require_owner=False)
+    if err:
+        return err[0], err[1]
     walls_metadata = get_venue_walls(venue_id)
     completed = completed_walls_for_venue(venue_id, walls_metadata)
     current_target = next_wall(walls_metadata, completed)
 
-    floor_plan_path = get_floor_plan_path(venue_id)
-    floor_plan_url = None
-    if floor_plan_path:
-        floor_plan_url = f"/static/uploads/{venue_id}/floor_plan.jpg"
+    floor_plan_url = None  # Floor plan upload removed; plans are created in-app only
 
     wall_regions: List[Dict] = []
     if walls_metadata:
@@ -71,7 +75,8 @@ def get_venue_progress(venue_id: str):
 
 
 @walls_bp.route("/venue/<venue_id>/wall-images", methods=["GET"])
-def get_wall_images(venue_id: str):
+@token_required
+def get_wall_images(current_user, venue_id: str):
     """
     Get the image URLs for all walls of a venue.
     Returns processed images if available, otherwise returns the latest captured image.
@@ -79,6 +84,9 @@ def get_wall_images(venue_id: str):
     Query parameters:
         original: if 'true', returns only original captured images (seq_XX.jpg), not processed ones
     """
+    _, err = require_venue_access(venue_id, current_user, require_owner=False)
+    if err:
+        return err[0], err[1]
     try:
         request_original = request.args.get("original", "false").lower() == "true"
 
@@ -109,10 +117,15 @@ def get_wall_images(venue_id: str):
                     latest_file = seq_files[0]
                     wall_images[wall_id] = f"/static/uploads/{venue_id}/{wall_id}/{latest_file}"
             else:
+                # Prefer processed (final), then stitched (master for corners/removal)
                 processed_path = os.path.join(wall_dir, f"processed_{wall_id}.jpg")
+                stitched_path = os.path.join(wall_dir, f"stitched_{wall_id}.jpg")
                 if os.path.exists(processed_path):
                     ts = int(os.path.getmtime(processed_path)) if os.path.exists(processed_path) else int(time.time())
                     wall_images[wall_id] = f"/static/uploads/{venue_id}/{wall_id}/processed_{wall_id}.jpg?v={ts}"
+                elif os.path.exists(stitched_path):
+                    ts = int(os.path.getmtime(stitched_path)) if os.path.exists(stitched_path) else int(time.time())
+                    wall_images[wall_id] = f"/static/uploads/{venue_id}/{wall_id}/stitched_{wall_id}.jpg?v={ts}"
                 else:
                     seq_files = []
                     try:
@@ -140,28 +153,33 @@ def get_wall_images(venue_id: str):
 
 
 @walls_bp.route("/venue/<venue_id>/wall/<wall_id>/reset", methods=["POST"])
-def reset_wall_image(venue_id: str, wall_id: str):
+@token_required
+def reset_wall_image(current_user, venue_id: str, wall_id: str):
     """
     Reset a wall's image by deleting the processed version.
     This allows the wall to be retaken from scratch.
     Only deletes processed_{wall_id}.jpg, leaves seq_*.jpg files intact.
     """
+    _, err = require_venue_access(venue_id, current_user, require_owner=True)
+    if err:
+        return err[0], err[1]
     try:
         wall_dir = os.path.join(UPLOAD_ROOT, venue_id, wall_id)
         
         if not os.path.isdir(wall_dir):
             return jsonify({"status": "error", "message": "Wall directory not found"}), 404
         
-        # Delete the processed image file if it exists
-        processed_path = os.path.join(wall_dir, f"processed_{wall_id}.jpg")
-        if os.path.exists(processed_path):
-            try:
-                os.remove(processed_path)
-                logger.info(f"Deleted processed image for {venue_id}/{wall_id}")
-            except OSError as e:
-                logger.error(f"Failed to delete processed image: {e}")
-                return jsonify({"status": "error", "message": str(e)}), 500
-        
+        # Delete processed and stitched (so user can re-capture / re-stitch)
+        for fname in [f"processed_{wall_id}.jpg", f"stitched_{wall_id}.jpg"]:
+            p = os.path.join(wall_dir, fname)
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                    logger.info(f"Deleted {fname} for {venue_id}/{wall_id}")
+                except OSError as e:
+                    logger.error(f"Failed to delete {fname}: {e}")
+                    return jsonify({"status": "error", "message": str(e)}), 500
+
         return jsonify({"status": "success", "message": "Wall reset successfully"}), 200
     
     except Exception as e:
@@ -170,11 +188,15 @@ def reset_wall_image(venue_id: str, wall_id: str):
 
 
 @walls_bp.route("/venue/<venue_id>/wall/<wall_id>/segments", methods=["GET"])
-def get_wall_segments(venue_id: str, wall_id: str):
+@token_required
+def get_wall_segments(current_user, venue_id: str, wall_id: str):
     """
     Get segment image URLs for a wall (seq_01, seq_02, ...).
     Query param overlaps=true includes overlap estimates for stitching preview.
     """
+    _, err = require_venue_access(venue_id, current_user, require_owner=False)
+    if err:
+        return err[0], err[1]
     try:
         segments = get_segment_images(venue_id, wall_id)
         if not segments:
@@ -190,11 +212,15 @@ def get_wall_segments(venue_id: str, wall_id: str):
 
 
 @walls_bp.route("/venue/<venue_id>/wall/<wall_id>/stitch", methods=["POST"])
-def stitch_wall(venue_id: str, wall_id: str):
+@token_required
+def stitch_wall(current_user, venue_id: str, wall_id: str):
     """
     Stitch all segment images for a wall into one seamless image.
     Body: optional { "rotations": [0, r2, ...], "manual_overlaps": [o1, o2, ...] }
     """
+    _, err = require_venue_access(venue_id, current_user, require_owner=True)
+    if err:
+        return err[0], err[1]
     try:
         data = request.get_json() or {}
         rotations = data.get("rotations")
@@ -210,11 +236,15 @@ def stitch_wall(venue_id: str, wall_id: str):
 
 
 @walls_bp.route("/venue/<venue_id>/wall-images", methods=["DELETE"])
-def delete_all_wall_images(venue_id: str):
+@token_required
+def delete_all_wall_images(current_user, venue_id: str):
     """
     Delete all wall image folders for this venue.
     Keeps layout.json, floor_plan.jpg, and generated GLB in the venue root.
     """
+    _, err = require_venue_access(venue_id, current_user, require_owner=True)
+    if err:
+        return err[0], err[1]
     try:
         removed = delete_venue_wall_images(venue_id)
         return jsonify({
@@ -229,14 +259,184 @@ def delete_all_wall_images(venue_id: str):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@walls_bp.route("/venue/<venue_id>/wall/<wall_id>/restitch-with-corners", methods=["POST"])
+@token_required
+def restitch_with_corners(current_user, venue_id: str, wall_id: str):
+    """
+    Re-stitch segment images and apply perspective correction from adjusted corners.
+    Expects multipart form-data:
+        - corner_points: JSON string of 4 corner points [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
+    """
+    import json
+
+    _, err = require_venue_access(venue_id, current_user, require_owner=True)
+    if err:
+        return err[0], err[1]
+
+    corner_points_json = request.form.get("corner_points")
+    if not corner_points_json:
+        return jsonify({"error": "corner_points are required."}), 400
+
+    try:
+        corner_points = json.loads(corner_points_json)
+        if len(corner_points) != 4:
+            return jsonify({"error": "Exactly 4 corner points are required."}), 400
+    except json.JSONDecodeError:
+        return jsonify({"error": "Invalid JSON in corner_points."}), 400
+
+    success, result = stitch_segments(venue_id, wall_id)
+    if not success:
+        return jsonify({"status": "error", "message": result}), 400
+
+    # Stitch writes to stitched_{wall_id}.jpg
+    stitched_path = os.path.join(UPLOAD_ROOT, venue_id, wall_id, f"stitched_{wall_id}.jpg")
+    if not os.path.exists(stitched_path):
+        return jsonify({"status": "error", "message": "Stitching succeeded but output file not found."}), 500
+
+    with open(stitched_path, "rb") as f:
+        stitched_bytes = f.read()
+
+    output_path = os.path.join(UPLOAD_ROOT, venue_id, wall_id, f"processed_{wall_id}.jpg")
+
+    wall_ratio = None
+    try:
+        walls = get_venue_walls(venue_id)
+        wall_meta = next((w for w in walls if w.get("id") == wall_id), None)
+        if wall_meta:
+            length = float(wall_meta.get("length") or 0)
+            height = float(wall_meta.get("height") or 0)
+            if length > 0 and height > 0:
+                wall_ratio = length / height
+    except Exception:
+        wall_ratio = None
+
+    process_result = process_wall_image(
+        stitched_bytes,
+        corner_points,
+        output_path,
+        target_aspect_ratio=wall_ratio,
+    )
+    if process_result.get("status") == "error":
+        return jsonify(process_result), 500
+
+    return jsonify({
+        "status": "success",
+        "message": "Re-stitched and applied perspective correction.",
+        "url": f"/static/uploads/{venue_id}/{wall_id}/processed_{wall_id}.jpg",
+    }), 200
+
+
+@walls_bp.route("/venue/<venue_id>/wall/<wall_id>/remove-object", methods=["POST"])
+@token_required
+def remove_object(current_user, venue_id: str, wall_id: str):
+    """
+    Remove object at (x, y) from the stitched wall image using SAM + LaMa.
+    Expects JSON body: { "x": int, "y": int }
+    Overwrites stitched_{wall_id}.jpg with the cleaned result.
+    """
+    import json
+
+    _, err = require_venue_access(venue_id, current_user, require_owner=True)
+    if err:
+        return err[0], err[1]
+
+    try:
+        data = request.get_json() or {}
+        x = int(data.get("x", 0))
+        y = int(data.get("y", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "x and y (integers) are required."}), 400
+
+    wall_dir = os.path.join(UPLOAD_ROOT, venue_id, wall_id)
+    stitched_path = os.path.join(wall_dir, f"stitched_{wall_id}.jpg")
+    if not os.path.isfile(stitched_path):
+        return jsonify({"status": "error", "message": "No stitched image found. Stitch first."}), 404
+
+    success, err_msg = remove_object_at_point(stitched_path, x, y, stitched_path)
+    if not success:
+        return jsonify({"status": "error", "message": err_msg or "Object removal failed"}), 500
+
+    return jsonify({
+        "status": "success",
+        "message": "Object removed.",
+        "url": f"/static/uploads/{venue_id}/{wall_id}/stitched_{wall_id}.jpg?v={int(time.time() * 1000)}",
+    }), 200
+
+
+@walls_bp.route("/venue/<venue_id>/wall/<wall_id>/apply-corners", methods=["POST"])
+@token_required
+def apply_corners(current_user, venue_id: str, wall_id: str):
+    """
+    Apply 4 corner points to stitched (or cleaned) image and save as processed.
+    Use this after object removal. Expects multipart form-data:
+        - corner_points: JSON string of 4 corner points [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
+    """
+    import json
+
+    _, err = require_venue_access(venue_id, current_user, require_owner=True)
+    if err:
+        return err[0], err[1]
+
+    corner_points_json = request.form.get("corner_points")
+    if not corner_points_json:
+        return jsonify({"error": "corner_points are required."}), 400
+
+    try:
+        corner_points = json.loads(corner_points_json)
+        if len(corner_points) != 4:
+            return jsonify({"error": "Exactly 4 corner points are required."}), 400
+    except json.JSONDecodeError:
+        return jsonify({"error": "Invalid JSON in corner_points."}), 400
+
+    wall_dir = os.path.join(UPLOAD_ROOT, venue_id, wall_id)
+    stitched_path = os.path.join(wall_dir, f"stitched_{wall_id}.jpg")
+    if not os.path.isfile(stitched_path):
+        return jsonify({"status": "error", "message": "No stitched image. Stitch first."}), 404
+
+    with open(stitched_path, "rb") as f:
+        stitched_bytes = f.read()
+
+    output_path = os.path.join(wall_dir, f"processed_{wall_id}.jpg")
+    wall_ratio = None
+    try:
+        walls = get_venue_walls(venue_id)
+        wall_meta = next((w for w in walls if w.get("id") == wall_id), None)
+        if wall_meta:
+            length = float(wall_meta.get("length") or 0)
+            height = float(wall_meta.get("height") or 0)
+            if length > 0 and height > 0:
+                wall_ratio = length / height
+    except Exception:
+        wall_ratio = None
+
+    process_result = process_wall_image(
+        stitched_bytes,
+        corner_points,
+        output_path,
+        target_aspect_ratio=wall_ratio,
+    )
+    if process_result.get("status") == "error":
+        return jsonify(process_result), 500
+
+    return jsonify({
+        "status": "success",
+        "message": "Corners applied. Wall complete.",
+        "url": f"/static/uploads/{venue_id}/{wall_id}/processed_{wall_id}.jpg",
+    }), 200
+
+
 @walls_bp.route("/venue/<venue_id>/reset", methods=["POST"])
-def reset_venue(venue_id: str):
+@token_required
+def reset_venue(current_user, venue_id: str):
     """
     Completely reset a venue: delete all walls, layout, and captured images.
     Starts fresh from scratch.
     """
     import shutil
-    
+
+    _, err = require_venue_access(venue_id, current_user, require_owner=True)
+    if err:
+        return err[0], err[1]
     try:
         venue_path = os.path.join(UPLOAD_ROOT, venue_id)
         logger.info(f"[Reset] Attempting to reset venue {venue_id} at path: {venue_path}")

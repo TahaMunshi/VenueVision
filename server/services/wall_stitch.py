@@ -1,7 +1,7 @@
 """
 Wall segment stitching: merge multiple photos of a wall into one seamless image.
-- Uses OpenCV Stitcher when available (feature-based, handles perspective).
-- Falls back to correlation-based seam detection for flat walls.
+- Primary: flawless_stitch (SIFT + homography + histogram matching) - matches Colab notebook.
+- Fallback: OpenCV Stitcher, then correlation-based overlap.
 """
 import logging
 import os
@@ -13,6 +13,74 @@ import numpy as np
 from utils.file_manager import UPLOAD_ROOT
 
 logger = logging.getLogger(__name__)
+
+
+def _flawless_stitch_two(img_left: np.ndarray, img_right: np.ndarray) -> Optional[np.ndarray]:
+    """
+    Stitch two images using SIFT + homography + histogram matching.
+    Matches the Colab notebook's flawless_stitch: no overlap artifacts, clean crop.
+    Returns stitched image or None if stitching fails.
+    """
+    if img_left is None or img_right is None or img_left.size == 0 or img_right.size == 0:
+        return None
+
+    try:
+        from skimage.exposure import match_histograms
+    except ImportError:
+        logger.warning("scikit-image not installed, skipping histogram matching")
+        img_left_matched = img_left
+    else:
+        img_left_matched = match_histograms(img_left, img_right, channel_axis=-1).astype(np.uint8)
+
+    gray_left = cv2.cvtColor(img_left_matched, cv2.COLOR_BGR2GRAY)
+    gray_right = cv2.cvtColor(img_right, cv2.COLOR_BGR2GRAY)
+
+    try:
+        sift = cv2.SIFT_create()
+    except AttributeError:
+        return None  # SIFT not available (e.g. old opencv), fall back to other methods
+    kp_left, des_left = sift.detectAndCompute(gray_left, None)
+    kp_right, des_right = sift.detectAndCompute(gray_right, None)
+    if des_left is None or des_right is None or len(kp_left) < 4 or len(kp_right) < 4:
+        return None
+
+    bf = cv2.BFMatcher()
+    matches = bf.knnMatch(des_right, des_left, k=2)
+    good_matches = [m for m, n in matches if m.distance < 0.75 * n.distance]
+    if len(good_matches) < 4:
+        return None
+
+    src_pts = np.float32([kp_right[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+    dst_pts = np.float32([kp_left[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+    M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+    if M is None:
+        return None
+
+    h_left, w_left = img_left_matched.shape[:2]
+    h_right, w_right = img_right.shape[:2]
+
+    panorama = cv2.warpPerspective(img_right, M, (w_left + w_right, h_left))
+    right_mask = cv2.warpPerspective(
+        np.ones_like(img_right, dtype=np.uint8) * 255, M, (w_left + w_right, h_left)
+    )
+    panorama[0:h_left, 0:w_left] = np.where(
+        right_mask[0:h_left, 0:w_left] == 0,
+        img_left_matched,
+        panorama[0:h_left, 0:w_left],
+    )
+
+    gray_pano = cv2.cvtColor(panorama, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray_pano, 1, 255, cv2.THRESH_BINARY)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if contours:
+        x, y, w, h = cv2.boundingRect(contours[0])
+        inset = 5
+        final_canvas = panorama[y + inset : y + h - inset, x + inset : x + w - inset]
+    else:
+        final_canvas = panorama
+
+    return final_canvas
 
 
 def _order_quad_points(points: np.ndarray) -> np.ndarray:
@@ -367,12 +435,12 @@ def stitch_segments(
     if not seq_files:
         return False, "No segment images found"
     if len(seq_files) == 1:
-        # Single image: just copy as processed
+        # Single image: copy as stitched (master before object removal + corners)
         src = os.path.join(wall_dir, seq_files[0][1])
-        dst = os.path.join(wall_dir, f"processed_{wall_id}.jpg")
+        stitched_path = os.path.join(wall_dir, f"stitched_{wall_id}.jpg")
         import shutil
-        shutil.copy2(src, dst)
-        return True, f"/static/uploads/{venue_id}/{wall_id}/processed_{wall_id}.jpg"
+        shutil.copy2(src, stitched_path)
+        return True, f"/static/uploads/{venue_id}/{wall_id}/stitched_{wall_id}.jpg"
 
     images = []
     for _, fname in seq_files:
@@ -382,35 +450,52 @@ def stitch_segments(
             return False, f"Could not read {fname}"
         images.append(img)
 
-    # Prefer deterministic overlap stitching for flat walls (less warping artifacts).
-    rotations = rotations or [0.0] * len(images)
-    while len(rotations) < len(images):
-        rotations.append(0.0)
-    manual_overlaps = manual_overlaps or []
-
+    # Primary: flawless_stitch (SIFT + homography) - matches Colab notebook, no overlap artifacts
     result = images[0]
+    flawless_ok = True
     for i in range(1, len(images)):
-        m_overlap = manual_overlaps[i - 1] if i - 1 < len(manual_overlaps) else None
-        result = _stitch_two(
-            result,
-            images[i],
-            right_rotation_deg=rotations[i],
-            manual_overlap=m_overlap,
-        )
-        if result is None:
+        stitched = _flawless_stitch_two(result, images[i])
+        if stitched is not None:
+            result = stitched
+            logger.info("Flawless stitch succeeded for segment %d", i + 1)
+        else:
+            flawless_ok = False
             break
 
-    # Fallback to OpenCV Stitcher only if overlap stitching fails.
-    if result is None:
-        logger.info("Overlap stitching failed, falling back to OpenCV Stitcher")
+    # Fallback 1: OpenCV Stitcher
+    if not flawless_ok:
+        logger.info("Flawless stitch failed, trying OpenCV Stitcher")
         result = _try_opencv_stitcher(images)
-        if result is None:
-            return False, "Stitching failed"
 
-    out_path = os.path.join(wall_dir, f"processed_{wall_id}.jpg")
+    # Fallback 2: correlation-based overlap stitching
+    if result is None:
+        logger.info("OpenCV Stitcher failed, trying correlation-based overlap")
+        rotations = rotations or [0.0] * len(images)
+        while len(rotations) < len(images):
+            rotations.append(0.0)
+        manual_overlaps = manual_overlaps or []
+        result = images[0]
+        for i in range(1, len(images)):
+            m_overlap = manual_overlaps[i - 1] if i - 1 < len(manual_overlaps) else None
+            result = _stitch_two(
+                result,
+                images[i],
+                right_rotation_deg=rotations[i],
+                manual_overlap=m_overlap,
+            )
+            if result is None:
+                break
+
+    # Final fallback: use first image
+    if result is None:
+        logger.warning("All stitching methods failed. Using first image.")
+        result = images[0]
+
+    # Write to stitched_ (master before object removal + corners)
+    stitched_path = os.path.join(wall_dir, f"stitched_{wall_id}.jpg")
     result = _postprocess_stitched(result)
-    cv2.imwrite(out_path, result)
-    return True, f"/static/uploads/{venue_id}/{wall_id}/processed_{wall_id}.jpg"
+    cv2.imwrite(stitched_path, result)
+    return True, f"/static/uploads/{venue_id}/{wall_id}/stitched_{wall_id}.jpg"
 
 
 def get_overlap_estimates(venue_id: str, wall_id: str) -> List[int]:

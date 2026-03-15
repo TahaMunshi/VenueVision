@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import './FloorPlanner.css'
-import { getApiBaseUrl } from '../../utils/api'
-import FloorPlanUpload from '../../components/FloorPlanUpload'
+import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
 
 const METER_TO_PIXEL_SCALE = 30 // 1 meter = 30 pixels for a larger canvas
 const GRID_SIZE = METER_TO_PIXEL_SCALE
@@ -157,8 +156,6 @@ const FloorPlanner = () => {
   // Start with no walls by default; user draws or adds rectangle manually
   const defaultWalls: WallSpec[] = []
   const [walls, setWalls] = useState<WallSpec[]>(defaultWalls)
-  const [floorPlanUrl, setFloorPlanUrl] = useState<string | null>(null)
-  const [planMode, setPlanMode] = useState<'upload' | 'manual'>('manual')
   const [placedAssets, setPlacedAssets] = useState<Asset[]>([])
   const [viewMode, setViewMode] = useState<'all' | 'floor' | 'middle' | 'ceiling'>('all')
   const [draggedAsset, setDraggedAsset] = useState<{
@@ -215,7 +212,9 @@ const FloorPlanner = () => {
     // Load room dimensions and layout from server
     const loadLayout = async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/layout`)
+        const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/layout`, {
+          headers: getAuthHeaders()
+        })
         if (response.ok) {
           const data = await response.json()
           if (data.dimensions) {
@@ -237,10 +236,6 @@ const FloorPlanner = () => {
           }
           if (data.assets && Array.isArray(data.assets)) {
             setPlacedAssets(data.assets)
-          }
-          if (data.floor_plan_url) {
-            setFloorPlanUrl(data.floor_plan_url)
-            setPlanMode('upload')
           }
         } else {
           console.error(`[FloorPlanner] Failed to load layout: ${response.status} ${response.statusText}`)
@@ -704,6 +699,7 @@ const FloorPlanner = () => {
       const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/layout`, {
         method: 'POST',
         headers: {
+          ...getAuthHeaders(),
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
@@ -713,7 +709,7 @@ const FloorPlanner = () => {
           materials,
           lighting: { preset: lightingPreset },
           walls,
-          floor_plan_url: floorPlanUrl
+          floor_plan_url: null
         })
       })
 
@@ -740,6 +736,7 @@ const FloorPlanner = () => {
       const response = await fetch(resetUrl, {
         method: 'POST',
         headers: {
+          ...getAuthHeaders(),
           'Content-Type': 'application/json'
         }
       })
@@ -750,7 +747,6 @@ const FloorPlanner = () => {
         // Reset local state
         setWalls([])
         setPlacedAssets([])
-        setFloorPlanUrl(null)
         setVenueName('')
         setRoomDimensions({ width: 20, height: 8, depth: 20 })
         setLightingPreset('neutral')
@@ -774,7 +770,8 @@ const FloorPlanner = () => {
   const handleGenerateGlb = async () => {
     try {
       const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/generate-glb`, {
-        method: 'POST'
+        method: 'POST',
+        headers: getAuthHeaders()
       })
       if (response.ok) {
         setMessage({ text: 'Server GLB generated.', type: 'success' })
@@ -1143,48 +1140,6 @@ const FloorPlanner = () => {
           </div>
           <div className="material-panel">
             <h3>Room & Materials</h3>
-          <div className="plan-mode-toggle">
-            <label>
-              <input
-                type="radio"
-                name="planMode"
-                value="manual"
-                checked={planMode === 'manual'}
-                onChange={() => setPlanMode('manual')}
-              />
-              Create floor plan here
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="planMode"
-                value="upload"
-                checked={planMode === 'upload'}
-                onChange={() => setPlanMode('upload')}
-              />
-              Upload floor plan image
-            </label>
-          </div>
-
-          {planMode === 'upload' && (
-            <div className="upload-wrapper">
-              <FloorPlanUpload
-                venueId={venueId || 'demo-venue'}
-                onUploadComplete={(url) => {
-                  setFloorPlanUrl(url.startsWith('http') ? url : `${API_BASE_URL}${url}`)
-                  setMessage({ text: 'Floor plan uploaded.', type: 'success' })
-                  setTimeout(() => setMessage(null), 2000)
-                }}
-              />
-              {floorPlanUrl && (
-                <div className="upload-preview">
-                  <p>Current floor plan:</p>
-                  <img src={floorPlanUrl.startsWith('http') ? floorPlanUrl : `${API_BASE_URL}${floorPlanUrl}`} alt="Floor plan" />
-                </div>
-              )}
-            </div>
-          )}
-
             <label className="form-row">
               <span>Venue Name</span>
               <input
@@ -1227,9 +1182,16 @@ const FloorPlanner = () => {
                 value={materials.floor.type}
                 onChange={(e) => setMaterials({ ...materials, floor: { ...materials.floor, type: e.target.value } })}
               >
-                <option value="oak_wood">Oak Wood</option>
-                <option value="light_marble">Light Marble</option>
-                <option value="concrete">Concrete</option>
+                <optgroup label="Procedural">
+                  <option value="oak_wood">Oak Wood</option>
+                  <option value="light_marble">Light Marble</option>
+                  <option value="concrete">Concrete</option>
+                </optgroup>
+                <optgroup label="Custom (place files in server/static/textures/floor/)">
+                  <option value="texture:floor/interior_tiles_diff_4k.jpg">Interior Tiles</option>
+                  <option value="texture:floor/rubber_tiles_diff_4k.jpg">Rubber Tiles</option>
+                  <option value="texture:floor/wood_floor_worn_diff_4k.jpg">Wood Floor Worn</option>
+                </optgroup>
               </select>
             </label>
             <label className="form-row">
@@ -1246,9 +1208,15 @@ const FloorPlanner = () => {
                 value={materials.ceiling.type}
                 onChange={(e) => setMaterials({ ...materials, ceiling: { ...materials.ceiling, type: e.target.value } })}
               >
-                <option value="flat_white">Flat White</option>
-                <option value="wood_slats">Wood Slats</option>
-                <option value="coffered">Coffered Panels</option>
+                <optgroup label="Procedural">
+                  <option value="flat_white">Flat White</option>
+                  <option value="wood_slats">Wood Slats</option>
+                  <option value="coffered">Coffered Panels</option>
+                </optgroup>
+                <optgroup label="Custom (place files in server/static/textures/ceiling/)">
+                  <option value="texture:ceiling/plank_flooring_04_diff_4k.jpg">Plank Flooring</option>
+                  <option value="texture:ceiling/plastered_wall_02_diff_4k.jpg">Plastered Wall</option>
+                </optgroup>
               </select>
             </label>
             <label className="form-row">
@@ -1483,7 +1451,7 @@ const FloorPlanner = () => {
             onDrop={handleCanvasDrop}
             onDragOver={handleCanvasDragOver}
             onMouseDown={(e) => {
-              if (planMode !== 'manual' || draggingAssetId || draggedAsset) return
+              if (false || draggingAssetId || draggedAsset) return
               if (e.button !== 0) return
               const target = e.target as HTMLElement
               if (target.closest('.placed-asset')) return
@@ -1541,7 +1509,7 @@ const FloorPlanner = () => {
               setSelectedWallId(null)
             }}
             onMouseMove={(e) => {
-              if (planMode !== 'manual') return
+              if (false) return
               const rect = canvasRef.current?.getBoundingClientRect()
               if (!rect) return
               const xPx = e.clientX - rect.left
@@ -1680,7 +1648,7 @@ const FloorPlanner = () => {
             }}
           >
             {/* Draw interactive walls */}
-            {planMode === 'manual' &&
+            {true &&
               walls.map((wall) => {
                 const coords = wall.coordinates
                 let x1Px: number
@@ -1790,7 +1758,7 @@ const FloorPlanner = () => {
                 )
               })}
 
-            {planMode === 'manual' && draftWall && (
+            {true && draftWall && (
               (() => {
                 const x1Px = draftWall.x1 * METER_TO_PIXEL_SCALE
                 const y1Px = draftWall.y1 * METER_TO_PIXEL_SCALE

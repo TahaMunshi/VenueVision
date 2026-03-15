@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import './WallEditor.css'
-import { getApiBaseUrl } from '../../utils/api'
+import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
 
 type CornerPoint = [number, number]
 
@@ -43,6 +43,8 @@ const moveCorner = (
 const WallEditor = () => {
   const { venueId, wallId } = useParams<{ venueId: string; wallId: string }>()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const stepCorners = searchParams.get('step') === 'corners'
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const imageRef = useRef<HTMLImageElement | null>(null)
   
@@ -53,7 +55,8 @@ const WallEditor = () => {
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null)
   const [isDragging, setIsDragging] = useState(false)
-  const [cropMode, setCropMode] = useState(true)
+  const [cropMode, setCropMode] = useState(!stepCorners)
+  const [cornerAdjustMode, setCornerAdjustMode] = useState(stepCorners)
   const [dragStatus, setDragStatus] = useState('idle')
   const draggingIndexRef = useRef<number | null>(null)
   const cornerPointsRef = useRef<CornerPoint[]>([])
@@ -66,8 +69,11 @@ const WallEditor = () => {
       if (!venueId || !wallId) return
 
       try {
-        // Request original captured image (not processed) for corner detection
-        const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/wall-images?original=true`)
+        // In corner adjust mode (or step=corners), load stitched/processed; otherwise original
+        const useOriginal = !cornerAdjustMode && !stepCorners
+        const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/wall-images?original=${useOriginal}`, {
+          headers: getAuthHeaders()
+        })
         const data = await response.json()
         
         if (data.status === 'success' && data.wall_images && data.wall_images[wallId]) {
@@ -106,7 +112,7 @@ const WallEditor = () => {
     }
 
     loadWallImage()
-  }, [venueId, wallId, API_BASE_URL])
+  }, [venueId, wallId, API_BASE_URL, cornerAdjustMode])
 
 
   const drawCornersOnCanvas = (points: CornerPoint[]) => {
@@ -323,6 +329,83 @@ const WallEditor = () => {
     setCropMode(true)
   }
 
+  const handleReStitch = async () => {
+    if (!venueId || !wallId) return
+    setIsProcessing(true)
+    setMessage(null)
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/wall/${wallId}/stitch`, {
+        method: 'POST',
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      })
+      const data = await res.json()
+      if (data.status === 'success') {
+        setMessage({ text: 'Re-stitched successfully! Reloading...', type: 'success' })
+        setCornerAdjustMode(true)
+        window.location.reload()
+      } else {
+        setMessage({ text: data.message || 'Re-stitch failed', type: 'error' })
+      }
+    } catch (e) {
+      setMessage({ text: 'Re-stitch failed. Please try again.', type: 'error' })
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const handleApplyCorners = async () => {
+    if (!venueId || !wallId || cornerPoints.length !== 4) return
+    setIsProcessing(true)
+    setMessage(null)
+    try {
+      const formData = new FormData()
+      formData.append('corner_points', JSON.stringify(cornerPoints))
+      const res = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/wall/${wallId}/apply-corners`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: formData
+      })
+      const data = await res.json()
+      if (data.status === 'success') {
+        setMessage({ text: 'Wall complete! Proceeding to next wall.', type: 'success' })
+        setTimeout(() => navigate(`/capture/${venueId}`), 1200)
+      } else {
+        setMessage({ text: data.message || data.error || 'Apply corners failed', type: 'error' })
+      }
+    } catch (e) {
+      setMessage({ text: 'Apply corners failed. Please try again.', type: 'error' })
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const handleReStitchWithCorners = async () => {
+    if (!venueId || !wallId || cornerPoints.length !== 4) return
+    setIsProcessing(true)
+    setMessage(null)
+    try {
+      const formData = new FormData()
+      formData.append('corner_points', JSON.stringify(cornerPoints))
+      const res = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/wall/${wallId}/restitch-with-corners`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: formData
+      })
+      const data = await res.json()
+      if (data.status === 'success') {
+        setMessage({ text: 'Re-stitched with perspective correction!', type: 'success' })
+        setTimeout(() => navigate(`/view/${venueId}`), 1500)
+      } else {
+        setMessage({ text: data.message || data.error || 'Re-stitch failed', type: 'error' })
+      }
+    } catch (e) {
+      setMessage({ text: 'Re-stitch failed. Please try again.', type: 'error' })
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
   const handleProcess = async () => {
     if (!imageRef.current || !venueId || !wallId) {
       setMessage({ text: 'Image not loaded or venue/wall IDs missing', type: 'error' })
@@ -370,6 +453,7 @@ const WallEditor = () => {
 
       const response = await fetch(`${API_BASE_URL}/api/v1/wall/process`, {
         method: 'POST',
+        headers: getAuthHeaders(),
         body: formData
       })
 
@@ -443,9 +527,11 @@ const WallEditor = () => {
             }}
           />
           
-          {cornerPoints.length === 4 && cropMode && (
+          {cornerPoints.length === 4 && (
             <p className="instruction-text">
-              Drag each red corner handle independently to fine-tune the wall region.
+              {cropMode
+                ? 'Drag each red corner handle to fine-tune the wall region for initial processing.'
+                : 'Drag corners to adjust perspective, then click Re-stitch + Corners.'}
             </p>
           )}
           <p className="instruction-text" style={{ opacity: 0.6, fontSize: '0.8rem' }}>
@@ -455,32 +541,66 @@ const WallEditor = () => {
 
         <div className="controls-section">
           <button
-            onClick={() => setCropMode(true)}
-            className="action-button primary"
+            onClick={() => { setCropMode(true); setCornerAdjustMode(false) }}
+            className={`action-button ${cropMode ? 'primary' : 'secondary'}`}
             style={{ marginBottom: '0.5rem' }}
           >
-            {cropMode ? 'Crop Mode: On' : 'Start Crop / Resize'}
+            Crop Mode
+          </button>
+          <button
+            onClick={() => { setCornerAdjustMode(true); setCropMode(false) }}
+            className={`action-button ${cornerAdjustMode ? 'primary' : 'secondary'}`}
+            style={{ marginBottom: '0.5rem', marginLeft: '0.5rem' }}
+          >
+            Adjust Corners
           </button>
 
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <button
-              onClick={handleReset}
-              className="action-button secondary"
-            >
-              Reset Crop Box
-            </button>
-            <button
-              onClick={handleProcess}
-              disabled={isProcessing || cornerPoints.length !== 4}
-              className="action-button primary"
-            >
-              {isProcessing ? 'Processing...' : 'Save / Process'}
-            </button>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+            {cropMode && (
+              <>
+                <button onClick={handleReset} className="action-button secondary">
+                  Reset Crop Box
+                </button>
+                <button
+                  onClick={handleProcess}
+                  disabled={isProcessing || cornerPoints.length !== 4}
+                  className="action-button primary"
+                >
+                  {isProcessing ? 'Processing...' : 'Save / Process'}
+                </button>
+              </>
+            )}
+            {cornerAdjustMode && (
+              <>
+                <button
+                  onClick={handleApplyCorners}
+                  disabled={isProcessing || cornerPoints.length !== 4}
+                  className="action-button primary"
+                >
+                  {isProcessing ? '...' : 'Apply Corners & Proceed to Next Wall'}
+                </button>
+                <button
+                  onClick={handleReStitch}
+                  disabled={isProcessing}
+                  className="action-button secondary"
+                >
+                  {isProcessing ? '...' : 'Re-stitch'}
+                </button>
+                <button
+                  onClick={handleReStitchWithCorners}
+                  disabled={isProcessing || cornerPoints.length !== 4}
+                  className="action-button secondary"
+                >
+                  {isProcessing ? '...' : 'Re-stitch + Corners'}
+                </button>
+              </>
+            )}
           </div>
 
           <button
             onClick={() => navigate(`/view/${venueId}`)}
             className="action-button secondary"
+            style={{ marginTop: '0.5rem' }}
           >
             View 3D Space
           </button>

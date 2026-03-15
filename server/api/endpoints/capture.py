@@ -5,6 +5,8 @@ from io import BytesIO
 
 from flask import Blueprint, jsonify, request
 
+from middleware.auth_middleware import token_required
+from utils.venue_auth import require_venue_access
 from services.image_analysis import analyze_quality
 from services.wall_processing import (
     auto_detect_corners,
@@ -21,7 +23,8 @@ capture_bp = Blueprint("capture", __name__)
 
 
 @capture_bp.route("/capture/upload", methods=["POST"])
-def upload_capture():
+@token_required
+def upload_capture(current_user):
     """
     Accepts a photo capture, validates quality, and saves it for reconstruction.
     Expects multipart form-data containing:
@@ -38,6 +41,10 @@ def upload_capture():
 
     if not venue_id or not wall_id:
         return jsonify({"error": "venue_id and wall_id are required."}), 400
+
+    _, err = require_venue_access(venue_id, current_user, require_owner=True)
+    if err:
+        return err[0], err[1]
 
     file_bytes = file.read()
     if not file_bytes:
@@ -146,7 +153,8 @@ def auto_detect_wall_corners():
 
 
 @capture_bp.route("/wall/process", methods=["POST"])
-def process_wall():
+@token_required
+def process_wall(current_user):
     """
     Process a wall image: warp perspective, stylize, and save.
     Expects multipart form-data containing:
@@ -168,6 +176,10 @@ def process_wall():
 
     if not corner_points_json:
         return jsonify({"error": "corner_points are required."}), 400
+
+    _, err = require_venue_access(venue_id, current_user, require_owner=True)
+    if err:
+        return err[0], err[1]
 
     file_bytes = file.read()
     if not file_bytes:
