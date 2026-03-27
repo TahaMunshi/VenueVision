@@ -3,8 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom'
 import './FloorPlanner.css'
 import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
 
-const METER_TO_PIXEL_SCALE = 30 // 1 meter = 30 pixels for a larger canvas
-const GRID_SIZE = METER_TO_PIXEL_SCALE
+const METER_TO_PIXEL_SCALE = 30 // 1 meter = 30 pixels (2D size matches 3D room scale)
+const GRID_SIZE = 6 // Snap every 6px = 0.2m so assets can be placed close together
 
 /** Three vertical layers: floor (rugs/carpets), surface (middle: furniture + tabletop), ceiling (lights). */
 export type AssetLayer = 'floor' | 'surface' | 'ceiling'
@@ -28,6 +28,8 @@ type Asset = {
   elevation?: number
   /** Real-world height in meters (Y axis) for true-to-life scaling. */
   height?: number
+  /** Brightness multiplier (0.3–2.5, 1 = default). */
+  brightness?: number
 }
 
 type UserAsset = {
@@ -41,6 +43,7 @@ type UserAsset = {
   width_m?: number
   depth_m?: number
   height_m?: number
+  brightness?: number
 }
 
 /**
@@ -68,6 +71,7 @@ type CatalogItem = (typeof ASSET_CATALOG)[number]
 type BuiltInAssetOverride = {
   height_m?: number
   asset_layer?: AssetLayer
+  brightness?: number
 }
 const BUILTIN_OVERRIDES_KEY = 'builtin_asset_overrides_v1'
 
@@ -79,9 +83,9 @@ const getBuiltInOverrides = (): Record<string, BuiltInAssetOverride> => {
   }
 }
 
-const withCatalogOverrides = (item: CatalogItem): CatalogItem => {
+const withCatalogOverrides = (item: CatalogItem): CatalogItem & { brightness: number } => {
   const override = getBuiltInOverrides()[item.file]
-  if (!override) return item
+  if (!override) return { ...item, brightness: 1 }
   const targetHeight = typeof override.height_m === 'number' && override.height_m > 0 ? override.height_m : item.height
   const ratio = item.height > 0 ? targetHeight / item.height : 1
   return {
@@ -95,7 +99,8 @@ const withCatalogOverrides = (item: CatalogItem): CatalogItem => {
       : ((override.asset_layer as AssetLayer) || item.layer) === 'floor'
         ? 0
         : item.elevation * ratio,
-    label: `${item.label.split(' (')[0]} (${(item.width * ratio).toFixed(2)}×${(item.depth * ratio).toFixed(2)}m)`
+    label: `${item.label.split(' (')[0]} (${(item.width * ratio).toFixed(2)}×${(item.depth * ratio).toFixed(2)}m)`,
+    brightness: override.brightness ?? 1
   }
 }
 
@@ -167,6 +172,7 @@ const FloorPlanner = () => {
     layer: AssetLayer
     elevation: number
     placeOnTable?: boolean
+    brightness?: number
   } | null>(null)
   const [draggingAssetId, setDraggingAssetId] = useState<string | null>(null)
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
@@ -433,15 +439,17 @@ const FloorPlanner = () => {
     e: React.DragEvent,
     catalogItem: CatalogItem
   ) => {
+    const item = withCatalogOverrides(catalogItem)
     setDraggedAsset({
-      type: catalogItem.type,
-      width: catalogItem.width,
-      depth: catalogItem.depth,
-      height: catalogItem.height,
-      file: catalogItem.file,
-      layer: catalogItem.layer,
-      elevation: catalogItem.elevation,
-      placeOnTable: catalogItem.placeOnTable
+      type: item.type,
+      width: item.width,
+      depth: item.depth,
+      height: item.height,
+      file: item.file,
+      layer: item.layer,
+      elevation: item.elevation,
+      placeOnTable: catalogItem.placeOnTable,
+      brightness: item.brightness
     })
     e.dataTransfer.effectAllowed = 'copy'
   }
@@ -456,7 +464,8 @@ const FloorPlanner = () => {
       height: asset.height_m ?? 1,
       file: asset.file_path || (asset.file_url?.replace(/^\/static\//, '') ?? ''),
       layer: layer as AssetLayer,
-      elevation
+      elevation,
+      brightness: asset.brightness ?? 1
     })
     e.dataTransfer.effectAllowed = 'copy'
   }
@@ -517,7 +526,8 @@ const FloorPlanner = () => {
         offsetX,
         offsetY,
         layer: draggedAsset.layer,
-        elevation: draggedAsset.elevation
+        elevation: draggedAsset.elevation,
+        brightness: draggedAsset.brightness ?? 1
       }
       setPlacedAssets([...placedAssets, newAsset])
       setDraggedAsset(null)
@@ -526,7 +536,7 @@ const FloorPlanner = () => {
 
     // Same-layer collision only (different layers can share X/Y)
     if (checkCollision(null, xM, yM, draggedAsset.width, draggedAsset.depth, draggedAsset.layer)) {
-      setMessage({ text: 'Cannot place asset here! Assets must maintain spacing on this layer.', type: 'error' })
+      setMessage({ text: 'Cannot place here: overlaps another asset on this layer or is out of bounds.', type: 'error' })
       setTimeout(() => setMessage(null), 3000)
       return
     }
@@ -542,7 +552,8 @@ const FloorPlanner = () => {
       y: yM,
       rotation: 0,
       layer: draggedAsset.layer,
-      elevation: draggedAsset.elevation
+      elevation: draggedAsset.elevation,
+      brightness: draggedAsset.brightness ?? 1
     }
 
     setPlacedAssets([...placedAssets, newAsset])
@@ -607,7 +618,8 @@ const FloorPlanner = () => {
     depth: number,
     layer?: AssetLayer
   ): boolean => {
-    const spacing = 1 // 1 meter spacing requirement
+    // Small gap (5cm) so assets can be placed close; set to 0 for touching
+    const spacing = 0.05
 
     if (
       x < 0 ||
@@ -652,7 +664,7 @@ const FloorPlanner = () => {
     // If no walls defined, prevent placement (must have bounding walls)
     if (walls.length === 0) return false
     
-    const MIN_WALL_DISTANCE = 0.1 // 10cm minimum distance from walls
+    const MIN_WALL_DISTANCE = 0.05 // 5cm from walls so assets can sit close to walls
     const assetRight = assetX + assetWidth
     const assetBottom = assetY + assetDepth
     
@@ -1034,7 +1046,7 @@ const FloorPlanner = () => {
           ← Back to Venue
         </button>
         <h1>2D Floor Planner</h1>
-        <p>Venue: {venueName || venueId} | Room: {roomDimensions.width}m x {roomDimensions.depth}m</p>
+        <p>Venue: {venueName || venueId} | Room: {roomDimensions.width}m × {roomDimensions.depth}m | Scale: 1m = {METER_TO_PIXEL_SCALE}px (2D matches 3D)</p>
       </div>
 
       <div className="planner-content">
@@ -1444,8 +1456,8 @@ const FloorPlanner = () => {
               height: `${canvasHeightPx}px`,
               background: 'transparent',
               backgroundImage:
-                'repeating-linear-gradient(0deg, rgba(255,255,255,0.04) 0, rgba(255,255,255,0.04) 1px, transparent 1px, transparent 20px),' +
-                'repeating-linear-gradient(90deg, rgba(255,255,255,0.04) 0, rgba(255,255,255,0.04) 1px, transparent 1px, transparent 20px)',
+                `repeating-linear-gradient(0deg, rgba(255,255,255,0.06) 0, rgba(255,255,255,0.06) 1px, transparent 1px, transparent ${METER_TO_PIXEL_SCALE}px),` +
+                `repeating-linear-gradient(90deg, rgba(255,255,255,0.06) 0, rgba(255,255,255,0.06) 1px, transparent 1px, transparent ${METER_TO_PIXEL_SCALE}px)`,
               border: 'none'
             }}
             onDrop={handleCanvasDrop}

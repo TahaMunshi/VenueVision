@@ -54,6 +54,7 @@ const MobileCapture = () => {
   const [videoReady, setVideoReady] = useState(false)
   const [loadingTimeout, setLoadingTimeout] = useState(false)
   const [retakingWallId, setRetakingWallId] = useState<string | null>(null) // Track which wall is being retaken
+  const [publicBaseUrl, setPublicBaseUrl] = useState<string | null>(null) // ngrok/public URL from server
 
   // All refs must be declared at the top level
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -397,6 +398,18 @@ const MobileCapture = () => {
     return () => clearInterval(intervalId)
   }, [fetchProgress]) // Removed progress dependency
 
+  // Fetch public URL (ngrok) from server so share/QR link works for phone
+  useEffect(() => {
+    const base = getApiBaseUrl()
+    fetch(`${base}/api/v1/public-url`)
+      .then((r) => r.json())
+      .then((data: { url?: string }) => {
+        const u = (data?.url || '').trim()
+        if (u) setPublicBaseUrl(u.replace(/\/$/, ''))
+      })
+      .catch(() => {})
+  }, [])
+
   useEffect(() => {
     if (!toast) return
     const timeout = setTimeout(() => setToast(null), 2500)
@@ -587,66 +600,41 @@ const MobileCapture = () => {
     : totalWalls
     ? Math.min(completedCount + 1, totalWalls)
     : completedCount + 1
-  const bannerTargetName = currentWall?.name ?? 'the next wall'
   const currentReq = currentWall?.id ? progress?.capture_requirements?.[currentWall.id] : undefined
   const currentRequiredSegments = currentReq?.required_segments ?? 1
   const currentCapturedSegments = currentReq?.captured_segments ?? 0
 
   const captureUrl = `${API_BASE_URL}/mobile/${venueId ?? ''}`
-  const shareUrl = (import.meta.env as any).VITE_NGROK_URL || captureUrl
+  const shareUrl =
+    (publicBaseUrl ? `${publicBaseUrl}/mobile/${venueId ?? ''}` : null) ||
+    (import.meta.env as any).VITE_NGROK_URL ||
+    captureUrl
 
   return (
-    <div className="capture-container" style={{ width: '100vw', height: '100vh', position: 'fixed', top: 0, left: 0 }}>
-      <div
-        className="share-banner"
-        style={{
-          position: 'absolute',
-          top: '10px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          zIndex: 1200,
-          background: 'rgba(0,0,0,0.7)',
-          color: '#fff',
-          padding: '8px 12px',
-          borderRadius: '12px',
-          display: 'flex',
-          gap: '10px',
-          alignItems: 'center',
-          fontSize: '0.85rem',
-          boxShadow: '0 6px 20px rgba(0,0,0,0.3)'
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+    <div className="capture-container">
+      {/* Share banner: hidden on mobile via CSS so phone users see full camera UI */}
+      <div className="share-banner">
+        <div className="share-banner-inner">
           <img
             src={`https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(shareUrl)}`}
-            alt="Open on phone QR"
-            style={{ width: 48, height: 48, borderRadius: 6, background: '#fff' }}
+            alt="Scan to open on phone"
+            className="share-qr"
           />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontWeight: 600 }}>Open guided capture on your phone</span>
-            <code style={{ background: 'rgba(255,255,255,0.08)', padding: '3px 5px', borderRadius: '6px' }}>
-              {shareUrl}
-            </code>
+          <div className="share-text">
+            <span className="share-title">Open on your phone</span>
+            <code className="share-url">{shareUrl}</code>
           </div>
         </div>
         <button
+          type="button"
+          className="share-copy-btn"
           onClick={() => navigator.clipboard?.writeText(shareUrl).catch(() => {})}
-          style={{
-            background: '#4CAF50',
-            color: '#fff',
-            border: 'none',
-            padding: '6px 10px',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontWeight: 600,
-            whiteSpace: 'nowrap'
-          }}
         >
           Copy link
         </button>
       </div>
 
-      <div className="video-wrapper" style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <div className="video-wrapper">
         <video
           ref={videoRef}
           autoPlay
@@ -816,109 +804,64 @@ const MobileCapture = () => {
           </div>
         ) : null}
 
-        <div className="overlay">
-          <div className="overlay-header" style={{ position: 'relative' }}>
-            <button
-              onClick={() => navigate(`/venue/${venueId}`)}
-              style={{
-                position: 'absolute',
-                top: '0',
-                left: '0',
-                background: 'rgba(255, 255, 255, 0.15)',
-                border: '1px solid rgba(255, 255, 255, 0.3)',
-                color: '#fff',
-                padding: '0.5rem 1rem',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                fontSize: '0.9rem',
-                zIndex: 1000,
-                pointerEvents: 'auto',
-                fontWeight: '600'
-              }}
-            >
-              ← Back
-            </button>
-            <p className="mode-label">Smart Guided Capture</p>
-            <div className="capture-banner">
-              {progress?.is_complete ? (
-                <div style={{ textAlign: 'center' }}>
-                  <p className="capture-banner-text">✓ All walls captured! Perfect job!</p>
-                  <button
-                    onClick={() => navigate(`/editor/${targetVenue}`)}
-                    style={{
-                      marginTop: '10px',
-                      marginRight: '8px',
-                      padding: '0.75rem 1.2rem',
-                      background: '#FF9800',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '8px',
-                      cursor: 'pointer',
-                      fontWeight: 'bold',
-                      fontSize: '0.9rem',
-                    }}
-                  >
-                    Edit All Walls
-                  </button>
-                  <button
-                    onClick={() => {
-                      navigate(`/view/${targetVenue}`)
-                    }}
-                    style={{
-                      marginTop: '10px',
-                      padding: '0.75rem 1.5rem',
-                      background: '#4CAF50',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '8px',
-                      cursor: 'pointer',
-                      fontWeight: 'bold',
-                      fontSize: '0.9rem',
-                      boxShadow: '0 4px 12px rgba(76, 175, 80, 0.3)'
-                    }}
-                  >
-                    View 3D Space →
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <p className="capture-banner-text">
-                    Step {stepNumber}/{totalWalls || '—'}:{' '}
-                    <strong>Photograph {bannerTargetName}</strong>
-                  </p>
-                  {currentRequiredSegments > 1 && (
-                    <div style={{ fontSize: '0.85rem', marginTop: '6px', opacity: 0.9 }}>
-                      {`Photo ${Math.min(currentCapturedSegments + 1, currentRequiredSegments)}/${currentRequiredSegments} for this wall`}
-                    </div>
-                  )}
-                  <div style={{ fontSize: '0.85rem', marginTop: '6px', opacity: 0.8 }}>
-                    {completedCount ? `${completedCount} captured, ${(progress?.total_walls || 0) - completedCount} remaining` : 'No walls captured yet'}
-                  </div>
-                  <div style={{ marginTop: '8px' }}>
-                    <button
-                      onClick={() => navigate(`/editor/${targetVenue}`)}
-                      style={{
-                        padding: '0.55rem 0.9rem',
-                        background: 'rgba(255, 152, 0, 0.9)',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '8px',
-                        cursor: 'pointer',
-                        fontWeight: 700,
-                        fontSize: '0.82rem'
-                      }}
-                    >
-                      Edit Captured Walls
-                    </button>
-                  </div>
-                </>
-              )}
-              <p className="wall-label">
-                Venue <strong>{targetVenue}</strong>
-              </p>
+        {/* Top bar: back + progress */}
+        <header className="capture-top-bar">
+          <button
+            type="button"
+            className="capture-back-btn"
+            onClick={() => navigate(`/venue/${venueId}`)}
+            aria-label="Back to venue"
+          >
+            <span className="capture-back-arrow" aria-hidden>←</span>
+            <span className="capture-back-text">Back</span>
+          </button>
+          <div className="capture-progress-dots" role="status" aria-label={`Step ${stepNumber} of ${totalWalls || 0}`}>
+            {Array.from({ length: totalWalls || 0 }, (_, i) => (
+              <span
+                key={i}
+                className={`capture-progress-dot ${i + 1 <= completedCount ? 'done' : ''} ${i + 1 === stepNumber && !progress?.is_complete ? 'current' : ''}`}
+              />
+            ))}
+          </div>
+          <div className="capture-step-badge">
+            {stepNumber}/{totalWalls || '—'}
+          </div>
+        </header>
+
+        {/* Current wall callout: clear, professional */}
+        {!progress?.is_complete && currentWall && (
+          <div className="capture-current-wall-card">
+            <span className="capture-current-wall-label">Photograph this wall</span>
+            <span className="capture-current-wall-name">{currentWall.name}</span>
+            {currentRequiredSegments > 1 && (
+              <span className="capture-current-wall-sub">
+                Photo {Math.min(currentCapturedSegments + 1, currentRequiredSegments)} of {currentRequiredSegments}
+              </span>
+            )}
+          </div>
+        )}
+
+        {progress?.is_complete && (
+          <div className="capture-complete-card">
+            <p className="capture-complete-title">All walls captured</p>
+            <p className="capture-complete-sub">Review or view in 3D</p>
+            <div className="capture-complete-actions">
+              <button type="button" className="capture-complete-btn secondary" onClick={() => navigate(`/editor/${targetVenue}`)}>
+                Edit walls
+              </button>
+              <button type="button" className="capture-complete-btn primary" onClick={() => navigate(`/view/${targetVenue}`)}>
+                View 3D
+              </button>
             </div>
           </div>
-        </div>
+        )}
+
+        {/* Secondary: edit captured walls (when not complete) */}
+        {!progress?.is_complete && (
+          <button type="button" className="capture-edit-walls-btn" onClick={() => navigate(`/editor/${targetVenue}`)}>
+            Edit captured walls
+          </button>
+        )}
 
         {/* Debug info - remove in production */}
         {import.meta.env.DEV && (
@@ -940,13 +883,6 @@ const MobileCapture = () => {
         {showCheck && (
           <div className="success-check">
             <span>✔</span>
-          </div>
-        )}
-
-        {/* Dynamic toast message when looking for a wall */}
-        {!progress?.is_complete && currentWall && !toast && (
-          <div className="feedback-toast">
-            Looking for {currentWall.name}...
           </div>
         )}
 
@@ -972,13 +908,13 @@ const MobileCapture = () => {
           </div>
         )}
 
-        {/* Review captures panel */}
+        {/* Review captures: horizontal strip on mobile so shutter stays visible */}
         <div className="review-panel">
           <div className="review-panel-header">
-            <div className="review-panel-title">Captured Walls</div>
-            <div className="review-panel-progress">
+            <span className="review-panel-title">Captured</span>
+            <span className="review-panel-progress">
               {progress?.completed_walls.length ?? 0}/{progress?.total_walls ?? progress?.walls?.length ?? 0}
-            </div>
+            </span>
           </div>
           <div className="review-panel-grid">
             {progress?.walls?.map((wall) => {

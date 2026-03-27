@@ -408,6 +408,17 @@ const Space3DViewer = () => {
         // If a server-generated GLB exists, try to load it first
         if (generatedGlb) {
           try {
+            // Ensure GLTFLoader is available (may not be loaded yet on this page)
+            if (!(window as any).THREE?.GLTFLoader) {
+              await new Promise<void>((resolve, reject) => {
+                const script = document.createElement('script')
+                script.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js'
+                script.onload = () => resolve()
+                script.onerror = () => reject(new Error('Failed to load GLTFLoader'))
+                document.head.appendChild(script)
+              })
+            }
+
             const gltfLoader = new THREE.GLTFLoader()
             await new Promise<void>((resolve, reject) => {
               gltfLoader.load(
@@ -740,39 +751,29 @@ const Space3DViewer = () => {
                       gltf.scene.position.y = -box.min.y
                     }
 
-                    // STEP 2: Uniform scale with type-aware sizing for better visual proportions.
+                    // STEP 2: True-to-size scaling. Use only the object's height (Y axis) to determine scale
+                    // so objects match the room's meter scale. User provides height in m/ft/in; we store meters.
                     const assetType = String(asset.type ?? asset.asset_type ?? '').toLowerCase()
                     const isRug = assetType === 'rug' || asset.file === 'rug.glb'
-                    const isVase = assetType === 'vase' || asset.file === 'blue_vase.glb'
-                    const isChandelier = assetType === 'chandelier' || asset.file === 'chandelier.glb'
                     const isFloorAsset = asset.layer === 'floor' || isRug
 
                     const targetWidth = Number(asset.width ?? asset.width_m ?? 0)
                     const targetDepth = Number(asset.depth ?? asset.depth_m ?? 0)
                     const targetHeight = Number(asset.height ?? asset.height_m ?? 0)
 
+                    const scaleFromHeight = size.y > 0 && targetHeight > 0 ? targetHeight / size.y : null
                     const scaleX = size.x > 0 && targetWidth > 0 ? targetWidth / size.x : null
-                    const scaleY = size.y > 0 && targetHeight > 0 ? targetHeight / size.y : null
                     const scaleZ = size.z > 0 && targetDepth > 0 ? targetDepth / size.z : null
 
                     let scale = 1
                     if (isFloorAsset && (scaleX != null || scaleZ != null)) {
-                      // Rugs should match floor footprint.
+                      // Floor assets (e.g. rugs): scale by footprint so they fit the room.
                       scale = Math.min(scaleX ?? Number.POSITIVE_INFINITY, scaleZ ?? Number.POSITIVE_INFINITY)
-                    } else if (scaleY != null) {
-                      scale = scaleY
-                    } else if (scaleX != null || scaleZ != null) {
-                      // Fallback when height is unavailable.
-                      const candidates = [scaleX, scaleZ].filter((v): v is number => v != null)
-                      scale = candidates.reduce((sum, v) => sum + v, 0) / candidates.length
+                    } else if (scaleFromHeight != null) {
+                      // All other objects: scale uniformly from height only (true to room size).
+                      scale = scaleFromHeight
                     }
-
-                    // Targeted boosts for assets currently rendering too small.
-                    let sizeBoost = onCeiling ? 1.4 : (isFloorAsset ? 1.2 : 1)
-                    if (isRug) sizeBoost *= 2.0
-                    if (isVase) sizeBoost *= 2.2
-                    if (isChandelier) sizeBoost *= 2.0
-                    scale *= sizeBoost
+                    // No size boosts — scale is true to the user-provided height and room dimensions.
                     gltf.scene.scale.set(scale, scale, scale)
 
                     // STEP 3: Center the model horizontally (X and Z only)
@@ -800,6 +801,22 @@ const Space3DViewer = () => {
                       if (Math.abs(verifyBox.max.y) > 0.001) gltf.scene.position.y -= verifyBox.max.y
                     } else {
                       if (Math.abs(verifyBox.min.y) > 0.001) gltf.scene.position.y -= verifyBox.min.y
+                    }
+
+                    // Apply per-asset brightness (clone materials so we don't affect other instances)
+                    const assetBrightness = Number(asset.brightness ?? 1)
+                    if (Math.abs(assetBrightness - 1) > 0.01) {
+                      gltf.scene.traverse((child: any) => {
+                        if (child.isMesh && child.material) {
+                          const mats = Array.isArray(child.material) ? child.material : [child.material]
+                          const cloned = mats.map((m: any) => {
+                            const clone = m.clone()
+                            if (clone.color) clone.color.multiplyScalar(assetBrightness)
+                            return clone
+                          })
+                          child.material = cloned.length === 1 ? cloned[0] : cloned
+                        }
+                      })
                     }
 
                     group.add(gltf.scene)

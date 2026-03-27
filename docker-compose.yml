@@ -31,7 +31,9 @@ services:
     volumes:
       - ./server/static/uploads:/app/server/static/uploads
       - ./server/static/user_assets:/app/server/static/user_assets
+      - ./server/static/temp_tripo:/app/server/static/temp_tripo
       - ./server/temp:/app/server/temp
+      - ./.ngrok:/app/.ngrok
     environment:
       - FLASK_ENV=production
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/fyp_db
@@ -39,6 +41,7 @@ services:
       - TRIPO_API_KEY=${TRIPO_API_KEY:-}
       - HF_TOKEN=${HF_TOKEN:-}
       - INPAINT_SPACE_URL=${INPAINT_SPACE_URL:-TahaMunshi03/venuevision-inpaint}
+      - PUBLIC_URL=${PUBLIC_URL:-}
     depends_on:
       db:
         condition: service_healthy

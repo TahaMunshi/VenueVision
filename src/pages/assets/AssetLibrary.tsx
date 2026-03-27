@@ -24,6 +24,7 @@ interface Asset {
   width_m?: number
   depth_m?: number
   height_m?: number
+  brightness?: number
   created_at: string
   is_preloaded?: boolean
 }
@@ -41,6 +42,7 @@ type BuiltInAssetDef = {
 type BuiltInAssetOverride = {
   height_m?: number
   asset_layer?: 'floor' | 'surface' | 'ceiling'
+  brightness?: number
 }
 
 const BUILTIN_ASSETS: BuiltInAssetDef[] = [
@@ -51,6 +53,22 @@ const BUILTIN_ASSETS: BuiltInAssetDef[] = [
 ]
 
 const BUILTIN_OVERRIDES_KEY = 'builtin_asset_overrides_v1'
+
+export type HeightUnit = 'm' | 'ft' | 'in'
+const METERS_PER_FT = 0.3048
+const METERS_PER_IN = 0.0254
+
+export function heightToMeters(value: number, unit: HeightUnit): number {
+  if (unit === 'm') return value
+  if (unit === 'ft') return value * METERS_PER_FT
+  return value * METERS_PER_IN // 'in'
+}
+
+export function metersToHeight(meters: number, unit: HeightUnit): number {
+  if (unit === 'm') return meters
+  if (unit === 'ft') return meters / METERS_PER_FT
+  return meters / METERS_PER_IN // 'in'
+}
 
 const getBuiltInOverrides = (): Record<string, BuiltInAssetOverride> => {
   try {
@@ -69,6 +87,7 @@ const buildBuiltInAssets = (): Asset[] => {
   return BUILTIN_ASSETS.map((item) => {
     const override = overrides[item.file] || {}
     const height = override.height_m ?? item.height_m
+    const brightness = override.brightness ?? 1
     return {
       asset_id: item.asset_id,
       asset_name: item.asset_name,
@@ -83,6 +102,7 @@ const buildBuiltInAssets = (): Asset[] => {
       width_m: item.width_m,
       depth_m: item.depth_m,
       height_m: height,
+      brightness,
       created_at: new Date(0).toISOString(),
       is_preloaded: true
     }
@@ -94,6 +114,8 @@ const AssetLibrary = () => {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const viewerRef = useRef<HTMLDivElement>(null)
   const viewerCleanupRef = useRef<(() => void) | null>(null)
+  const viewerStateRef = useRef<{ model: any; applyBrightness: (b: number) => void } | null>(null)
+  const [previewBrightness, setPreviewBrightness] = useState(1)
   const [assets, setAssets] = useState<Asset[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
@@ -101,8 +123,10 @@ const AssetLibrary = () => {
   const [assetName, setAssetName] = useState('')
   const [assetLayer, setAssetLayer] = useState<'floor' | 'surface' | 'ceiling'>('surface')
   const [heightM, setHeightM] = useState(1)
+  const [heightUnit, setHeightUnit] = useState<HeightUnit>('m')
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
+  const [previewUrls, setPreviewUrls] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const [showUploadModal, setShowUploadModal] = useState(false)
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null)
@@ -110,8 +134,11 @@ const AssetLibrary = () => {
   const [viewerError, setViewerError] = useState<string | null>(null)
   const [editingAsset, setEditingAsset] = useState<Asset | null>(null)
   const [editHeight, setEditHeight] = useState(1)
+  const [editHeightUnit, setEditHeightUnit] = useState<HeightUnit>('m')
+  const [editBrightness, setEditBrightness] = useState(1)
   const [editLayer, setEditLayer] = useState<'floor' | 'surface' | 'ceiling'>('surface')
   const [savingEdit, setSavingEdit] = useState(false)
+  const [savingBrightness, setSavingBrightness] = useState(false)
 
   const API_BASE_URL = getApiBaseUrl()
 
@@ -150,64 +177,67 @@ const AssetLibrary = () => {
     }
   }
 
+  const VIEW_LABELS = ['Front (required)', 'Right', 'Back', 'Left']
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) {
-      // Validate file type
-      const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
-      if (!validTypes.includes(file.type)) {
-        setError('Please select a valid image file (JPG, PNG, or WebP)')
-        return
-      }
-
-      // Validate file size (max 10MB)
-      if (file.size > 10 * 1024 * 1024) {
-        setError('Image must be smaller than 10MB')
-        return
-      }
-
-      setSelectedFile(file)
-      setError(null)
-
-      // Create preview
+    const files = e.target.files ? Array.from(e.target.files) : []
+    if (files.length === 0) return
+    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
+    const valid: File[] = []
+    for (const file of files) {
+      if (!validTypes.includes(file.type) || file.size > 10 * 1024 * 1024) continue
+      valid.push(file)
+    }
+    if (valid.length === 0) {
+      setError('Please select image files (JPG, PNG, WebP), each under 10MB')
+      return
+    }
+    setError(null)
+    setSelectedFiles(valid)
+    setSelectedFile(valid[0])
+    const urls: string[] = []
+    let loaded = 0
+    valid.forEach((file, i) => {
       const reader = new FileReader()
       reader.onloadend = () => {
-        setPreviewUrl(reader.result as string)
+        urls[i] = reader.result as string
+        loaded++
+        if (loaded === valid.length) setPreviewUrls(urls)
       }
       reader.readAsDataURL(file)
-
-      // Default asset name from filename
-      if (!assetName) {
-        const nameWithoutExt = file.name.replace(/\.[^/.]+$/, '')
-        setAssetName(nameWithoutExt)
-      }
+    })
+    if (!assetName && valid[0]) {
+      setAssetName(valid[0].name.replace(/\.[^/.]+$/, ''))
     }
   }
 
   const handleGenerateAsset = async () => {
-    if (!selectedFile) {
-      setError('Please select an image first')
+    const filesToSend = selectedFiles.length > 0 ? selectedFiles : (selectedFile ? [selectedFile] : [])
+    if (filesToSend.length === 0) {
+      setError('Please select at least one image')
       return
     }
 
     setUploading(true)
-    setUploadProgress('Uploading image...')
+    setUploadProgress(filesToSend.length > 1 ? 'Uploading images...' : 'Uploading image...')
     setError(null)
 
     try {
       const token = localStorage.getItem('token')
       const formData = new FormData()
-      formData.append('file', selectedFile)
+      filesToSend.forEach((file) => formData.append('files', file))
       formData.append('asset_name', assetName || 'Untitled Asset')
       formData.append('asset_layer', assetLayer)
       formData.append('height_m', String(heightM))
 
-      setUploadProgress('Generating 3D model... This may take 30-60 seconds.')
-      
-      // Set a longer timeout message
+      setUploadProgress(
+        filesToSend.length > 1
+          ? 'Generating 3D model from multiple views (Tripo3D)... This may take 1–2 minutes.'
+          : 'Generating 3D model... This may take 30–60 seconds.'
+      )
       const progressTimer = setTimeout(() => {
-        setUploadProgress('Still generating... AI is processing your image into a 3D model.')
-      }, 15000)
+        setUploadProgress('Still generating... AI is processing your image(s) into a 3D model.')
+      }, 20000)
 
       const response = await fetch(`${API_BASE_URL}/api/v1/assets/generate`, {
         method: 'POST',
@@ -223,9 +253,9 @@ const AssetLibrary = () => {
       
       if (response.ok && data.status === 'success') {
         setUploadProgress('Asset created successfully!')
-        // Reset form
         setSelectedFile(null)
-        setPreviewUrl(null)
+        setSelectedFiles([])
+        setPreviewUrls([])
         setAssetName('')
         setAssetLayer('surface')
         setHeightM(1)
@@ -356,13 +386,47 @@ const AssetLibrary = () => {
   const handlePreviewAsset = (asset: Asset) => {
     if (asset.generation_status !== 'completed') return
     setPreviewAsset(asset)
+    setPreviewBrightness(asset.brightness ?? 1)
     setViewerError(null)
     setViewerLoading(true)
+  }
+
+  const handleSavePreviewBrightness = async () => {
+    if (!previewAsset) return
+    setSavingBrightness(true)
+    try {
+      if (previewAsset.is_preloaded) {
+        const overrides = getBuiltInOverrides()
+        const fileKey = previewAsset.file_path.replace(/^models\//, '')
+        overrides[fileKey] = { ...(overrides[fileKey] || {}), brightness: previewBrightness }
+        setBuiltInOverrides(overrides)
+        setAssets((prev) =>
+          prev.map((a) =>
+            a.asset_id === previewAsset.asset_id ? { ...a, brightness: previewBrightness } : a
+          )
+        )
+        setPreviewAsset((a) => (a ? { ...a, brightness: previewBrightness } : null))
+      } else {
+        const token = localStorage.getItem('token')
+        const res = await fetch(`${API_BASE_URL}/api/v1/assets/detail/${previewAsset.asset_id}`, {
+          method: 'PATCH',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ brightness: previewBrightness })
+        })
+        if (res.ok) {
+          await fetchAssets()
+          setPreviewAsset((a) => (a ? { ...a, brightness: previewBrightness } : null))
+        }
+      }
+    } finally {
+      setSavingBrightness(false)
+    }
   }
 
   const openEditAsset = (asset: Asset) => {
     setEditingAsset(asset)
     setEditHeight(asset.height_m ?? 1)
+    setEditBrightness(asset.brightness ?? 1)
     setEditLayer((asset.asset_layer as 'floor' | 'surface' | 'ceiling') ?? 'surface')
   }
 
@@ -376,13 +440,14 @@ const AssetLibrary = () => {
         overrides[fileKey] = {
           ...(overrides[fileKey] || {}),
           height_m: editHeight,
-          asset_layer: editLayer
+          asset_layer: editLayer,
+          brightness: editBrightness
         }
         setBuiltInOverrides(overrides)
         setAssets(prev =>
           prev.map(a =>
             a.asset_id === editingAsset.asset_id
-              ? { ...a, height_m: editHeight, asset_layer: editLayer }
+              ? { ...a, height_m: editHeight, asset_layer: editLayer, brightness: editBrightness }
               : a
           )
         )
@@ -398,7 +463,8 @@ const AssetLibrary = () => {
         },
         body: JSON.stringify({
           height_m: editHeight,
-          asset_layer: editLayer
+          asset_layer: editLayer,
+          brightness: editBrightness
         })
       })
       if (res.ok) {
@@ -530,6 +596,33 @@ const AssetLibrary = () => {
             model.position.z = -scaledCenter.z
             model.position.y = -scaledBox.min.y // Place bottom on ground
 
+            // Store original material colors and apply brightness (so we can change it in real time)
+            const initialBrightness = previewAsset.brightness ?? 1
+            const applyBrightness = (b: number) => {
+              model.traverse((child: any) => {
+                if (child.isMesh && child.material) {
+                  const mats = Array.isArray(child.material) ? child.material : [child.material]
+                  mats.forEach((m: any) => {
+                    if (m.userData.originalColor) {
+                      m.color.copy(m.userData.originalColor).multiplyScalar(b)
+                    }
+                  })
+                }
+              })
+            }
+            model.traverse((child: any) => {
+              if (child.isMesh && child.material) {
+                const mats = Array.isArray(child.material) ? child.material : [child.material]
+                mats.forEach((m: any) => {
+                  if (m.color) {
+                    m.userData.originalColor = m.color.clone();
+                    (m as any).color.multiplyScalar(initialBrightness)
+                  }
+                })
+              }
+            })
+            viewerStateRef.current = { model, applyBrightness }
+
             scene.add(model)
 
             // Adjust camera to fit the model
@@ -575,6 +668,7 @@ const AssetLibrary = () => {
         // Store cleanup
         viewerCleanupRef.current = () => {
           cancelled = true
+          viewerStateRef.current = null
           window.removeEventListener('resize', handleResize)
           cancelAnimationFrame(animFrameId)
           controls.dispose()
@@ -696,34 +790,57 @@ const AssetLibrary = () => {
                 </div>
 
                 <div className="form-group">
-                  <label>Height (meters)</label>
-                  <input
-                    type="number"
-                    min="0.1"
-                    step="0.1"
-                    value={heightM}
-                    onChange={(e) => setHeightM(parseFloat(e.target.value) || 1)}
-                    disabled={uploading}
-                    placeholder="e.g. 0.75 for a chair"
-                  />
+                  <label>Height (object height for true-to-size scaling)</label>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input
+                      type="number"
+                      min={heightUnit === 'in' ? 1 : 0.1}
+                      step={heightUnit === 'in' ? 1 : 0.1}
+                      value={metersToHeight(heightM, heightUnit)}
+                      onChange={(e) => setHeightM(heightToMeters(parseFloat(e.target.value) || 0, heightUnit))}
+                      disabled={uploading}
+                      placeholder={heightUnit === 'm' ? 'e.g. 0.75' : heightUnit === 'ft' ? 'e.g. 2.5' : 'e.g. 30'}
+                      style={{ flex: '1 1 120px' }}
+                    />
+                    <select
+                      value={heightUnit}
+                      onChange={(e) => setHeightUnit(e.target.value as HeightUnit)}
+                      disabled={uploading}
+                      style={{ minWidth: 80 }}
+                    >
+                      <option value="m">m</option>
+                      <option value="ft">ft</option>
+                      <option value="in">in</option>
+                    </select>
+                  </div>
                   <p style={{ fontSize: '0.85em', color: '#888', marginTop: 4 }}>
-                    Enter the real-world height. Width and depth will scale proportionally.
+                    Real-world height of the object. The 3D model is scaled to this size in the room.
                   </p>
                 </div>
 
                 <div className="form-group">
-                  <label>Photo</label>
+                  <label>Photos (multiview for best quality)</label>
+                  <p className="modal-description" style={{ marginTop: 0, marginBottom: 8 }}>
+                    Add 1–4 images: front view required; add right, back, and left for better 3D. Order = Front, Right, Back, Left.
+                  </p>
                   <div 
-                    className={`upload-area ${previewUrl ? 'has-preview' : ''}`}
+                    className={`upload-area ${previewUrls.length > 0 ? 'has-preview' : ''}`}
                     onClick={() => !uploading && fileInputRef.current?.click()}
                   >
-                    {previewUrl ? (
-                      <img src={previewUrl} alt="Preview" className="preview-image" />
+                    {previewUrls.length > 0 ? (
+                      <div className="multiview-previews">
+                        {previewUrls.map((url, i) => (
+                          <div key={i} className="multiview-preview-item">
+                            <img src={url} alt={VIEW_LABELS[i] || `View ${i + 1}`} />
+                            <span className="multiview-label">{VIEW_LABELS[i] || `View ${i + 1}`}</span>
+                          </div>
+                        ))}
+                      </div>
                     ) : (
                       <div className="upload-placeholder">
                         <span className="upload-icon">📷</span>
-                        <span>Click to select an image</span>
-                        <span className="upload-hint">JPG, PNG, WebP • Max 10MB</span>
+                        <span>Click to select one or more images</span>
+                        <span className="upload-hint">JPG, PNG, WebP • Max 10MB each • Order: Front, Right, Back, Left</span>
                       </div>
                     )}
                   </div>
@@ -734,6 +851,7 @@ const AssetLibrary = () => {
                     onChange={handleFileSelect}
                     style={{ display: 'none' }}
                     disabled={uploading}
+                    multiple
                   />
                 </div>
 
@@ -758,7 +876,7 @@ const AssetLibrary = () => {
                 <button 
                   className="generate-button"
                   onClick={handleGenerateAsset}
-                  disabled={!selectedFile || uploading}
+                  disabled={(selectedFiles.length === 0 && !selectedFile) || uploading}
                 >
                   {uploading ? 'Generating...' : 'Generate 3D Model'}
                 </button>
@@ -778,10 +896,63 @@ const AssetLibrary = () => {
                 )}
               </div>
               <div className="modal-body">
-                <p className="modal-description">Set the real-world height in meters. All axes scale proportionally.</p>
+                <p className="modal-description">Set the real-world height. The object is scaled to this height (true to room size).</p>
                 <div className="form-group">
-                  <label>Height (meters)</label>
-                  <input type="number" min="0.1" step="0.1" value={editHeight} onChange={(e) => setEditHeight(parseFloat(e.target.value) || 1)} />
+                  <label>Height</label>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input
+                      type="number"
+                      min={editHeightUnit === 'in' ? 1 : 0.1}
+                      step={editHeightUnit === 'in' ? 1 : 0.1}
+                      value={metersToHeight(editHeight, editHeightUnit)}
+                      onChange={(e) => setEditHeight(heightToMeters(parseFloat(e.target.value) || 0, editHeightUnit))}
+                      style={{ flex: '1 1 120px' }}
+                    />
+                    <select
+                      value={editHeightUnit}
+                      onChange={(e) => setEditHeightUnit(e.target.value as HeightUnit)}
+                      style={{ minWidth: 80 }}
+                    >
+                      <option value="m">m</option>
+                      <option value="ft">ft</option>
+                      <option value="in">in</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label>Brightness</label>
+                  <div className="edit-brightness-row">
+                    <input
+                      type="range"
+                      min={0.3}
+                      max={2.5}
+                      step={0.1}
+                      value={editBrightness}
+                      onChange={(e) => setEditBrightness(parseFloat(e.target.value))}
+                      disabled={savingEdit}
+                      className="edit-brightness-slider"
+                    />
+                    <span className="edit-brightness-value" aria-live="polite">{editBrightness.toFixed(1)}</span>
+                    <button
+                      type="button"
+                      onClick={() => setEditBrightness((b) => Math.max(0.3, Math.round((b - 0.1) * 10) / 10))}
+                      disabled={savingEdit || editBrightness <= 0.3}
+                      className="edit-brightness-btn"
+                      aria-label="Decrease brightness"
+                    >
+                      −
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditBrightness((b) => Math.min(2.5, Math.round((b + 0.1) * 10) / 10))}
+                      disabled={savingEdit || editBrightness >= 2.5}
+                      className="edit-brightness-btn"
+                      aria-label="Increase brightness"
+                    >
+                      +
+                    </button>
+                  </div>
+                  <p className="edit-brightness-hint">0.3 = darker, 1 = normal, 2.5 = brighter</p>
                 </div>
                 <div className="form-group">
                   <label>Layer</label>
@@ -923,6 +1094,34 @@ const AssetLibrary = () => {
                       <span>{viewerError}</span>
                     </div>
                   )}
+                </div>
+                <div className="viewer-brightness-control">
+                  <label className="viewer-brightness-label">Brightness</label>
+                  <div className="viewer-brightness-row">
+                    <input
+                      type="range"
+                      min={0.3}
+                      max={2.5}
+                      step={0.1}
+                      value={previewBrightness}
+                      onChange={(e) => {
+                        const v = parseFloat(e.target.value)
+                        setPreviewBrightness(v)
+                        viewerStateRef.current?.applyBrightness(v)
+                      }}
+                      className="viewer-brightness-slider"
+                    />
+                    <span className="viewer-brightness-value">{previewBrightness.toFixed(1)}</span>
+                  </div>
+                  <p className="viewer-brightness-hint">Adjust in real time • 0.3 = darker, 1 = normal, 2.5 = brighter</p>
+                  <button
+                    type="button"
+                    onClick={handleSavePreviewBrightness}
+                    disabled={savingBrightness}
+                    className="viewer-save-brightness-btn"
+                  >
+                    {savingBrightness ? 'Saving...' : 'Save brightness'}
+                  </button>
                 </div>
                 <div className="viewer-modal-info">
                   <span>Size: {formatFileSize(previewAsset.file_size_bytes)}</span>
