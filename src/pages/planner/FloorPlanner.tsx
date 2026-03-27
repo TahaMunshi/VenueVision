@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import './FloorPlanner.css'
 import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
+import PageNavBar from '../../components/PageNavBar'
 
 const METER_TO_PIXEL_SCALE = 30 // 1 meter = 30 pixels (2D size matches 3D room scale)
 const GRID_SIZE = 6 // Snap every 6px = 0.2m so assets can be placed close together
@@ -147,12 +148,49 @@ const orderWallsClockwise = (walls: WallSpec[]): WallSpec[] => {
   })
 }
 
+/** Fallback only when venue/layout omit values (must match server layout defaults). */
+const FALLBACK_ROOM = { width: 20, height: 8, depth: 20 }
+
+type VenueDimsSource = {
+  width?: unknown
+  depth?: unknown
+  height?: unknown
+  venue_name?: string
+}
+
+/** Width/depth = floor plan; height = room height (matches venue home + DB). */
+function roomDimsFromVenue(venue: VenueDimsSource | null | undefined) {
+  const w = Number(venue?.width)
+  const d = Number(venue?.depth)
+  const h = Number(venue?.height)
+  return {
+    width: Number.isFinite(w) && w > 0 ? w : FALLBACK_ROOM.width,
+    depth: Number.isFinite(d) && d > 0 ? d : FALLBACK_ROOM.depth,
+    height: Number.isFinite(h) && h > 0 ? h : FALLBACK_ROOM.height,
+  }
+}
+
+function roomDimsFromSavedLayout(
+  layoutDims: { width?: unknown; depth?: unknown; height?: unknown } | undefined,
+  venueFallback: { width: number; depth: number; height: number }
+) {
+  if (!layoutDims) return venueFallback
+  const w = Number(layoutDims.width)
+  const d = Number(layoutDims.depth)
+  const h = Number(layoutDims.height)
+  return {
+    width: Number.isFinite(w) && w > 0 ? w : venueFallback.width,
+    depth: Number.isFinite(d) && d > 0 ? d : venueFallback.depth,
+    height: Number.isFinite(h) && h > 0 ? h : venueFallback.height,
+  }
+}
+
 const FloorPlanner = () => {
   const { venueId } = useParams<{ venueId: string }>()
   const navigate = useNavigate()
   const canvasRef = useRef<HTMLDivElement>(null)
   const [venueName, setVenueName] = useState<string>('')
-  const [roomDimensions, setRoomDimensions] = useState({ width: 20, height: 8, depth: 20 })
+  const [roomDimensions, setRoomDimensions] = useState(FALLBACK_ROOM)
   const [materials, setMaterials] = useState<{ floor: { type: string; color: string }; ceiling: { type: string; color?: string } }>({
     floor: { type: 'oak_wood', color: '#c6b39e' },
     ceiling: { type: 'flat_white', color: '#f5f5f5' }
@@ -215,36 +253,56 @@ const FloorPlanner = () => {
   const [draggingEndpoint, setDraggingEndpoint] = useState<{ wallId: string; handle: 'start' | 'end' } | null>(null)
 
   useEffect(() => {
-    // Load room dimensions and layout from server
+    // Load venue (DB dimensions) + layout.json. If layout.json is missing, use venue dims — not API defaults (20×20×8).
     const loadLayout = async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/layout`, {
-          headers: getAuthHeaders()
-        })
-        if (response.ok) {
-          const data = await response.json()
-          if (data.dimensions) {
-            setRoomDimensions(data.dimensions)
+        const [venueRes, layoutRes] = await Promise.all([
+          fetch(`${API_BASE_URL}/api/v1/venues/${venueId}`, { headers: getAuthHeaders() }),
+          fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/layout`, { headers: getAuthHeaders() }),
+        ])
+
+        let venueData: VenueDimsSource | null = null
+        if (venueRes.ok) {
+          const vj = await venueRes.json()
+          venueData = vj.venue ?? null
+        }
+
+        if (!layoutRes.ok) {
+          console.error(`[FloorPlanner] Failed to load layout: ${layoutRes.status} ${layoutRes.statusText}`)
+          if (venueData) {
+            setRoomDimensions(roomDimsFromVenue(venueData))
+            if (venueData.venue_name) setVenueName(venueData.venue_name)
           }
-          if (data.name) {
-            setVenueName(data.name)
-          }
-          if (data.materials) {
-            setMaterials(data.materials)
-          }
-          if (data.lighting?.preset) {
-            setLightingPreset(data.lighting.preset as LightingPreset)
-          }
-          if (data.walls && Array.isArray(data.walls) && data.walls.length > 0) {
-            setWalls(orderWallsClockwise(data.walls as WallSpec[]))
-          } else {
-            setWalls(defaultWalls)
-          }
-          if (data.assets && Array.isArray(data.assets)) {
-            setPlacedAssets(data.assets)
-          }
+          return
+        }
+
+        const data = await layoutRes.json()
+        const baseFromVenue = roomDimsFromVenue(venueData)
+        const dims =
+          data.layout_file_exists === true
+            ? roomDimsFromSavedLayout(data.dimensions, baseFromVenue)
+            : baseFromVenue
+        setRoomDimensions(dims)
+
+        if (data.name) {
+          setVenueName(data.name)
+        } else if (venueData?.venue_name) {
+          setVenueName(venueData.venue_name)
+        }
+
+        if (data.materials) {
+          setMaterials(data.materials)
+        }
+        if (data.lighting?.preset) {
+          setLightingPreset(data.lighting.preset as LightingPreset)
+        }
+        if (data.walls && Array.isArray(data.walls) && data.walls.length > 0) {
+          setWalls(orderWallsClockwise(data.walls as WallSpec[]))
         } else {
-          console.error(`[FloorPlanner] Failed to load layout: ${response.status} ${response.statusText}`)
+          setWalls(defaultWalls)
+        }
+        if (data.assets && Array.isArray(data.assets)) {
+          setPlacedAssets(data.assets)
         }
       } catch (error) {
         console.error('Error loading layout:', error)
@@ -726,8 +784,10 @@ const FloorPlanner = () => {
       })
 
       if (response.ok) {
-        setMessage({ text: 'Layout saved successfully.', type: 'success' })
-        setTimeout(() => setMessage(null), 2000)
+        setMessage({ text: 'Layout saved! Opening guided tour to capture wall photos...', type: 'success' })
+        setTimeout(() => {
+          navigate(`/capture/${venueId}`)
+        }, 1500)
       } else {
         setMessage({ text: 'Failed to save layout.', type: 'error' })
         setTimeout(() => setMessage(null), 3000)
@@ -760,8 +820,18 @@ const FloorPlanner = () => {
         setWalls([])
         setPlacedAssets([])
         setVenueName('')
-        setRoomDimensions({ width: 20, height: 8, depth: 20 })
         setLightingPreset('neutral')
+        try {
+          const vr = await fetch(`${API_BASE_URL}/api/v1/venues/${venueId}`, { headers: getAuthHeaders() })
+          if (vr.ok) {
+            const vj = await vr.json()
+            setRoomDimensions(roomDimsFromVenue(vj.venue))
+          } else {
+            setRoomDimensions(FALLBACK_ROOM)
+          }
+        } catch {
+          setRoomDimensions(FALLBACK_ROOM)
+        }
         setTimeout(() => setMessage(null), 2000)
       } else {
         console.error(`[FloorPlanner] Reset failed: ${responseData.message}`)
@@ -1041,12 +1111,19 @@ const FloorPlanner = () => {
 
   return (
     <div className="floor-planner-container">
-      <div className="planner-header">
-        <button onClick={() => navigate(`/venue/${venueId}`)} className="back-button">
-          ← Back to Venue
-        </button>
-        <h1>2D Floor Planner</h1>
-        <p>Venue: {venueName || venueId} | Room: {roomDimensions.width}m × {roomDimensions.depth}m | Scale: 1m = {METER_TO_PIXEL_SCALE}px (2D matches 3D)</p>
+      <PageNavBar variant="dark" venueId={venueId} title="2D floor planner" backLabel="Back" />
+      <div className="planner-subheader">
+        <p className="planner-subheader-line">
+          Venue: {venueName || venueId} — room {roomDimensions.width}m × {roomDimensions.depth}m (1m = {METER_TO_PIXEL_SCALE}px)
+        </p>
+        <details className="planner-tips">
+          <summary>Quick tips</summary>
+          <ul>
+            <li>Define your floor outline first, then drag assets from the library onto the canvas.</li>
+            <li>Hover an asset to load a 3D preview (first load may take a moment).</li>
+            <li>Save your layout before opening the 3D viewer from the venue hub.</li>
+          </ul>
+        </details>
       </div>
 
       <div className="planner-content">
@@ -1393,11 +1470,22 @@ const FloorPlanner = () => {
           <button onClick={handleSave} className="action-button primary">
             💾 Save Layout
           </button>
-          <button onClick={() => navigate(`/mobile/capture/${venueId}`)} className="action-button" style={{ backgroundColor: '#3498db', color: 'white' }}>
-            📸 Proceed to Guided Image Tour
+          <button
+            type="button"
+            onClick={() => navigate(`/capture/${venueId}`)}
+            className="action-button"
+            style={{ backgroundColor: '#3498db', color: 'white' }}
+            title="Open guided wall capture (camera) for this venue"
+          >
+            Open guided capture
           </button>
-          <button onClick={handleView3D} className="action-button secondary">
-            👁️ View 3D Space
+          <button
+            type="button"
+            onClick={handleView3D}
+            className="action-button secondary"
+            title="Open 3D viewer for this venue"
+          >
+            Open 3D viewer
           </button>
           <button onClick={handleGenerateGlb} className="action-button secondary">
             🧊 Generate Server GLB

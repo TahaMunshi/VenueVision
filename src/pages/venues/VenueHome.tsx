@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import './VenueHome.css'
 import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
+import PageNavBar from '../../components/PageNavBar'
 
 interface Venue {
   venue_id: number
@@ -14,6 +15,50 @@ interface Venue {
   asset_count?: number
 }
 
+type ProgressPayload = {
+  total_walls: number
+  completed_walls: string[]
+  is_complete: boolean
+}
+
+type LayoutPayload = {
+  status?: string
+  /** True when layout.json exists on the server (user saved from floor planner at least once). */
+  layout_file_exists?: boolean
+  polygon?: unknown[] | null
+  walls?: unknown[] | null
+  assets?: unknown[] | null
+  generated_glb?: string | null
+}
+
+/** Derive recommended-workflow checkmarks from saved layout + venue stats + capture progress. */
+function computeWorkflowSteps(
+  layout: LayoutPayload | null,
+  venue: Venue | null,
+  progress: ProgressPayload | null
+): { floorPlan: boolean; guided: boolean; planner3d: boolean } {
+  const poly = layout?.polygon
+  const walls = layout?.walls
+  const assets = layout?.assets
+  const fromFile = layout?.layout_file_exists
+
+  const floorPlan =
+    Boolean(fromFile) ||
+    (Array.isArray(poly) && poly.length >= 3) ||
+    (Array.isArray(walls) && walls.length > 0)
+
+  const guided = Boolean(progress?.is_complete)
+
+  const glb = layout?.generated_glb
+  const assetN = Number(venue?.asset_count ?? 0) || 0
+  const planner3d =
+    assetN > 0 ||
+    (Array.isArray(assets) && assets.length > 0) ||
+    (typeof glb === 'string' && glb.length > 0)
+
+  return { floorPlan, guided, planner3d }
+}
+
 const VenueHome = () => {
   const { venueId } = useParams<{ venueId: string }>()
   const navigate = useNavigate()
@@ -21,6 +66,14 @@ const VenueHome = () => {
   const [loading, setLoading] = useState(true)
   const [deletingWallImages, setDeletingWallImages] = useState(false)
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  const [progress, setProgress] = useState<ProgressPayload | null>(null)
+  const [layoutData, setLayoutData] = useState<LayoutPayload | null>(null)
+  const [hubLoading, setHubLoading] = useState(true)
+
+  const workflow = useMemo(
+    () => computeWorkflowSteps(layoutData, venue, progress),
+    [layoutData, venue, progress]
+  )
 
   const API_BASE_URL = getApiBaseUrl()
 
@@ -35,6 +88,7 @@ const VenueHome = () => {
   }, [venueId, navigate])
 
   const fetchVenue = async () => {
+    setHubLoading(true)
     try {
       const token = localStorage.getItem('token')
       const response = await fetch(`${API_BASE_URL}/api/v1/venues/${venueId}`, {
@@ -46,6 +100,29 @@ const VenueHome = () => {
       if (response.ok) {
         const data = await response.json()
         setVenue(data.venue)
+        const vid = (venueId || data.venue?.venue_identifier) as string | undefined
+        if (vid) {
+          try {
+            const [progRes, layoutRes] = await Promise.all([
+              fetch(`${API_BASE_URL}/api/v1/venue/${vid}/progress`, { headers: getAuthHeaders() }),
+              fetch(`${API_BASE_URL}/api/v1/venue/${vid}/layout`, { headers: getAuthHeaders() }),
+            ])
+            if (progRes.ok) {
+              const p = await progRes.json()
+              setProgress({
+                total_walls: p.total_walls ?? 0,
+                completed_walls: p.completed_walls ?? [],
+                is_complete: Boolean(p.is_complete),
+              })
+            }
+            if (layoutRes.ok) {
+              const layout: LayoutPayload = await layoutRes.json()
+              setLayoutData(layout)
+            }
+          } catch (e) {
+            console.warn('Venue hub extra fetch:', e)
+          }
+        }
       } else if (response.status === 401) {
         localStorage.clear()
         navigate('/login')
@@ -54,11 +131,8 @@ const VenueHome = () => {
       console.error('Error fetching venue:', err)
     } finally {
       setLoading(false)
+      setHubLoading(false)
     }
-  }
-
-  const handleBack = () => {
-    navigate('/venues')
   }
 
   const handleCapture = () => {
@@ -106,9 +180,13 @@ const VenueHome = () => {
   if (loading) {
     return (
       <div className="venue-home-container">
-        <div className="venue-home-header">
-          <div className="venue-home-header-left">
-            <h1 className="venue-home-title">Loading...</h1>
+        <PageNavBar venueId={venueId} title="Loading venue…" backLabel="Back" />
+        <div className="venue-home-content">
+          <div className="venue-home-skeleton-grid">
+            <div className="venue-home-skeleton stat-skel" />
+            <div className="venue-home-skeleton stat-skel" />
+            <div className="venue-home-skeleton stat-skel" />
+            <div className="venue-home-skeleton stat-skel" />
           </div>
         </div>
       </div>
@@ -118,35 +196,87 @@ const VenueHome = () => {
   if (!venue) {
     return (
       <div className="venue-home-container">
-        <div className="venue-home-header">
-          <div className="venue-home-header-left">
-            <button onClick={handleBack} className="back-button">
-              ← Back
-            </button>
-            <div>
-              <h1 className="venue-home-title">Venue Not Found</h1>
-            </div>
-          </div>
-        </div>
+        <PageNavBar title="Venue not found" backLabel="Back" backTo="/venues" />
       </div>
     )
   }
 
   return (
     <div className="venue-home-container">
-      <div className="venue-home-header">
-        <div className="venue-home-header-left">
-          <button onClick={handleBack} className="back-button">
-            ← Back to Venues
-          </button>
-          <div>
-            <h1 className="venue-home-title">{venue.venue_name}</h1>
-            <p className="venue-home-subtitle">{venue.venue_identifier}</p>
-          </div>
-        </div>
+      <PageNavBar
+        venueId={venueId}
+        title={venue.venue_name}
+        backLabel="Back"
+      />
+      <div className="venue-home-meta">
+        <p className="venue-home-subtitle">{venue.venue_identifier}</p>
       </div>
 
       <div className="venue-home-content">
+        {/* Recommended path + primary CTA */}
+        <section className="venue-workflow-section" aria-labelledby="workflow-heading">
+          <h2 id="workflow-heading" className="section-title">
+            Recommended workflow
+          </h2>
+          <p className="venue-workflow-intro">
+            For a first-time setup, follow these steps in order. You can still open any tool below when you need it.
+          </p>
+          <ol className="venue-workflow-steps">
+            <li className={workflow.floorPlan ? 'done' : ''}>
+              <span className="venue-workflow-step-num">{workflow.floorPlan ? '✓' : '1'}</span>
+              <span className="venue-workflow-step-text">
+                <strong>Floor plan</strong> — Draw your space in the 2D planner (walls and layout).
+              </span>
+            </li>
+            <li className={workflow.guided ? 'done' : ''}>
+              <span className="venue-workflow-step-num">{workflow.guided ? '✓' : '2'}</span>
+              <span className="venue-workflow-step-text">
+                <strong>Guided tour</strong> — Capture each wall with the camera; then stitch, clean up, and set corners per wall.
+              </span>
+            </li>
+            <li className={workflow.planner3d ? 'done' : ''}>
+              <span className="venue-workflow-step-num">{workflow.planner3d ? '✓' : '3'}</span>
+              <span className="venue-workflow-step-text">
+                <strong>Floor planner &amp; 3D</strong> — Place assets or generate the 3D room, then preview in the viewer.
+              </span>
+            </li>
+          </ol>
+          <div className="venue-primary-cta">
+            {hubLoading ? (
+              <div className="venue-home-skeleton venue-home-skeleton-cta" />
+            ) : workflow.floorPlan && workflow.guided && workflow.planner3d ? (
+              <p className="venue-workflow-all-done">All recommendations completed</p>
+            ) : (
+              <button
+                type="button"
+                className="venue-primary-button"
+                title={
+                  !workflow.floorPlan
+                    ? 'Open 2D floor planner for this venue'
+                    : !workflow.guided
+                      ? 'Continue with guided wall capture'
+                      : 'Open floor planner — place assets or generate 3D'
+                }
+                onClick={() => {
+                  if (!workflow.floorPlan) {
+                    navigate(`/planner/${venueId}`)
+                  } else if (!workflow.guided) {
+                    navigate(`/capture/${venueId}`)
+                  } else {
+                    navigate(`/planner/${venueId}`)
+                  }
+                }}
+              >
+                {!workflow.floorPlan
+                  ? 'Start with floor plan'
+                  : !workflow.guided
+                    ? 'Proceed to guided tour'
+                    : 'Proceed to 2D planner'}
+              </button>
+            )}
+          </div>
+        </section>
+
         {/* Venue Stats */}
         <div className="venue-stats">
           <div className="stat-card">
@@ -178,22 +308,40 @@ const VenueHome = () => {
           <h2 className="section-title">What would you like to do?</h2>
           <div className="options-grid">
             
-            <div className="option-card capture" onClick={handleCapture}>
+            <div
+              className="option-card capture"
+              onClick={handleCapture}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') handleCapture()
+              }}
+              title="Go to guided wall capture (camera) for this venue"
+            >
               <div className="option-icon">📸</div>
-              <h3 className="option-title">Guided Tour</h3>
+              <h3 className="option-title">Guided tour</h3>
               <p className="option-description">
                 Step-by-step wall capture with camera guidance. Perfect for new venues or adding walls.
               </p>
-              <button className="option-button">Start Capture</button>
+              <span className="option-button">Start capture</span>
             </div>
 
-            <div className="option-card editor" onClick={handleEditor}>
+            <div
+              className="option-card editor"
+              onClick={handleEditor}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') handleEditor()
+              }}
+              title="Open wall list — choose a wall to edit corners and crop"
+            >
               <div className="option-icon">✏️</div>
               <h3 className="option-title">Wall Editor</h3>
               <p className="option-description">
                 Edit individual walls, adjust corner points, and process images for accurate detection.
               </p>
-              <button className="option-button">Open Editor</button>
+              <span className="option-button">Open wall editor</span>
               <button
                 type="button"
                 className="delete-wall-images-button"
@@ -211,22 +359,40 @@ const VenueHome = () => {
               )}
             </div>
 
-            <div className="option-card planner" onClick={handlePlanner}>
+            <div
+              className="option-card planner"
+              onClick={handlePlanner}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') handlePlanner()
+              }}
+              title="Open 2D floor planner — place assets and draw layout"
+            >
               <div className="option-icon">📐</div>
               <h3 className="option-title">Floor Planner</h3>
               <p className="option-description">
                 Arrange furniture and assets in 2D. Plan your event space layout with drag-and-drop.
               </p>
-              <button className="option-button">Open Planner</button>
+              <span className="option-button">Open floor planner</span>
             </div>
 
-            <div className="option-card viewer" onClick={handleViewer}>
+            <div
+              className="option-card viewer"
+              onClick={handleViewer}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') handleViewer()
+              }}
+              title="Open 3D viewer — walk through your venue"
+            >
               <div className="option-icon">🎨</div>
               <h3 className="option-title">3D Space Viewer</h3>
               <p className="option-description">
                 View your venue in immersive 3D with all walls, textures, and placed assets.
               </p>
-              <button className="option-button">View in 3D</button>
+              <span className="option-button">View in 3D</span>
             </div>
 
           </div>

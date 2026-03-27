@@ -73,13 +73,21 @@ def _flawless_stitch_two(img_left: np.ndarray, img_right: np.ndarray) -> Optiona
     _, thresh = cv2.threshold(gray_pano, 1, 255, cv2.THRESH_BINARY)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
+    final_canvas = panorama
     if contours:
-        x, y, w, h = cv2.boundingRect(contours[0])
+        c = max(contours, key=cv2.contourArea)
+        x, y, w, h = cv2.boundingRect(c)
         inset = 5
-        final_canvas = panorama[y + inset : y + h - inset, x + inset : x + w - inset]
-    else:
-        final_canvas = panorama
+        y1, y2 = y + inset, y + h - inset
+        x1, x2 = x + inset, x + w - inset
+        # inset crop can produce an empty array on small/noisy masks — that caused imwrite !_img.empty() failures
+        if y2 > y1 and x2 > x1 and w > 2 * inset and h > 2 * inset:
+            cropped = panorama[y1:y2, x1:x2]
+            if cropped.size > 0 and cropped.shape[0] > 0 and cropped.shape[1] > 0:
+                final_canvas = cropped
 
+    if final_canvas is None or final_canvas.size == 0:
+        return None
     return final_canvas
 
 
@@ -168,6 +176,8 @@ def _crop_black_borders(img: np.ndarray, black_threshold: int = 8) -> np.ndarray
         return img
 
     cropped = img[y : y + ch, x : x + cw]
+    if cropped is None or cropped.size == 0:
+        return img
     # Keep natural geometry: crop only, do not stretch.
     if (cw, ch) != (w, h):
         logger.info("Applied border crop (%dx%d -> %dx%d)", w, h, cw, ch)
@@ -455,10 +465,14 @@ def stitch_segments(
     flawless_ok = True
     for i in range(1, len(images)):
         stitched = _flawless_stitch_two(result, images[i])
-        if stitched is not None:
+        if stitched is not None and stitched.size > 0:
             result = stitched
             logger.info("Flawless stitch succeeded for segment %d", i + 1)
         else:
+            logger.warning(
+                "Flawless stitch returned empty or invalid output for segment %d; will try fallbacks",
+                i + 1,
+            )
             flawless_ok = False
             break
 
@@ -494,8 +508,39 @@ def stitch_segments(
     # Write to stitched_ (master before object removal + corners)
     stitched_path = os.path.join(wall_dir, f"stitched_{wall_id}.jpg")
     result = _postprocess_stitched(result)
-    cv2.imwrite(stitched_path, result)
+    if result is None or result.size == 0:
+        logger.warning("Post-process produced empty image; falling back to first segment")
+        result = _postprocess_stitched(images[0])
+    if result is None or result.size == 0:
+        return False, "Stitch produced an empty image. Try different overlap/rotation or re-capture the segments."
+    try:
+        ok = cv2.imwrite(stitched_path, result)
+        if not ok:
+            return False, "Failed to save stitched image (disk full or invalid path)."
+    except cv2.error as e:
+        logger.exception("cv2.imwrite failed for %s", stitched_path)
+        return False, f"Could not save stitched image: {e}"
     return True, f"/static/uploads/{venue_id}/{wall_id}/stitched_{wall_id}.jpg"
+
+
+def _overlap_pair_fullres(prev_img: np.ndarray, img: np.ndarray) -> int:
+    """
+    Correlation overlap at a reduced resolution, scaled back to full-res pixels.
+    Full 12–24MP images made get_overlap_estimates take 10–60+ seconds; this is usually sub-second.
+    """
+    h1, w1 = prev_img.shape[:2]
+    h2, w2 = img.shape[:2]
+    max_side = 960
+    longest = max(h1, w1, h2, w2)
+    if longest <= max_side:
+        return _find_overlap_correlation(prev_img, img)
+    scale = max_side / float(longest)
+    nw1, nh1 = max(1, int(round(w1 * scale))), max(1, int(round(h1 * scale)))
+    nw2, nh2 = max(1, int(round(w2 * scale))), max(1, int(round(h2 * scale)))
+    small_prev = cv2.resize(prev_img, (nw1, nh1), interpolation=cv2.INTER_AREA)
+    small_curr = cv2.resize(img, (nw2, nh2), interpolation=cv2.INTER_AREA)
+    overlap_small = _find_overlap_correlation(small_prev, small_curr)
+    return int(round(overlap_small * (w1 / nw1)))
 
 
 def get_overlap_estimates(venue_id: str, wall_id: str) -> List[int]:
@@ -525,8 +570,7 @@ def get_overlap_estimates(venue_id: str, wall_id: str) -> List[int]:
         if img is None:
             return []
         if prev_img is not None:
-            overlap = _find_overlap_correlation(prev_img, img)
-            overlaps.append(overlap)
+            overlaps.append(_overlap_pair_fullres(prev_img, img))
         prev_img = img
     return overlaps
 

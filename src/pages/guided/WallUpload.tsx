@@ -2,6 +2,7 @@ import { useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import './WallUpload.css'
 import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
+import PageNavBar from '../../components/PageNavBar'
 
 const enforceRectangle = (points: CornerPoint[]): CornerPoint[] => {
   if (points.length < 2) return points
@@ -246,12 +247,11 @@ const WallUpload = () => {
 
   return (
     <div className="wall-upload-container">
-      <div className="wall-upload-header">
-        <button onClick={() => navigate(`/capture/${venueId}`)} className="back-button">
-          ← Back
-        </button>
-        <h1>Upload Wall Photo</h1>
-        <p>Venue: {venueId} | Wall: {wallId}</p>
+      <PageNavBar variant="dark" venueId={venueId} title="Upload wall photo" backLabel="Back" />
+      <div className="wall-upload-meta">
+        <p>
+          Wall: {wallId} — set corners, then process to send to the 3D viewer
+        </p>
       </div>
 
       <div className="wall-upload-content">

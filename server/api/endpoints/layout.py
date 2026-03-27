@@ -31,6 +31,7 @@ def get_layout(current_user, venue_id: str):
                 jsonify(
                     {
                         "status": "success",
+                        "layout_file_exists": True,
                         "name": layout_data.get("name"),
                         "dimensions": layout_data.get("dimensions", {"width": 20, "height": 8, "depth": 20}),
                         "assets": layout_data.get("assets", []),
@@ -48,6 +49,7 @@ def get_layout(current_user, venue_id: str):
                 jsonify(
                     {
                         "status": "success",
+                        "layout_file_exists": False,
                         "name": None,
                         "dimensions": {"width": 20, "height": 8, "depth": 20},
                         "assets": [],

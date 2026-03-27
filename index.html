@@ -4,7 +4,29 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>fyp</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap"
+      rel="stylesheet"
+    />
+    <title>VenueVision</title>
+    <script>
+      ;(function () {
+        try {
+          var k = 'venuevision-view-mode'
+          var v = localStorage.getItem(k)
+          if (v === 'mobile' || v === 'desktop') {
+            document.documentElement.setAttribute('data-view-mode', v)
+            return
+          }
+          document.documentElement.setAttribute(
+            'data-view-mode',
+            window.matchMedia('(min-width: 1024px)').matches ? 'desktop' : 'mobile'
+          )
+        } catch (e) {}
+      })()
+    </script>
   </head>
   <body>
     <div id="app"></div>

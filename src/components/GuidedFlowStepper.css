@@ -1,0 +1,124 @@
+.guided-flow-stepper {
+  width: 100%;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.95);
+  border-bottom: 1px solid #e2e8f0;
+  box-sizing: border-box;
+}
+
+.guided-flow-stepper-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 12px;
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.guided-flow-step-item {
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+}
+
+.guided-flow-step-item.is-disabled .guided-flow-step-static {
+  opacity: 0.45;
+}
+
+.guided-flow-step-item.is-active .guided-flow-step-label {
+  font-weight: 700;
+  color: #2b6cb0;
+}
+
+.guided-flow-step-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+  color: #4a5568;
+  padding: 4px 6px;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+
+.guided-flow-step-link:hover {
+  background: #edf2f7;
+  color: #2d3748;
+}
+
+.guided-flow-step-static {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #4a5568;
+  padding: 4px 6px;
+}
+
+.guided-flow-step-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #e2e8f0;
+  color: #4a5568;
+}
+
+.guided-flow-step-marker[data-active='true'] {
+  background: #3182ce;
+  color: #fff;
+}
+
+.guided-flow-step-marker[data-done='true'] {
+  background: #48bb78;
+  color: #fff;
+}
+
+.guided-flow-step-label {
+  white-space: nowrap;
+}
+
+.guided-flow-stepper-hint {
+  margin: 8px 0 0 0;
+  font-size: 12px;
+  color: #718096;
+  text-align: center;
+}
+
+.guided-flow-stepper--compact {
+  padding: 6px 8px;
+}
+
+.guided-flow-stepper--compact .guided-flow-stepper-list {
+  gap: 6px 8px;
+  max-width: 100%;
+}
+
+.guided-flow-stepper--compact .guided-flow-step-marker {
+  width: 22px;
+  height: 22px;
+  font-size: 10px;
+}
+
+.guided-flow-stepper--compact .guided-flow-stepper-hint {
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+@media (max-width: 520px) {
+  .guided-flow-step-label {
+    display: none;
+  }
+
+  .guided-flow-stepper-list {
+    gap: 6px;
+  }
+}

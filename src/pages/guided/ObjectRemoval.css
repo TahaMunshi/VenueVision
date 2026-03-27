@@ -17,7 +17,25 @@
 .object-removal-subtitle {
   font-size: 0.9rem;
   color: #aaa;
+  margin: 0 0 12px;
+}
+
+.object-removal-tips {
+  font-size: 0.85rem;
+  color: #94a3b8;
   margin: 0 0 16px;
+}
+
+.object-removal-tips summary {
+  cursor: pointer;
+  color: #cbd5e0;
+  font-weight: 600;
+}
+
+.object-removal-tips ul {
+  margin: 8px 0 0 18px;
+  padding: 0;
+  line-height: 1.45;
 }
 
 .back-btn {

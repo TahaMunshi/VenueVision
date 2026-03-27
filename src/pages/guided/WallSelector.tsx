@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import './WallSelector.css'
 import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
+import PageNavBar from '../../components/PageNavBar'
 
 type Wall = {
   id: string
@@ -73,13 +74,8 @@ const WallSelector = () => {
 
   return (
     <div className="wall-selector-container">
-      <div className="wall-selector-header">
-        <button onClick={() => navigate(`/venue/${venueId}`)} className="back-button">
-          ← Back to Venue
-        </button>
-        <h1>Wall Corner Editor</h1>
-        <p>Venue: {venueId} - adjust each wall texture manually</p>
-      </div>
+      <PageNavBar variant="dark" venueId={venueId} title="Wall editor — choose a wall" backLabel="Back" />
+      <p className="wall-selector-lead">Venue: {venueId} — open a wall to adjust texture corners</p>
 
       <div className="wall-selector-content">
         <div className="walls-grid">
@@ -88,11 +84,13 @@ const WallSelector = () => {
               <h3>{wall.name}</h3>
               <p>Wall ID: {wall.id}</p>
               <button
+                type="button"
                 onClick={() => handleWallSelect(wall.id)}
                 className="wall-button"
                 style={{ marginBottom: '0.5rem' }}
+                title={`Open corner & crop editor for ${wall.name}`}
               >
-                Adjust Corners
+                Edit corners — {wall.name}
               </button>
             </div>
           ))}
@@ -100,17 +98,21 @@ const WallSelector = () => {
 
         <div className="actions-section">
           <button
+            type="button"
             onClick={() => navigate(`/planner/${venueId}`)}
             className="action-button primary"
             style={{ marginBottom: '0.5rem' }}
+            title="Go to 2D floor planner for this venue"
           >
-            📐 2D Floor Planner
+            Open 2D floor planner
           </button>
           <button
+            type="button"
             onClick={handleView3D}
             className="action-button primary"
+            title="Open 3D viewer for this venue"
           >
-            Generate & View 3D Space
+            Open 3D space viewer
           </button>
         </div>
       </div>

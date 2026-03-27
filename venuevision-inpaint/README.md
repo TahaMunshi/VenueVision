@@ -20,3 +20,12 @@ Set in your `.env`:
 ```
 INPAINT_SPACE_URL=TahaMunshi03/venuevision-inpaint
 ```
+
+## Troubleshooting (HTTP 500 on `/config`)
+
+If the backend logs show `Could not fetch config` for `*.hf.space`:
+
+1. Open the Space on Hugging Face → **Logs** (build + runtime). A **500** on `/config` means the Gradio app crashed on startup (OOM, import error, incompatible Gradio version).
+2. **OOM**: upgrade Space hardware or use a smaller SAM2 checkpoint / lazy-load only inside `predict`.
+3. **Local test**: `pip install -r requirements.txt` then `python app.py` and open `http://127.0.0.1:7860` — fix errors before pushing.
+4. Point VenueVision at a working URL: `INPAINT_SPACE_URL=http://127.0.0.1:7860` (when running the Space on the same machine; from Docker use `http://host.docker.internal:7860` on Windows).

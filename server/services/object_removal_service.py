@@ -2,55 +2,52 @@
 Object removal service: SAM + LaMa inpainting.
 Removes objects from wall images by clicking on them.
 Uses Hugging Face Spaces via gradio_client when configured.
-Falls back to no-op (return original) if unavailable.
 """
 import logging
 import os
 import tempfile
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 # Configurable HF Space for SAM + LaMa inpainting
-# Set INPAINT_SPACE_URL env var, e.g. "InpaintAI/Inpaint-Anything" or full URL
 INPAINT_SPACE_URL = os.getenv("INPAINT_SPACE_URL", "").strip()
 
 
-def _download_url_to_path(url: str, output_path: str) -> bool:
-    """Download file from URL and write to output_path. Returns True on success."""
+def _save_any_image_as_jpeg(src_path: str, dst_path: str) -> None:
+    """Read PNG/JPEG/etc. from disk and write as JPEG (wall pipeline expects .jpg)."""
+    from PIL import Image
+
+    with Image.open(src_path) as img:
+        img.convert("RGB").save(dst_path, "JPEG", quality=92)
+
+
+def _download_url_to_temp(url: str) -> Optional[str]:
     try:
         import urllib.request
-        with urllib.request.urlopen(url, timeout=60) as resp:
+
+        fd, tmp = tempfile.mkstemp(suffix=".bin")
+        os.close(fd)
+        with urllib.request.urlopen(url, timeout=120) as resp:
             if resp.status != 200:
-                logger.warning(f"Object removal: URL returned {resp.status}")
-                return False
+                logger.warning("Object removal: URL returned %s", resp.status)
+                return None
             data = resp.read()
-        with open(output_path, "wb") as f:
+        with open(tmp, "wb") as f:
             f.write(data)
-        logger.info(f"Object removal: Downloaded {len(data)} bytes from URL to {output_path}")
-        return True
+        logger.info("Object removal: Downloaded %s bytes from URL", len(data))
+        return tmp
     except Exception as e:
-        logger.warning(f"Object removal: URL download failed: {e}")
-        return False
+        logger.warning("Object removal: URL download failed: %s", e)
+        return None
 
 
 def _safe_copy(src: str, dst: str) -> None:
-    """Copy src to dst, skipping if they are the same file (avoids shutil error)."""
     if os.path.abspath(os.path.normpath(src)) == os.path.abspath(os.path.normpath(dst)):
-        return  # Same file, no-op
+        return
     import shutil
+
     shutil.copy2(src, dst)
-
-
-def _write_result_to_path(result_path: str, output_path: str) -> None:
-    """
-    Write result file to output_path. Uses byte copy to always overwrite,
-    even when paths might resolve to same file (e.g. symlinks, Docker).
-    """
-    with open(result_path, "rb") as f:
-        data = f.read()
-    with open(output_path, "wb") as f:
-        f.write(data)
 
 
 def remove_object_at_point(
@@ -58,93 +55,204 @@ def remove_object_at_point(
     x: int,
     y: int,
     output_path: str,
-) -> Tuple[bool, Optional[str]]:
+) -> Dict[str, Any]:
     """
-    Remove object at (x, y) from image using SAM + LaMa.
-    Saves result to output_path.
+    Remove object at (x, y) from image using the configured HF Space.
+    Saves result to output_path (JPEG).
 
     Returns:
-        (success, error_message)
+        {
+          "success": bool,       # False only on hard errors (I/O)
+          "error": str | None,   # Set when success is False
+          "inpainted": bool,     # True only if the Space actually returned a new image
+          "message": str,        # Human-readable status for API / UI
+        }
     """
     if not os.path.isfile(image_path):
-        return False, "Image file not found"
+        return {
+            "success": False,
+            "error": "Image file not found",
+            "inpainted": False,
+            "message": "Image file not found",
+        }
 
     if not INPAINT_SPACE_URL:
-        logger.warning(
-            "INPAINT_SPACE_URL not set. Object removal disabled. "
-            "Set INPAINT_SPACE_URL to a Hugging Face Space (e.g. 'InpaintAI/Inpaint-Anything') to enable."
+        msg = (
+            "Object removal is disabled: set INPAINT_SPACE_URL to your Hugging Face Space "
+            "(e.g. username/venuevision-inpaint) in .env or docker-compose."
         )
-        try:
-            _safe_copy(image_path, output_path)
-        except OSError as e:
-            return False, str(e)
-        return True, None
+        logger.warning(msg)
+        return {
+            "success": True,
+            "error": None,
+            "inpainted": False,
+            "message": msg,
+        }
 
     try:
         from gradio_client import Client, handle_file
     except ImportError:
-        logger.warning("gradio_client not installed. Copying original image.")
-        _safe_copy(image_path, output_path)
-        return True, None
+        msg = "gradio_client is not installed; cannot call inpainting Space."
+        logger.warning(msg)
+        return {
+            "success": True,
+            "error": None,
+            "inpainted": False,
+            "message": msg,
+        }
+
+    hf_token = os.getenv("HF_TOKEN") or None
+    download_dir = os.path.join(tempfile.gettempdir(), "gradio")
+    os.makedirs(download_dir, exist_ok=True)
 
     try:
-        hf_token = os.getenv("HF_TOKEN") or None
-        download_dir = os.path.join(tempfile.gettempdir(), "gradio")
-        os.makedirs(download_dir, exist_ok=True)
+        import httpx
+
+        httpx_kwargs = {"timeout": httpx.Timeout(300.0, connect=60.0)}
+    except Exception:
+        httpx_kwargs = {"timeout": 300.0}
+
+    try:
         client = Client(
             INPAINT_SPACE_URL,
             token=hf_token,
             verbose=False,
             download_files=download_dir,
+            httpx_kwargs=httpx_kwargs,
         )
-        logger.info(f"Object removal: Connected to {INPAINT_SPACE_URL}")
+        logger.info(
+            "Object removal: calling Space %s at (%s, %s) image=%s",
+            INPAINT_SPACE_URL,
+            x,
+            y,
+            image_path,
+        )
 
-        result = client.predict(
-            handle_file(image_path),
-            int(x), int(y),
-            api_name="/predict"
-        )
+        result = None
+        last_err: Optional[Exception] = None
+        for api_name in ("/predict", "predict"):
+            try:
+                result = client.predict(
+                    handle_file(image_path),
+                    int(x),
+                    int(y),
+                    api_name=api_name,
+                )
+                logger.info("Object removal: predict succeeded with api_name=%s", api_name)
+                break
+            except Exception as e:
+                last_err = e
+                logger.warning(
+                    "Object removal: predict failed api_name=%s: %s",
+                    api_name,
+                    e,
+                    exc_info=False,
+                )
+
+        if result is None and last_err is not None:
+            msg = f"Inpainting Space failed: {last_err!s}. Check logs, HF_TOKEN, and that the Space is running."
+            logger.error(msg, exc_info=True)
+            return {
+                "success": True,
+                "error": None,
+                "inpainted": False,
+                "message": msg,
+            }
 
         if result is None:
-            logger.warning("Object removal: predict returned None, using original")
-            _safe_copy(image_path, output_path)
-            return True, None
+            msg = "Inpainting Space returned no result (predict is None)."
+            logger.warning(msg)
+            return {
+                "success": True,
+                "error": None,
+                "inpainted": False,
+                "message": msg,
+            }
 
-        # Extract file path/URL from various gradio_client result formats
         out_file = result
         if isinstance(result, (tuple, list)):
             out_file = result[0] if result else None
         if isinstance(out_file, dict):
-            out_file = out_file.get("path") or out_file.get("url") or out_file.get("value") or out_file.get("name")
+            out_file = (
+                out_file.get("path")
+                or out_file.get("url")
+                or out_file.get("value")
+                or out_file.get("name")
+            )
 
         if not out_file or not isinstance(out_file, str):
-            logger.warning(f"Object removal: No valid result file (got {type(out_file)}), using original")
-            _safe_copy(image_path, output_path)
-            return True, None
+            msg = f"Inpainting returned an unexpected value: {type(result)!r}"
+            logger.warning(msg)
+            return {
+                "success": True,
+                "error": None,
+                "inpainted": False,
+                "message": msg,
+            }
 
-        # Handle URL (gradio sometimes returns download URLs instead of local paths)
-        if out_file.startswith("http://") or out_file.startswith("https://"):
-            if _download_url_to_path(out_file, output_path):
-                return True, None
-            logger.warning("Object removal: URL download failed, using original")
-            _safe_copy(image_path, output_path)
-            return True, None
-
-        # Handle local file path (client downloads to temp)
-        if os.path.exists(out_file) and os.path.isfile(out_file):
-            logger.info(f"Object removal: Writing result from {out_file} to {output_path}")
-            _write_result_to_path(out_file, output_path)
-            return True, None
-
-        logger.warning(f"Object removal: Result path not accessible: {out_file[:100]}, using original")
-        _safe_copy(image_path, output_path)
-        return True, None
-
-    except Exception as e:
-        logger.warning(f"Object removal failed (Space may be building): {e}. Using original.")
+        tmp_for_convert: Optional[str] = None
         try:
-            _safe_copy(image_path, output_path)
-            return True, None
-        except OSError as err:
-            logger.error(f"Fallback copy failed: {err}")
-            return False, str(err)
+            if out_file.startswith("http://") or out_file.startswith("https://"):
+                tmp_for_convert = _download_url_to_temp(out_file)
+                if not tmp_for_convert:
+                    msg = "Could not download inpainting result URL."
+                    return {
+                        "success": True,
+                        "error": None,
+                        "inpainted": False,
+                        "message": msg,
+                    }
+                _save_any_image_as_jpeg(tmp_for_convert, output_path)
+            elif os.path.exists(out_file) and os.path.isfile(out_file):
+                logger.info("Object removal: writing result from %s", out_file)
+                _save_any_image_as_jpeg(out_file, output_path)
+            else:
+                msg = f"Inpainting result path not accessible: {out_file[:120]!s}"
+                logger.warning(msg)
+                return {
+                    "success": True,
+                    "error": None,
+                    "inpainted": False,
+                    "message": msg,
+                }
+        finally:
+            if tmp_for_convert and os.path.isfile(tmp_for_convert):
+                try:
+                    os.remove(tmp_for_convert)
+                except OSError:
+                    pass
+
+        return {
+            "success": True,
+            "error": None,
+            "inpainted": True,
+            "message": "Object removed.",
+        }
+
+    except ValueError as e:
+        err_s = str(e)
+        if "Could not fetch config" in err_s or "Could not get Gradio config" in err_s:
+            msg = (
+                "The Hugging Face Space is not serving a valid Gradio app (often HTTP 500 on /config). "
+                "Open your Space on huggingface.co → Logs, and fix build/runtime errors (OOM, missing deps, "
+                "Gradio version). Until the Space runs, object removal cannot run."
+            )
+            logger.error("Object removal: HF Space unreachable or broken: %s", err_s)
+        else:
+            msg = f"Inpainting error: {err_s}"
+            logger.exception("Object removal failed: %s", e)
+        return {
+            "success": True,
+            "error": None,
+            "inpainted": False,
+            "message": msg,
+        }
+    except Exception as e:
+        msg = f"Inpainting error: {e!s}. If the Space was asleep, retry in 1–2 minutes."
+        logger.exception("Object removal failed: %s", e)
+        return {
+            "success": True,
+            "error": None,
+            "inpainted": False,
+            "message": msg,
+        }

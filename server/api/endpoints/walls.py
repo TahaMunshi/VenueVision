@@ -352,15 +352,30 @@ def remove_object(current_user, venue_id: str, wall_id: str):
     if not os.path.isfile(stitched_path):
         return jsonify({"status": "error", "message": "No stitched image found. Stitch first."}), 404
 
-    success, err_msg = remove_object_at_point(stitched_path, x, y, stitched_path)
-    if not success:
-        return jsonify({"status": "error", "message": err_msg or "Object removal failed"}), 500
+    outcome = remove_object_at_point(stitched_path, x, y, stitched_path)
+    if not outcome.get("success"):
+        return jsonify(
+            {"status": "error", "message": outcome.get("error") or "Object removal failed"}
+        ), 500
 
-    return jsonify({
-        "status": "success",
-        "message": "Object removed.",
-        "url": f"/static/uploads/{venue_id}/{wall_id}/stitched_{wall_id}.jpg?v={int(time.time() * 1000)}",
-    }), 200
+    if not outcome.get("inpainted"):
+        return jsonify(
+            {
+                "status": "success",
+                "inpainted": False,
+                "message": outcome.get("message", "Inpainting did not run."),
+                "warning": outcome.get("message", "Inpainting did not run."),
+            }
+        ), 200
+
+    return jsonify(
+        {
+            "status": "success",
+            "inpainted": True,
+            "message": outcome.get("message", "Object removed."),
+            "url": f"/static/uploads/{venue_id}/{wall_id}/stitched_{wall_id}.jpg?v={int(time.time() * 1000)}",
+        }
+    ), 200
 
 
 @walls_bp.route("/venue/<venue_id>/wall/<wall_id>/apply-corners", methods=["POST"])

@@ -22,6 +22,10 @@ services:
       retries: 5
 
   # Flask + React Application
+  # Frontend is baked into the image at build time (see Dockerfile: npm run build).
+  # After UI changes: either
+  #   docker compose build --no-cache app && docker compose up -d
+  # or build locally and use docker-compose.dev-frontend.yml to mount ./dist (see that file).
   app:
     build: .
     container_name: venuevision-app

@@ -168,6 +168,9 @@ with gr.Blocks(title="VenueVision Inpaint") as demo:
         outputs=[img_out, x_in, y_in]
     )
 
+# Required on Hugging Face Spaces for stable API + /config; helps avoid 500s on cold start.
+demo.queue()
+
 
 if __name__ == "__main__":
     demo.launch(show_error=True)

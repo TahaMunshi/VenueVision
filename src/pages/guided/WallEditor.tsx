@@ -2,6 +2,8 @@ import { useState, useRef, useEffect } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import './WallEditor.css'
 import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
+import GuidedFlowStepper from '../../components/GuidedFlowStepper'
+import PageNavBar from '../../components/PageNavBar'
 
 type CornerPoint = [number, number]
 
@@ -17,10 +19,14 @@ const getDefaultCropPoints = (imgWidth: number, imgHeight: number): CornerPoint[
   ]
 }
 
-const fitCanvasToViewport = (canvas: HTMLCanvasElement, imgWidth: number, imgHeight: number) => {
-  // Reserve vertical space for header, instructions, and controls.
+const fitCanvasToViewport = (
+  canvas: HTMLCanvasElement,
+  imgWidth: number,
+  imgHeight: number,
+  reserveBottomPx = 280
+) => {
   const maxDisplayWidth = Math.max(320, window.innerWidth - 120)
-  const maxDisplayHeight = Math.max(260, window.innerHeight - 360)
+  const maxDisplayHeight = Math.max(260, window.innerHeight - reserveBottomPx)
   const scale = Math.min(maxDisplayWidth / imgWidth, maxDisplayHeight / imgHeight)
   canvas.style.width = `${Math.round(imgWidth * scale)}px`
   canvas.style.height = `${Math.round(imgHeight * scale)}px`
@@ -57,7 +63,8 @@ const WallEditor = () => {
   const [isDragging, setIsDragging] = useState(false)
   const [cropMode, setCropMode] = useState(!stepCorners)
   const [cornerAdjustMode, setCornerAdjustMode] = useState(stepCorners)
-  const [dragStatus, setDragStatus] = useState('idle')
+  /** Dragging works in either crop or corner-adjust mode (both show 4 handles). */
+  const canDragCorners = cropMode || cornerAdjustMode
   const draggingIndexRef = useRef<number | null>(null)
   const cornerPointsRef = useRef<CornerPoint[]>([])
 
@@ -92,7 +99,13 @@ const WallEditor = () => {
             // (loading screen is shown until setIsLoading(false)).
             const defaultPoints: CornerPoint[] = getDefaultCropPoints(img.width, img.height)
             setCornerPoints(defaultPoints)
-            setCropMode(true)
+            if (stepCorners) {
+              setCornerAdjustMode(true)
+              setCropMode(false)
+            } else {
+              setCropMode(true)
+              setCornerAdjustMode(false)
+            }
             setIsLoading(false)
           }
           img.onerror = () => {
@@ -112,7 +125,7 @@ const WallEditor = () => {
     }
 
     loadWallImage()
-  }, [venueId, wallId, API_BASE_URL, cornerAdjustMode])
+  }, [venueId, wallId, API_BASE_URL, cornerAdjustMode, stepCorners])
 
 
   const drawCornersOnCanvas = (points: CornerPoint[]) => {
@@ -126,7 +139,12 @@ const WallEditor = () => {
     if (canvas.width !== imageRef.current.width || canvas.height !== imageRef.current.height) {
       canvas.width = imageRef.current.width
       canvas.height = imageRef.current.height
-      fitCanvasToViewport(canvas, imageRef.current.width, imageRef.current.height)
+      fitCanvasToViewport(
+        canvas,
+        imageRef.current.width,
+        imageRef.current.height,
+        stepCorners ? 220 : 280
+      )
     }
 
     // Redraw the full image at full resolution
@@ -170,7 +188,12 @@ const WallEditor = () => {
   // Ensure canvas redraws when points or image change to avoid black/blank view
   useEffect(() => {
     if (imageRef.current && canvasRef.current) {
-      fitCanvasToViewport(canvasRef.current, imageRef.current.width, imageRef.current.height)
+      fitCanvasToViewport(
+        canvasRef.current,
+        imageRef.current.width,
+        imageRef.current.height,
+        stepCorners ? 220 : 280
+      )
       if (cornerPoints.length === 4) {
         drawCornersOnCanvas(cornerPoints)
       } else {
@@ -182,7 +205,7 @@ const WallEditor = () => {
         }
       }
     }
-  }, [cornerPoints, imageUrl])
+  }, [cornerPoints, imageUrl, stepCorners])
 
   useEffect(() => {
     cornerPointsRef.current = cornerPoints
@@ -193,14 +216,14 @@ const WallEditor = () => {
       const canvas = canvasRef.current
       const img = imageRef.current
       if (!canvas || !img) return
-      fitCanvasToViewport(canvas, img.width, img.height)
+      fitCanvasToViewport(canvas, img.width, img.height, stepCorners ? 220 : 280)
       if (cornerPoints.length === 4) {
         drawCornersOnCanvas(cornerPoints)
       }
     }
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
-  }, [cornerPoints])
+  }, [cornerPoints, stepCorners])
 
   const getScaledCoordinates = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current
@@ -236,7 +259,7 @@ const WallEditor = () => {
   }
 
   const startDrag = (clientX: number, clientY: number) => {
-    if (!cropMode || cornerPointsRef.current.length !== 4) return
+    if (!canDragCorners || cornerPointsRef.current.length !== 4) return
 
     const coords = getScaledCoordinates(clientX, clientY)
     if (!coords) return
@@ -246,12 +269,11 @@ const WallEditor = () => {
       draggingIndexRef.current = pointIndex
       setDraggingIndex(pointIndex)
       setIsDragging(true)
-      setDragStatus(`down: corner ${pointIndex + 1}`)
     }
   }
 
   const moveDrag = (clientX: number, clientY: number) => {
-    if (!cropMode) return
+    if (!canDragCorners) return
     const activeDraggingIndex = draggingIndexRef.current
     if (activeDraggingIndex === null || !imageRef.current) return
 
@@ -268,17 +290,11 @@ const WallEditor = () => {
         imageRef.current!.height
       )
       drawCornersOnCanvas(next)
-      setDragStatus(`move: corner ${activeDraggingIndex + 1}`)
       return next
     })
   }
 
   const stopDrag = () => {
-    if (draggingIndexRef.current !== null) {
-      setDragStatus(`up: corner ${draggingIndexRef.current + 1}`)
-    } else {
-      setDragStatus('idle')
-    }
     draggingIndexRef.current = null
     setDraggingIndex(null)
     setIsDragging(false)
@@ -318,7 +334,7 @@ const WallEditor = () => {
       window.removeEventListener('touchmove', onWindowTouchMove)
       window.removeEventListener('touchend', onWindowTouchEnd)
     }
-  }, [cropMode])
+  }, [canDragCorners])
 
   const handleReset = () => {
     if (!imageRef.current || !canvasRef.current) return
@@ -326,7 +342,13 @@ const WallEditor = () => {
     const defaultPoints: CornerPoint[] = getDefaultCropPoints(img.width, img.height)
     setCornerPoints(defaultPoints)
     drawCornersOnCanvas(defaultPoints)
-    setCropMode(true)
+    if (stepCorners) {
+      setCornerAdjustMode(true)
+      setCropMode(false)
+    } else {
+      setCropMode(true)
+      setCornerAdjustMode(false)
+    }
   }
 
   const handleReStitch = async () => {
@@ -477,6 +499,7 @@ const WallEditor = () => {
   if (isLoading) {
     return (
       <div className="wall-editor-container">
+        {venueId && <PageNavBar variant="dark" venueId={venueId} title="Edit wall" backLabel="Back" />}
         <div className="loading">Loading wall image...</div>
       </div>
     )
@@ -485,18 +508,22 @@ const WallEditor = () => {
   if (!imageUrl) {
     return (
       <div className="wall-editor-container">
-        <div className="wall-editor-header">
-          <button onClick={() => navigate(`/editor/${venueId}`)} className="back-button">
-            ← Back to Editor
-          </button>
-          <h1>Edit Wall</h1>
-          <p>Venue: {venueId} | Wall: {wallId}</p>
+        {venueId && <PageNavBar venueId={venueId} title="Edit wall" backLabel="Back" />}
+        <div className="wall-editor-meta">
+          <p>
+            Wall: {wallId}
+          </p>
         </div>
         <div className="error-message">
           {message?.text || 'No image found for this wall. Please capture an image first.'}
         </div>
-        <button onClick={() => navigate(`/capture/${venueId}`)} className="action-button primary">
-          Go to Capture
+        <button
+          type="button"
+          onClick={() => navigate(`/capture/${venueId}`)}
+          className="action-button primary"
+          title="Open guided wall capture for this venue"
+        >
+          Go to guided capture
         </button>
       </div>
     )
@@ -504,12 +531,12 @@ const WallEditor = () => {
 
   return (
     <div className="wall-editor-container">
+      {venueId && <PageNavBar variant="dark" venueId={venueId} title="Edit wall" backLabel="Back" />}
+      {venueId && wallId && (
+        <GuidedFlowStepper venueId={venueId} wallId={wallId} active="corners" />
+      )}
       <div className="wall-editor-header">
-        <button onClick={() => navigate(`/capture/${venueId}`)} className="back-button">
-          ← Back
-        </button>
-        <h1>Edit Wall</h1>
-        <p>Venue: {venueId} | Wall: {wallId}</p>
+        <p className="wall-editor-wall-id">Wall: {wallId}</p>
       </div>
 
       <div className="wall-editor-content">
@@ -529,81 +556,93 @@ const WallEditor = () => {
           
           {cornerPoints.length === 4 && (
             <p className="instruction-text">
-              {cropMode
-                ? 'Drag each red corner handle to fine-tune the wall region for initial processing.'
-                : 'Drag corners to adjust perspective, then click Re-stitch + Corners.'}
+              {stepCorners
+                ? 'Drag the red handles to match the wall edges. Then apply to finish this wall.'
+                : 'Drag the red handles to outline the wall. Then process to save the texture.'}
             </p>
           )}
-          <p className="instruction-text" style={{ opacity: 0.6, fontSize: '0.8rem' }}>
-            Drag status: {dragStatus}
-          </p>
         </div>
 
-        <div className="controls-section">
-          <button
-            onClick={() => { setCropMode(true); setCornerAdjustMode(false) }}
-            className={`action-button ${cropMode ? 'primary' : 'secondary'}`}
-            style={{ marginBottom: '0.5rem' }}
-          >
-            Crop Mode
-          </button>
-          <button
-            onClick={() => { setCornerAdjustMode(true); setCropMode(false) }}
-            className={`action-button ${cornerAdjustMode ? 'primary' : 'secondary'}`}
-            style={{ marginBottom: '0.5rem', marginLeft: '0.5rem' }}
-          >
-            Adjust Corners
-          </button>
-
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
-            {cropMode && (
-              <>
-                <button onClick={handleReset} className="action-button secondary">
-                  Reset Crop Box
+        <div className="controls-section wall-editor-controls">
+          {stepCorners ? (
+            <>
+              <p className="long-op-hint wall-editor-hint">
+                {isProcessing
+                  ? 'Saving perspective correction…'
+                  : 'Runs on the server — keep this tab open until it finishes.'}
+              </p>
+              <div className="wall-editor-action-row">
+                <button type="button" onClick={handleReset} className="action-button secondary">
+                  Reset corners
                 </button>
                 <button
-                  onClick={handleProcess}
-                  disabled={isProcessing || cornerPoints.length !== 4}
-                  className="action-button primary"
-                >
-                  {isProcessing ? 'Processing...' : 'Save / Process'}
-                </button>
-              </>
-            )}
-            {cornerAdjustMode && (
-              <>
-                <button
+                  type="button"
                   onClick={handleApplyCorners}
                   disabled={isProcessing || cornerPoints.length !== 4}
                   className="action-button primary"
                 >
-                  {isProcessing ? '...' : 'Apply Corners & Proceed to Next Wall'}
+                  {isProcessing ? 'Working…' : 'Apply & continue'}
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => navigate(`/view/${venueId}`)}
+                className="wall-editor-link-btn"
+                title="Open 3D viewer for this venue"
+              >
+                Open 3D viewer
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="wall-editor-action-row">
+                <button type="button" onClick={handleReset} className="action-button secondary">
+                  Reset corners
                 </button>
                 <button
-                  onClick={handleReStitch}
-                  disabled={isProcessing}
-                  className="action-button secondary"
-                >
-                  {isProcessing ? '...' : 'Re-stitch'}
-                </button>
-                <button
-                  onClick={handleReStitchWithCorners}
+                  type="button"
+                  onClick={handleProcess}
                   disabled={isProcessing || cornerPoints.length !== 4}
-                  className="action-button secondary"
+                  className="action-button primary"
                 >
-                  {isProcessing ? '...' : 'Re-stitch + Corners'}
+                  {isProcessing ? 'Processing…' : 'Process wall'}
                 </button>
-              </>
-            )}
-          </div>
-
-          <button
-            onClick={() => navigate(`/view/${venueId}`)}
-            className="action-button secondary"
-            style={{ marginTop: '0.5rem' }}
-          >
-            View 3D Space
-          </button>
+              </div>
+              <details className="wall-editor-advanced">
+                <summary>Advanced — only if stitching looks wrong</summary>
+                <p className="wall-editor-advanced-hint">
+                  Re-run segment alignment, then optionally apply corners. Usually not needed if you already
+                  stitched on the review screen.
+                </p>
+                <div className="wall-editor-action-row wall-editor-action-row--stack">
+                  <button
+                    type="button"
+                    onClick={handleReStitch}
+                    disabled={isProcessing}
+                    className="action-button secondary"
+                  >
+                    {isProcessing ? '…' : 'Re-stitch segments only'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleReStitchWithCorners}
+                    disabled={isProcessing || cornerPoints.length !== 4}
+                    className="action-button secondary"
+                  >
+                    {isProcessing ? '…' : 'Re-stitch + apply corners'}
+                  </button>
+                </div>
+              </details>
+              <button
+                type="button"
+                onClick={() => navigate(`/view/${venueId}`)}
+                className="wall-editor-link-btn"
+                title="Open 3D viewer for this venue"
+              >
+                Open 3D viewer
+              </button>
+            </>
+          )}
         </div>
 
         {message && (

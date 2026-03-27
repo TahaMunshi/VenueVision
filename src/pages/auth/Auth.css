@@ -1,10 +1,18 @@
 .auth-container {
   min-height: 100vh;
   display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  background: linear-gradient(145deg, #4f46e5 0%, #7c3aed 42%, #5b21b6 100%);
+  padding: 0;
+}
+
+.auth-main {
+  flex: 1;
+  display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  padding: 20px;
+  padding: 24px 20px 32px;
 }
 
 .auth-card {

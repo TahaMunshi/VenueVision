@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import './VenuesList.css'
 import { getApiBaseUrl } from '../../utils/api'
 import CreateVenueModal from './CreateVenueModal'
+import PageNavBar from '../../components/PageNavBar'
 
 interface Venue {
   venue_id: number
@@ -127,14 +128,13 @@ const VenuesList = () => {
   if (loading) {
     return (
       <div className="venues-container">
-        <div className="venues-header">
-          <div className="venues-header-left">
-            <h1>VenueVision</h1>
+        <PageNavBar title="VenueVision" backLabel="Back" />
+        <div className="venues-content">
+          <div className="venues-skeleton-grid">
+            <div className="venues-skeleton venue-card-skel" />
+            <div className="venues-skeleton venue-card-skel" />
+            <div className="venues-skeleton venue-card-skel" />
           </div>
-        </div>
-        <div className="loading-state">
-          <div className="loading-spinner"></div>
-          <p>Loading your venues...</p>
         </div>
       </div>
     )
@@ -148,34 +148,52 @@ const VenuesList = () => {
           onSuccess={handleCreateSuccess}
         />
       )}
-      
-      <div className="venues-header">
-        <div className="venues-header-left">
-          <h1>VenueVision</h1>
-          <p>Create and manage your event spaces</p>
-        </div>
-        <div className="venues-header-right">
-          <button onClick={() => navigate('/assets')} className="assets-button">
-            📦 My Assets
-          </button>
-          {user && (
-            <div className="user-info">
-              <div className="user-avatar">{getUserInitials()}</div>
-              <span className="user-name">{user.username}</span>
-            </div>
-          )}
-          <button onClick={handleLogout} className="logout-button">
-            Logout
-          </button>
-        </div>
-      </div>
+
+      <PageNavBar
+        title="VenueVision"
+        backLabel="Back"
+        endSlot={
+          <>
+            <button
+              type="button"
+              onClick={() => navigate('/assets')}
+              className="assets-button"
+              title="Go to my 3D asset library (upload and manage models)"
+            >
+              My 3D assets
+            </button>
+            {user && (
+              <div className="user-info" title="Signed in user">
+                <div className="user-avatar">{getUserInitials()}</div>
+                <span className="user-name">{user.username}</span>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="logout-button"
+              title="Sign out and return to login page"
+            >
+              Log out
+            </button>
+          </>
+        }
+      />
 
       <div className="venues-content">
+        <div className="venues-hero">
+          <p className="venues-hero-tagline">Create and manage your event spaces</p>
+        </div>
         <div className="venues-actions">
-          <h2 className="venues-title">My Venues</h2>
-          <button onClick={handleCreateVenue} className="create-venue-button">
+          <h2 className="venues-title">My venues</h2>
+          <button
+            type="button"
+            onClick={handleCreateVenue}
+            className="create-venue-button"
+            title="Create a new venue and open its dashboard"
+          >
             <span>➕</span>
-            Create New Venue
+            Create new venue
           </button>
         </div>
 
@@ -186,9 +204,14 @@ const VenuesList = () => {
             <p className="empty-subtitle">
               Create your first venue to get started
             </p>
-            <button onClick={handleCreateVenue} className="create-venue-button">
+            <button
+              type="button"
+              onClick={handleCreateVenue}
+              className="create-venue-button"
+              title="Create your first venue and open its dashboard"
+            >
               <span>➕</span>
-              Create Your First Venue
+              Create your first venue
             </button>
           </div>
         ) : (

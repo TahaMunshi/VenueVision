@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import './Auth.css'
 import { getApiBaseUrl } from '../../utils/api'
+import PageNavBar from '../../components/PageNavBar'
 
 const Login = () => {
   const navigate = useNavigate()
@@ -50,6 +51,8 @@ const Login = () => {
 
   return (
     <div className="auth-container">
+      <PageNavBar title="Sign in" backLabel="Back" />
+      <div className="auth-main">
       <div className="auth-card">
         <div className="auth-header">
           <h1 className="auth-title">Welcome Back</h1>
@@ -91,20 +94,21 @@ const Login = () => {
             />
           </div>
 
-          <button type="submit" className="submit-button" disabled={loading}>
+          <button type="submit" className="submit-button" disabled={loading} title="Sign in and go to my venues list">
             {loading && <span className="loading-spinner"></span>}
-            {loading ? 'Signing in...' : 'Sign In'}
+            {loading ? 'Signing in...' : 'Sign in — go to my venues'}
           </button>
         </form>
 
         <div className="auth-footer">
           <p className="auth-footer-text">
             Don't have an account?{' '}
-            <Link to="/signup" className="auth-link">
-              Sign up
+            <Link to="/signup" className="auth-link" title="Go to create account page">
+              Create an account
             </Link>
           </p>
         </div>
+      </div>
       </div>
     </div>
   )

@@ -122,8 +122,8 @@ Checked against this repo at doc creation time:
 | Item | Status |
 |------|--------|
 | Migrations `001`–`003` | Present under [`server/migrations/`](server/migrations/) |
-| Migration `004` (brightness) | **Not** present as `004_*.sql` — add from `omer` if needed |
-| `server/services/tripo3d_service.py` | **Not** present; Tripo may live in [`instantmesh_service.py`](server/services/instantmesh_service.py) |
+| Migration `004` (brightness) | Present after merging `origin/omer` — run DB migrations if not applied |
+| `server/services/tripo3d_service.py` | Present after merge with `origin/omer` (alongside [`instantmesh_service.py`](server/services/instantmesh_service.py)) |
 | `server/utils/public_url.py` | **Not** present — may come from `omer` |
 | [`FloorPlanner.tsx`](src/pages/planner/FloorPlanner.tsx) | Contains `roomDimsFromVenue` and related helpers |
 | [`Space3DViewer.tsx`](src/pages/viewer/Space3DViewer.tsx) | GLTF paths / `width_m`-style scaling — **diff against `omer`** for full parity |

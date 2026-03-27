@@ -2,6 +2,8 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import './AssetLibrary.css'
 import { getApiBaseUrl } from '../../utils/api'
+import { loadThreeBundle } from '../../utils/threeLoader'
+import PageNavBar from '../../components/PageNavBar'
 
 // Type declarations for dynamically loaded Three.js
 declare global {
@@ -344,43 +346,7 @@ const AssetLibrary = () => {
     })
   }
 
-  const handleBack = () => {
-    navigate('/venues')
-  }
-
-  // Load Three.js scripts dynamically
-  const loadThreeJS = useCallback(async () => {
-    // Load Three.js core
-    if (!window.THREE) {
-      await new Promise<void>((resolve, reject) => {
-        const script = document.createElement('script')
-        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'
-        script.onload = () => resolve()
-        script.onerror = () => reject(new Error('Failed to load Three.js'))
-        document.head.appendChild(script)
-      })
-    }
-    // Load OrbitControls
-    if (!window.THREE?.OrbitControls) {
-      await new Promise<void>((resolve, reject) => {
-        const script = document.createElement('script')
-        script.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js'
-        script.onload = () => resolve()
-        script.onerror = () => reject(new Error('Failed to load OrbitControls'))
-        document.head.appendChild(script)
-      })
-    }
-    // Load GLTFLoader
-    if (!window.THREE?.GLTFLoader) {
-      await new Promise<void>((resolve, reject) => {
-        const script = document.createElement('script')
-        script.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js'
-        script.onload = () => resolve()
-        script.onerror = () => reject(new Error('Failed to load GLTFLoader'))
-        document.head.appendChild(script)
-      })
-    }
-  }, [])
+  const loadThreeJS = useCallback(() => loadThreeBundle(), [])
 
   // Open 3D preview for an asset
   const handlePreviewAsset = (asset: Asset) => {
@@ -712,33 +678,29 @@ const AssetLibrary = () => {
   if (loading) {
     return (
       <div className="asset-library-container">
-        <div className="asset-library-header">
-          <div className="header-left">
-            <h1 className="page-title">Loading...</h1>
-          </div>
-        </div>
+        <PageNavBar title="My asset library" backLabel="Back" />
       </div>
     )
   }
 
   return (
     <div className="asset-library-container">
-      <div className="asset-library-header">
-        <div className="header-left">
-          <button onClick={handleBack} className="back-button">
-            ← Back
+      <PageNavBar
+        title="My asset library"
+        backLabel="Back"
+        endSlot={
+          <button
+            type="button"
+            className="create-asset-button"
+            onClick={() => setShowUploadModal(true)}
+            title="Upload a photo to generate a new 3D model"
+          >
+            + Create 3D asset
           </button>
-          <div>
-            <h1 className="page-title">My Asset Library</h1>
-            <p className="page-subtitle">{assets.length} 3D assets</p>
-          </div>
-        </div>
-        <button 
-          className="create-asset-button"
-          onClick={() => setShowUploadModal(true)}
-        >
-          + Create 3D Asset
-        </button>
+        }
+      />
+      <div className="asset-library-subheader">
+        <p className="page-subtitle">{assets.length} 3D assets</p>
       </div>
 
       <div className="asset-library-content">

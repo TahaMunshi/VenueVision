@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import './Space3DViewer.css'
 import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
+import { loadThreeBundle } from '../../utils/threeLoader'
+import PageNavBar from '../../components/PageNavBar'
 
 // Type declarations for dynamically loaded Three.js
 declare global {
@@ -252,31 +254,7 @@ const Space3DViewer = () => {
           console.warn('[Space3DViewer] Failed to fetch layout for GLB info:', err)
         }
 
-        // Load Three.js from CDN
-        await Promise.all([
-          new Promise<void>((resolve, reject) => {
-            if (window.THREE) {
-              resolve()
-              return
-            }
-            const script = document.createElement('script')
-            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'
-            script.onload = () => resolve()
-            script.onerror = () => reject(new Error('Failed to load Three.js'))
-            document.head.appendChild(script)
-          }),
-          new Promise<void>((resolve, reject) => {
-            if (window.THREE?.OrbitControls) {
-              resolve()
-              return
-            }
-            const script = document.createElement('script')
-            script.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js'
-            script.onload = () => resolve()
-            script.onerror = () => reject(new Error('Failed to load OrbitControls'))
-            document.head.appendChild(script)
-          })
-        ])
+        await loadThreeBundle()
 
         const THREE = (window as any).THREE
         if (!THREE) {
@@ -674,19 +652,6 @@ const Space3DViewer = () => {
               // Update room dimensions if provided
               if (data.dimensions) {
                 setDimensions(data.dimensions)
-              }
-              
-              // Load GLTF loader for 3D models
-              const GLTFLoader = (window as any).THREE?.GLTFLoader
-              if (!GLTFLoader) {
-                // Load GLTFLoader script
-                await new Promise<void>((resolve, reject) => {
-                  const script = document.createElement('script')
-                  script.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js'
-                  script.onload = () => resolve()
-                  script.onerror = () => reject(new Error('Failed to load GLTFLoader'))
-                  document.head.appendChild(script)
-                })
               }
               
               const gltfLoader = new THREE.GLTFLoader()
@@ -1173,13 +1138,19 @@ const Space3DViewer = () => {
 
   return (
     <div className="space-3d-viewer">
-      <div className="viewer-header">
-        {/* Back should always take the user to the mobile home screen */}
-        <button onClick={() => navigate('/')} className="back-button">
-          ← Back
-        </button>
-        <h1>3D Space Viewer</h1>
-        <p>Venue: {venueId}</p>
+      {venueId && (
+        <PageNavBar variant="dark" venueId={venueId} title="3D viewer" backLabel="Back" />
+      )}
+      <div className="viewer-subheader">
+        <p className="viewer-subheader-line">Venue: {venueId}</p>
+        <details className="viewer-tips">
+          <summary>Quick tips</summary>
+          <ul>
+            <li>Drag to orbit; scroll to zoom. Walls use textures from your guided capture flow.</li>
+            <li>Large venues or many assets may take a moment to load.</li>
+            <li>Update layout or materials in the floor planner, then refresh this page if needed.</li>
+          </ul>
+        </details>
       </div>
 
       {loading && (
@@ -1192,9 +1163,12 @@ const Space3DViewer = () => {
       {error && (
         <div className="error-overlay">
           <p>{error}</p>
-          {/* On error, also send users back to the home page */}
-          <button onClick={() => navigate('/')}>
-            Go to Home
+          <button
+            type="button"
+            onClick={() => (venueId ? navigate(`/venue/${venueId}`) : navigate('/venues'))}
+            title={venueId ? 'Go to this venue’s dashboard (hub)' : 'Go to my venues list'}
+          >
+            {venueId ? 'Go to venue home' : 'Go to my venues'}
           </button>
         </div>
       )}
@@ -1217,28 +1191,7 @@ const Space3DViewer = () => {
       )}
 
       <div ref={containerRef} className="viewer-container" />
-      
-      {/* Back button */}
-      <button 
-        onClick={() => navigate(`/venue/${venueId}`)}
-        style={{
-          position: 'absolute',
-          top: '20px',
-          left: '20px',
-          padding: '12px 24px',
-          background: 'rgba(255, 255, 255, 0.9)',
-          border: 'none',
-          borderRadius: '8px',
-          cursor: 'pointer',
-          fontSize: '14px',
-          fontWeight: '600',
-          zIndex: 1000,
-          boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
-        }}
-      >
-        ← Back to Venue
-      </button>
-      
+
       <div className="viewer-controls">
         <div className="dimension-controls">
           <label>

@@ -1,6 +1,12 @@
 .asset-library-container {
   min-height: 100vh;
-  background: #f7fafc;
+  background: var(--vv-bg, #f1f5f9);
+}
+
+.asset-library-subheader {
+  max-width: var(--vv-shell, min(1440px, 96vw));
+  margin: 0 auto;
+  padding: 4px 24px 12px;
 }
 
 .asset-library-header {
@@ -66,9 +72,23 @@
 }
 
 .asset-library-content {
-  max-width: 1200px;
+  max-width: var(--vv-shell, min(1440px, 96vw));
   margin: 0 auto;
   padding: 40px 20px;
+}
+
+html[data-view-mode='desktop'] .asset-library-content {
+  padding: 48px clamp(24px, 4vw, 48px);
+}
+
+html[data-view-mode='mobile'] .assets-grid {
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 1200px) {
+  html[data-view-mode='desktop'] .assets-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 /* Error Banner */

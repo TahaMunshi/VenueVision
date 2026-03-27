@@ -6,6 +6,18 @@
   flex-direction: column;
 }
 
+.planner-subheader {
+  text-align: center;
+  padding: 0.75rem 1.5rem 1rem;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.planner-subheader-line {
+  margin: 0 0 10px;
+  opacity: 0.85;
+  font-size: 0.95rem;
+}
+
 .planner-header {
   text-align: center;
   padding: 1rem 2rem;
@@ -40,6 +52,32 @@
 .planner-header p {
   opacity: 0.7;
   font-size: 0.9rem;
+}
+
+.planner-tips {
+  margin: 12px auto 0;
+  max-width: 520px;
+  text-align: left;
+  font-size: 0.85rem;
+  color: #cbd5e0;
+}
+
+.planner-tips summary {
+  cursor: pointer;
+  color: #e2e8f0;
+  font-weight: 600;
+  list-style: none;
+}
+
+.planner-tips summary::-webkit-details-marker {
+  display: none;
+}
+
+.planner-tips ul {
+  margin: 8px 0 0 18px;
+  padding: 0;
+  line-height: 1.45;
+  opacity: 0.9;
 }
 
 .planner-content {
