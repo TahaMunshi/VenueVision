@@ -1,8 +1,11 @@
 .guided-flow-stepper {
   width: 100%;
   padding: 10px 12px;
-  background: rgba(255, 255, 255, 0.95);
-  border-bottom: 1px solid #e2e8f0;
+  background: var(--vv-glass-bg);
+  backdrop-filter: blur(var(--vv-glass-blur)) saturate(var(--vv-glass-saturate));
+  -webkit-backdrop-filter: blur(var(--vv-glass-blur)) saturate(var(--vv-glass-saturate));
+  border-bottom: 1px solid var(--vv-glass-border);
+  box-shadow: var(--vv-glass-inset);
   box-sizing: border-box;
 }
 

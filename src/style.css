@@ -10,11 +10,25 @@
   font-weight: 400;
   color-scheme: light;
   color: #0f172a;
-  --vv-bg: #f1f5f9;
-  --vv-surface: #ffffff;
-  --vv-border: #e2e8f0;
+  /* Let the liquid mesh show through page shells */
+  --vv-bg: transparent;
+  --vv-surface: rgba(255, 255, 255, 0.55);
+  --vv-border: rgba(255, 255, 255, 0.5);
   --vv-accent: #2563eb;
   --vv-accent-soft: #dbeafe;
+  /* Liquid glass — frosted panels */
+  --vv-glass-blur: 22px;
+  --vv-glass-saturate: 1.75;
+  --vv-glass-bg: rgba(255, 255, 255, 0.42);
+  --vv-glass-bg-raised: rgba(255, 255, 255, 0.58);
+  --vv-glass-border: rgba(255, 255, 255, 0.55);
+  --vv-glass-edge: rgba(148, 163, 184, 0.28);
+  --vv-glass-shadow: 0 8px 32px rgba(15, 23, 42, 0.07), 0 2px 12px rgba(15, 23, 42, 0.04);
+  --vv-glass-inset: inset 0 1px 1px rgba(255, 255, 255, 0.72);
+  /* Dark routes (floor planner, etc.) */
+  --vv-glass-dark-bg: rgba(15, 23, 42, 0.45);
+  --vv-glass-dark-border: rgba(255, 255, 255, 0.1);
+  --vv-glass-dark-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
   /* Default before JS: wide shell (desktop). ViewModeProvider sets data-view-mode on <html>. */
   --vv-shell: min(1440px, 96vw);
   font-synthesis: none;
@@ -27,13 +41,65 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: var(--vv-bg);
   color: #0f172a;
+  background-color: #e2e8f0;
+  background-image:
+    radial-gradient(ellipse 110% 85% at 50% -15%, rgba(99, 102, 241, 0.38), transparent 58%),
+    radial-gradient(ellipse 90% 70% at 100% 20%, rgba(168, 85, 247, 0.26), transparent 52%),
+    radial-gradient(ellipse 75% 65% at 0% 75%, rgba(34, 211, 238, 0.3), transparent 55%),
+    radial-gradient(ellipse 95% 60% at 50% 105%, rgba(129, 140, 248, 0.18), transparent 55%),
+    linear-gradient(168deg, #f8fafc 0%, #e2e8f0 45%, #cbd5e1 100%);
+  background-attachment: fixed;
+}
+
+/* Soft moving highlight — “liquid” shimmer over the mesh */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    118deg,
+    transparent 38%,
+    rgba(255, 255, 255, 0.07) 47%,
+    rgba(255, 255, 255, 0.16) 50%,
+    rgba(255, 255, 255, 0.07) 53%,
+    transparent 62%
+  );
+  background-size: 220% 220%;
+  animation: vv-liquid-shimmer 22s ease-in-out infinite;
+  opacity: 0.85;
+}
+
+@keyframes vv-liquid-shimmer {
+  0%,
+  100% {
+    background-position: 0% 40%;
+  }
+  50% {
+    background-position: 100% 60%;
+  }
 }
 
 #app {
+  position: relative;
+  z-index: 1;
   width: 100%;
   min-height: 100vh;
+}
+
+/* Reusable glass panel (opt-in) */
+.vv-glass {
+  background: var(--vv-glass-bg);
+  backdrop-filter: blur(var(--vv-glass-blur)) saturate(var(--vv-glass-saturate));
+  -webkit-backdrop-filter: blur(var(--vv-glass-blur)) saturate(var(--vv-glass-saturate));
+  border: 1px solid var(--vv-glass-border);
+  box-shadow: var(--vv-glass-shadow), var(--vv-glass-inset);
+}
+
+.vv-glass--raised {
+  background: var(--vv-glass-bg-raised);
 }
 
 html[data-view-mode='mobile'] {

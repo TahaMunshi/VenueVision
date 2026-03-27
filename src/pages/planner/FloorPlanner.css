@@ -9,7 +9,11 @@
 .planner-subheader {
   text-align: center;
   padding: 0.75rem 1.5rem 1rem;
-  background: rgba(0, 0, 0, 0.22);
+  background: var(--vv-glass-dark-bg);
+  backdrop-filter: blur(var(--vv-glass-blur)) saturate(1.35);
+  -webkit-backdrop-filter: blur(var(--vv-glass-blur)) saturate(1.35);
+  border-bottom: 1px solid var(--vv-glass-dark-border);
+  box-shadow: var(--vv-glass-dark-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 .planner-subheader-line {
@@ -22,7 +26,11 @@
   text-align: center;
   padding: 1rem 2rem;
   position: relative;
-  background: rgba(0, 0, 0, 0.3);
+  background: rgba(15, 23, 42, 0.4);
+  backdrop-filter: blur(var(--vv-glass-blur)) saturate(1.35);
+  -webkit-backdrop-filter: blur(var(--vv-glass-blur)) saturate(1.35);
+  border-bottom: 1px solid var(--vv-glass-dark-border);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 .back-button {
@@ -30,18 +38,22 @@
   left: 2rem;
   top: 50%;
   transform: translateY(-50%);
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: var(--vv-glass-dark-bg);
+  backdrop-filter: blur(14px) saturate(1.35);
+  -webkit-backdrop-filter: blur(14px) saturate(1.35);
+  border: 1px solid var(--vv-glass-dark-border);
   color: #fff;
   padding: 0.5rem 1rem;
   border-radius: 8px;
   cursor: pointer;
   font-size: 1rem;
   transition: all 0.3s;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .back-button:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.28);
 }
 
 .planner-header h1 {
@@ -90,11 +102,14 @@
   width: 250px;
   min-width: 200px;
   max-width: 600px;
-  background-color: rgba(0, 0, 0, 0.3);
+  background-color: var(--vv-glass-dark-bg);
+  backdrop-filter: blur(var(--vv-glass-blur)) saturate(1.35);
+  -webkit-backdrop-filter: blur(var(--vv-glass-blur)) saturate(1.35);
   padding: 20px;
   display: flex;
   flex-direction: column;
-  box-shadow: 2px 0 5px rgba(0, 0, 0, 0.5);
+  border-right: 1px solid var(--vv-glass-dark-border);
+  box-shadow: var(--vv-glass-dark-shadow), inset -1px 0 0 rgba(255, 255, 255, 0.04);
   position: relative;
   overflow-y: auto;
 }

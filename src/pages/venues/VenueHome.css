@@ -10,8 +10,11 @@
 }
 
 .venue-home-header {
-  background: white;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  background: var(--vv-glass-bg-raised);
+  backdrop-filter: blur(var(--vv-glass-blur)) saturate(var(--vv-glass-saturate));
+  -webkit-backdrop-filter: blur(var(--vv-glass-blur)) saturate(var(--vv-glass-saturate));
+  border-bottom: 1px solid var(--vv-glass-border);
+  box-shadow: var(--vv-glass-shadow), var(--vv-glass-inset);
   padding: 20px 40px;
   display: flex;
   justify-content: space-between;
@@ -26,8 +29,10 @@
 
 .back-button {
   padding: 8px 16px;
-  background: white;
-  border: 2px solid #e2e8f0;
+  background: var(--vv-glass-bg);
+  backdrop-filter: blur(14px) saturate(1.5);
+  -webkit-backdrop-filter: blur(14px) saturate(1.5);
+  border: 1px solid var(--vv-glass-border);
   border-radius: 8px;
   color: #4a5568;
   font-size: 14px;
@@ -37,11 +42,12 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  box-shadow: var(--vv-glass-inset);
 }
 
 .back-button:hover {
-  border-color: #cbd5e0;
-  background: #f7fafc;
+  border-color: rgba(148, 163, 184, 0.45);
+  background: var(--vv-glass-bg-raised);
 }
 
 .venue-home-title {
@@ -85,10 +91,12 @@ html[data-view-mode='mobile'] .options-grid {
 .venue-workflow-section {
   margin-bottom: 40px;
   padding: 24px;
-  background: white;
+  background: var(--vv-glass-bg);
+  backdrop-filter: blur(var(--vv-glass-blur)) saturate(var(--vv-glass-saturate));
+  -webkit-backdrop-filter: blur(var(--vv-glass-blur)) saturate(var(--vv-glass-saturate));
   border-radius: 12px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-  border: 1px solid #e2e8f0;
+  box-shadow: var(--vv-glass-shadow), var(--vv-glass-inset);
+  border: 1px solid var(--vv-glass-border);
 }
 
 .venue-workflow-intro {
@@ -222,10 +230,13 @@ html[data-view-mode='mobile'] .options-grid {
 }
 
 .stat-card {
-  background: white;
+  background: var(--vv-glass-bg);
+  backdrop-filter: blur(var(--vv-glass-blur)) saturate(var(--vv-glass-saturate));
+  -webkit-backdrop-filter: blur(var(--vv-glass-blur)) saturate(var(--vv-glass-saturate));
   padding: 24px;
   border-radius: 12px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border: 1px solid var(--vv-glass-border);
+  box-shadow: var(--vv-glass-shadow), var(--vv-glass-inset);
 }
 
 .stat-label {
@@ -267,10 +278,12 @@ html[data-view-mode='mobile'] .options-grid {
 }
 
 .option-card {
-  background: white;
+  background: var(--vv-glass-bg);
+  backdrop-filter: blur(var(--vv-glass-blur)) saturate(var(--vv-glass-saturate));
+  -webkit-backdrop-filter: blur(var(--vv-glass-blur)) saturate(var(--vv-glass-saturate));
   border-radius: 12px;
   padding: 28px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--vv-glass-shadow), var(--vv-glass-inset);
   transition: all 0.2s;
   cursor: pointer;
   border: 2px solid transparent;
@@ -278,8 +291,9 @@ html[data-view-mode='mobile'] .options-grid {
 
 .option-card:hover {
   transform: translateY(-4px);
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.15);
-  border-color: #667eea;
+  background: var(--vv-glass-bg-raised);
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.12), var(--vv-glass-inset);
+  border-color: rgba(102, 126, 234, 0.45);
 }
 
 .option-icon {
@@ -341,7 +355,7 @@ html[data-view-mode='mobile'] .options-grid {
 }
 
 .option-button:hover {
-  background: white;
+  background: var(--vv-glass-bg-raised);
   border-color: #667eea;
   color: #667eea;
 }
@@ -360,14 +374,17 @@ html[data-view-mode='mobile'] .options-grid {
 
 .delete-wall-images-button {
   padding: 10px 20px;
-  background: #fff;
-  border: 2px solid #e2e8f0;
+  background: var(--vv-glass-bg);
+  backdrop-filter: blur(12px) saturate(1.4);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
+  border: 1px solid var(--vv-glass-border);
   border-radius: 8px;
   color: #c53030;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s;
+  box-shadow: var(--vv-glass-inset);
 }
 
 .delete-wall-images-button:hover:not(:disabled) {

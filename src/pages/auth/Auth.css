@@ -16,10 +16,13 @@
 }
 
 .auth-card {
-  background: white;
+  background: var(--vv-glass-bg-raised);
+  backdrop-filter: blur(var(--vv-glass-blur)) saturate(var(--vv-glass-saturate));
+  -webkit-backdrop-filter: blur(var(--vv-glass-blur)) saturate(var(--vv-glass-saturate));
   color-scheme: light;
   border-radius: 16px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--vv-glass-border);
+  box-shadow: var(--vv-glass-shadow), var(--vv-glass-inset), 0 20px 60px rgba(0, 0, 0, 0.28);
   padding: 40px;
   width: 100%;
   max-width: 420px;

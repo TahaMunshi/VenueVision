@@ -22,22 +22,26 @@
   padding: 7px 11px;
   border-radius: 10px;
   border: 1px solid var(--vmm-trigger-border, rgba(15, 23, 42, 0.12));
-  background: var(--vmm-trigger-bg, rgba(248, 250, 252, 0.95));
+  background: var(--vmm-trigger-bg, rgba(248, 250, 252, 0.55));
+  backdrop-filter: blur(18px) saturate(1.65);
+  -webkit-backdrop-filter: blur(18px) saturate(1.65);
   cursor: pointer;
   font-size: 12px;
   font-weight: 600;
   color: var(--vmm-trigger-fg, #0f172a);
   transition: background 0.15s, border-color 0.15s;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
 }
 
 .view-mode-menu--nav-dark .view-mode-menu__trigger {
   --vmm-trigger-border: rgba(255, 255, 255, 0.2);
   --vmm-trigger-bg: rgba(255, 255, 255, 0.08);
   --vmm-trigger-fg: #f1f5f9;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 .view-mode-menu__trigger:hover {
-  background: var(--vmm-trigger-hover, #fff);
+  background: var(--vmm-trigger-hover, rgba(255, 255, 255, 0.72));
 }
 
 .view-mode-menu--nav-dark .view-mode-menu__trigger:hover {
@@ -122,20 +126,22 @@
   text-align: left;
   padding: 12px 14px;
   border-radius: 10px;
-  border: 2px solid #e2e8f0;
-  background: #f8fafc;
+  border: 1px solid var(--vv-glass-border);
+  background: var(--vv-glass-bg);
+  backdrop-filter: blur(12px) saturate(1.4);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
 }
 
 .view-mode-menu__option:hover {
-  border-color: #cbd5e1;
-  background: #fff;
+  border-color: rgba(148, 163, 184, 0.45);
+  background: var(--vv-glass-bg-raised);
 }
 
 .view-mode-menu__option.is-active {
-  border-color: #6366f1;
-  background: #eef2ff;
+  border-color: rgba(99, 102, 241, 0.55);
+  background: rgba(238, 242, 255, 0.72);
 }
 
 .view-mode-menu__option-title {
