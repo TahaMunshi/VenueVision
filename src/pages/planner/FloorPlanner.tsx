@@ -3,8 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom'
 import './FloorPlanner.css'
 import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
 
-const METER_TO_PIXEL_SCALE = 30 // 1 meter = 30 pixels for a larger canvas
-const GRID_SIZE = METER_TO_PIXEL_SCALE
+const METER_TO_PIXEL_SCALE = 30 // 1 meter = 30 pixels (2D size matches 3D room scale)
+const GRID_SIZE = 6 // Snap every 6px = 0.2m so assets can be placed close together
 
 /** Three vertical layers: floor (rugs/carpets), surface (middle: furniture + tabletop), ceiling (lights). */
 export type AssetLayer = 'floor' | 'surface' | 'ceiling'
@@ -28,6 +28,8 @@ type Asset = {
   elevation?: number
   /** Real-world height in meters (Y axis) for true-to-life scaling. */
   height?: number
+  /** Brightness multiplier (0.3–2.5, 1 = default). */
+  brightness?: number
 }
 
 type UserAsset = {
@@ -41,6 +43,7 @@ type UserAsset = {
   width_m?: number
   depth_m?: number
   height_m?: number
+  brightness?: number
 }
 
 /**
@@ -63,6 +66,43 @@ const ASSET_CATALOG: Array<{
   { type: 'vase', file: 'blue_vase.glb', width: 0.4, depth: 0.4, height: 0.4, label: 'Blue Vase (on table)', layer: 'surface', elevation: 0.8, placeOnTable: true },
   { type: 'chandelier', file: 'chandelier.glb', width: 1.2, depth: 1.2, height: 0.6, label: 'Chandelier (ceiling)', layer: 'ceiling', elevation: 2.5 },
 ]
+
+type CatalogItem = (typeof ASSET_CATALOG)[number]
+type BuiltInAssetOverride = {
+  height_m?: number
+  asset_layer?: AssetLayer
+  brightness?: number
+}
+const BUILTIN_OVERRIDES_KEY = 'builtin_asset_overrides_v1'
+
+const getBuiltInOverrides = (): Record<string, BuiltInAssetOverride> => {
+  try {
+    return JSON.parse(localStorage.getItem(BUILTIN_OVERRIDES_KEY) || '{}')
+  } catch {
+    return {}
+  }
+}
+
+const withCatalogOverrides = (item: CatalogItem): CatalogItem & { brightness: number } => {
+  const override = getBuiltInOverrides()[item.file]
+  if (!override) return { ...item, brightness: 1 }
+  const targetHeight = typeof override.height_m === 'number' && override.height_m > 0 ? override.height_m : item.height
+  const ratio = item.height > 0 ? targetHeight / item.height : 1
+  return {
+    ...item,
+    height: targetHeight,
+    width: item.width * ratio,
+    depth: item.depth * ratio,
+    layer: (override.asset_layer as AssetLayer) || item.layer,
+    elevation: ((override.asset_layer as AssetLayer) || item.layer) === 'ceiling'
+      ? 2.5
+      : ((override.asset_layer as AssetLayer) || item.layer) === 'floor'
+        ? 0
+        : item.elevation * ratio,
+    label: `${item.label.split(' (')[0]} (${(item.width * ratio).toFixed(2)}×${(item.depth * ratio).toFixed(2)}m)`,
+    brightness: override.brightness ?? 1
+  }
+}
 
 type WallSpec = {
   id: string
@@ -91,6 +131,21 @@ function getAssetElevation(asset: Asset, roomHeight: number): number {
 }
 
 const LAYER_ORDER: AssetLayer[] = ['floor', 'surface', 'ceiling']
+type LightingPreset = 'dim' | 'warm' | 'neutral' | 'bright' | 'cool'
+const WALL_ID_ORDER: Record<string, number> = {
+  wall_north: 0,
+  wall_east: 1,
+  wall_south: 2,
+  wall_west: 3
+}
+
+const orderWallsClockwise = (walls: WallSpec[]): WallSpec[] => {
+  return [...walls].sort((a, b) => {
+    const ai = WALL_ID_ORDER[a.id] ?? 999
+    const bi = WALL_ID_ORDER[b.id] ?? 999
+    return ai - bi
+  })
+}
 
 const FloorPlanner = () => {
   const { venueId } = useParams<{ venueId: string }>()
@@ -102,6 +157,7 @@ const FloorPlanner = () => {
     floor: { type: 'oak_wood', color: '#c6b39e' },
     ceiling: { type: 'flat_white', color: '#f5f5f5' }
   })
+  const [lightingPreset, setLightingPreset] = useState<LightingPreset>('neutral')
   // Start with no walls by default; user draws or adds rectangle manually
   const defaultWalls: WallSpec[] = []
   const [walls, setWalls] = useState<WallSpec[]>(defaultWalls)
@@ -116,6 +172,7 @@ const FloorPlanner = () => {
     layer: AssetLayer
     elevation: number
     placeOnTable?: boolean
+    brightness?: number
   } | null>(null)
   const [draggingAssetId, setDraggingAssetId] = useState<string | null>(null)
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
@@ -125,6 +182,8 @@ const FloorPlanner = () => {
   const [isResizing, setIsResizing] = useState(false)
   const sidebarRef = useRef<HTMLDivElement>(null)
   const previewContainerRef = useRef<HTMLDivElement>(null)
+  const previewLoadTokenRef = useRef(0)
+  const previewScriptsPromiseRef = useRef<Promise<void> | null>(null)
   const previewStateRef = useRef<{
     initialized: boolean
     scene: any
@@ -173,8 +232,11 @@ const FloorPlanner = () => {
           if (data.materials) {
             setMaterials(data.materials)
           }
+          if (data.lighting?.preset) {
+            setLightingPreset(data.lighting.preset as LightingPreset)
+          }
           if (data.walls && Array.isArray(data.walls) && data.walls.length > 0) {
-            setWalls(data.walls as WallSpec[])
+            setWalls(orderWallsClockwise(data.walls as WallSpec[]))
           } else {
             setWalls(defaultWalls)
           }
@@ -375,17 +437,19 @@ const FloorPlanner = () => {
 
   const handleDragStart = (
     e: React.DragEvent,
-    catalogItem: (typeof ASSET_CATALOG)[number]
+    catalogItem: CatalogItem
   ) => {
+    const item = withCatalogOverrides(catalogItem)
     setDraggedAsset({
-      type: catalogItem.type,
-      width: catalogItem.width,
-      depth: catalogItem.depth,
-      height: catalogItem.height,
-      file: catalogItem.file,
-      layer: catalogItem.layer,
-      elevation: catalogItem.elevation,
-      placeOnTable: catalogItem.placeOnTable
+      type: item.type,
+      width: item.width,
+      depth: item.depth,
+      height: item.height,
+      file: item.file,
+      layer: item.layer,
+      elevation: item.elevation,
+      placeOnTable: catalogItem.placeOnTable,
+      brightness: item.brightness
     })
     e.dataTransfer.effectAllowed = 'copy'
   }
@@ -400,7 +464,8 @@ const FloorPlanner = () => {
       height: asset.height_m ?? 1,
       file: asset.file_path || (asset.file_url?.replace(/^\/static\//, '') ?? ''),
       layer: layer as AssetLayer,
-      elevation
+      elevation,
+      brightness: asset.brightness ?? 1
     })
     e.dataTransfer.effectAllowed = 'copy'
   }
@@ -461,7 +526,8 @@ const FloorPlanner = () => {
         offsetX,
         offsetY,
         layer: draggedAsset.layer,
-        elevation: draggedAsset.elevation
+        elevation: draggedAsset.elevation,
+        brightness: draggedAsset.brightness ?? 1
       }
       setPlacedAssets([...placedAssets, newAsset])
       setDraggedAsset(null)
@@ -470,7 +536,7 @@ const FloorPlanner = () => {
 
     // Same-layer collision only (different layers can share X/Y)
     if (checkCollision(null, xM, yM, draggedAsset.width, draggedAsset.depth, draggedAsset.layer)) {
-      setMessage({ text: 'Cannot place asset here! Assets must maintain spacing on this layer.', type: 'error' })
+      setMessage({ text: 'Cannot place here: overlaps another asset on this layer or is out of bounds.', type: 'error' })
       setTimeout(() => setMessage(null), 3000)
       return
     }
@@ -486,7 +552,8 @@ const FloorPlanner = () => {
       y: yM,
       rotation: 0,
       layer: draggedAsset.layer,
-      elevation: draggedAsset.elevation
+      elevation: draggedAsset.elevation,
+      brightness: draggedAsset.brightness ?? 1
     }
 
     setPlacedAssets([...placedAssets, newAsset])
@@ -551,7 +618,8 @@ const FloorPlanner = () => {
     depth: number,
     layer?: AssetLayer
   ): boolean => {
-    const spacing = 1 // 1 meter spacing requirement
+    // Small gap (5cm) so assets can be placed close; set to 0 for touching
+    const spacing = 0.05
 
     if (
       x < 0 ||
@@ -596,7 +664,7 @@ const FloorPlanner = () => {
     // If no walls defined, prevent placement (must have bounding walls)
     if (walls.length === 0) return false
     
-    const MIN_WALL_DISTANCE = 0.1 // 10cm minimum distance from walls
+    const MIN_WALL_DISTANCE = 0.05 // 5cm from walls so assets can sit close to walls
     const assetRight = assetX + assetWidth
     const assetBottom = assetY + assetDepth
     
@@ -651,17 +719,15 @@ const FloorPlanner = () => {
           dimensions: roomDimensions,
           assets: placedAssets,
           materials,
+          lighting: { preset: lightingPreset },
           walls,
           floor_plan_url: null
         })
       })
 
       if (response.ok) {
-        setMessage({ text: 'Layout saved! Opening guided tour to capture wall photos...', type: 'success' })
-        setTimeout(() => {
-          // Redirect to guided tour after saving
-          navigate(`/mobile/capture/${venueId}`)
-        }, 1500)
+        setMessage({ text: 'Layout saved successfully.', type: 'success' })
+        setTimeout(() => setMessage(null), 2000)
       } else {
         setMessage({ text: 'Failed to save layout.', type: 'error' })
         setTimeout(() => setMessage(null), 3000)
@@ -695,6 +761,7 @@ const FloorPlanner = () => {
         setPlacedAssets([])
         setVenueName('')
         setRoomDimensions({ width: 20, height: 8, depth: 20 })
+        setLightingPreset('neutral')
         setTimeout(() => setMessage(null), 2000)
       } else {
         console.error(`[FloorPlanner] Reset failed: ${responseData.message}`)
@@ -802,42 +869,82 @@ const FloorPlanner = () => {
     }
   }
 
-  const handleAssetHover = (assetFile: string, label: string) => {
+  const getPreviewElements = () => {
     const statusEl = previewContainerRef.current?.parentElement?.querySelector('.asset-preview-status') as HTMLElement
     const titleEl = previewContainerRef.current?.parentElement?.querySelector('.asset-preview-title') as HTMLElement
+    return { statusEl, titleEl }
+  }
+
+  const loadScriptOnce = (src: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null
+      if (existing) {
+        if (existing.getAttribute('data-loaded') === 'true') {
+          resolve()
+          return
+        }
+        existing.addEventListener('load', () => resolve(), { once: true })
+        existing.addEventListener('error', () => reject(new Error(`Failed to load script: ${src}`)), { once: true })
+        return
+      }
+      const script = document.createElement('script')
+      script.src = src
+      script.async = true
+      script.onload = () => {
+        script.setAttribute('data-loaded', 'true')
+        resolve()
+      }
+      script.onerror = () => reject(new Error(`Failed to load script: ${src}`))
+      document.head.appendChild(script)
+    })
+  }
+
+  const ensurePreviewDependencies = async () => {
+    if ((window as any).THREE?.GLTFLoader && (window as any).THREE?.OrbitControls) return
+    if (!previewScriptsPromiseRef.current) {
+      previewScriptsPromiseRef.current = (async () => {
+        await loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js')
+        await loadScriptOnce('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js')
+        await loadScriptOnce('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js')
+      })()
+    }
+    await previewScriptsPromiseRef.current
+  }
+
+  const handleAssetHover = async (assetFile: string, label: string) => {
+    const { statusEl, titleEl } = getPreviewElements()
 
     if (!assetFile || !statusEl || !titleEl) return
 
-    // Load Three.js if not loaded
-    if (!(window as any).THREE) {
-      const script1 = document.createElement('script')
-      script1.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'
-      script1.onload = () => {
-        const script2 = document.createElement('script')
-        script2.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js'
-        script2.onload = () => {
-          const script3 = document.createElement('script')
-          script3.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js'
-          script3.onload = () => {
-            initAssetPreview()
-            loadAssetPreview(assetFile, label)
-          }
-          document.head.appendChild(script3)
-        }
-        document.head.appendChild(script2)
-      }
-      document.head.appendChild(script1)
-      return
-    }
+    const hoverToken = ++previewLoadTokenRef.current
+    statusEl.textContent = 'Loading preview...'
 
-    initAssetPreview()
-    loadAssetPreview(assetFile, label)
+    try {
+      await ensurePreviewDependencies()
+      if (previewLoadTokenRef.current !== hoverToken) return
+      initAssetPreview()
+      loadAssetPreview(assetFile, label, hoverToken)
+    } catch (error) {
+      if (previewLoadTokenRef.current !== hoverToken) return
+      console.error('Failed to initialize asset preview', error)
+      statusEl.textContent = 'Preview unavailable.'
+    }
   }
 
-  const loadAssetPreview = (assetFile: string, label: string) => {
+  const handleAssetHoverLeave = () => {
+    // Invalidate any in-flight hover load so stale models never replace current hover.
+    previewLoadTokenRef.current += 1
     const previewState = previewStateRef.current
-    const statusEl = previewContainerRef.current?.parentElement?.querySelector('.asset-preview-status') as HTMLElement
-    const titleEl = previewContainerRef.current?.parentElement?.querySelector('.asset-preview-title') as HTMLElement
+    previewState.currentFile = null
+    clearPreviewModel()
+    const { statusEl, titleEl } = getPreviewElements()
+    if (titleEl) titleEl.textContent = 'Asset Preview'
+    if (statusEl) statusEl.textContent = 'Hover an asset to load its 3D preview.'
+  }
+
+  const loadAssetPreview = (assetFile: string, label: string, hoverToken: number) => {
+    const previewState = previewStateRef.current
+    const { statusEl, titleEl } = getPreviewElements()
 
     if (!assetFile || !statusEl || !titleEl) return
 
@@ -867,12 +974,14 @@ const FloorPlanner = () => {
     previewState.loader.load(
       modelPath,
       (gltf: any) => {
+        if (previewLoadTokenRef.current !== hoverToken || previewState.currentFile !== assetFile) return
         previewState.modelGroup = normalizeAndScaleModel(gltf.scene, 1.5, 1.5)
         previewState.scene.add(previewState.modelGroup)
         statusEl.textContent = 'Drag inside preview to rotate.'
       },
       undefined,
       (error: any) => {
+        if (previewLoadTokenRef.current !== hoverToken || previewState.currentFile !== assetFile) return
         console.error('Failed to load preview', error)
         statusEl.textContent = 'Preview unavailable.'
         previewState.currentFile = null
@@ -937,7 +1046,7 @@ const FloorPlanner = () => {
           ← Back to Venue
         </button>
         <h1>2D Floor Planner</h1>
-        <p>Venue: {venueName || venueId} | Room: {roomDimensions.width}m x {roomDimensions.depth}m</p>
+        <p>Venue: {venueName || venueId} | Room: {roomDimensions.width}m × {roomDimensions.depth}m | Scale: 1m = {METER_TO_PIXEL_SCALE}px (2D matches 3D)</p>
       </div>
 
       <div className="planner-content">
@@ -956,19 +1065,22 @@ const FloorPlanner = () => {
           <h2>Asset Library</h2>
           <div className="asset-list">
             <div className="asset-section-title">Default Assets</div>
-            {ASSET_CATALOG.map((item) => (
+            {ASSET_CATALOG.map((baseItem) => {
+              const item = withCatalogOverrides(baseItem)
+              return (
               <div
                 key={item.file}
                 className="asset-item"
                 draggable
                 onDragStart={(e) => handleDragStart(e, item)}
-                onMouseEnter={() => handleAssetHover(item.file, item.label)}
+                onMouseEnter={() => { void handleAssetHover(item.file, item.label) }}
+                onMouseLeave={handleAssetHoverLeave}
                 data-layer={item.layer}
                 data-elevation={item.elevation}
               >
                 {item.label}
               </div>
-            ))}
+            )})}
             <div className="asset-section-title" style={{ marginTop: '16px' }}>
               My Custom Assets
               <button
@@ -1013,7 +1125,12 @@ const FloorPlanner = () => {
                   className="asset-item user-asset"
                   draggable
                   onDragStart={(e) => handleDragStartUserAsset(e, asset)}
-                  onMouseEnter={() => filePathForPreview && handleAssetHover(filePathForPreview, asset.asset_name)}
+                  onMouseEnter={() => {
+                    if (filePathForPreview) {
+                      void handleAssetHover(filePathForPreview, asset.asset_name)
+                    }
+                  }}
+                  onMouseLeave={handleAssetHoverLeave}
                 >
                   {asset.thumbnail_url && (
                     <img
@@ -1114,6 +1231,19 @@ const FloorPlanner = () => {
                 </optgroup>
               </select>
             </label>
+            <label className="form-row">
+              <span>Lighting</span>
+              <select
+                value={lightingPreset}
+                onChange={(e) => setLightingPreset(e.target.value as LightingPreset)}
+              >
+                <option value="dim">Dim</option>
+                <option value="warm">Warm</option>
+                <option value="neutral">Neutral</option>
+                <option value="bright">Bright</option>
+                <option value="cool">Cool</option>
+              </select>
+            </label>
             <div className="walls-editor">
               <div className="walls-editor-header">
                 <h4>Walls</h4>
@@ -1130,20 +1260,20 @@ const FloorPlanner = () => {
                         coordinates: [0, 0, 100, 0],
                       },
                       {
-                        id: 'wall_south',
-                        name: 'South Wall',
-                        type: 'straight',
-                        length: roomDimensions.width,
-                        height: roomDimensions.height,
-                        coordinates: [0, 100, 100, 100],
-                      },
-                      {
                         id: 'wall_east',
                         name: 'East Wall',
                         type: 'straight',
                         length: roomDimensions.depth,
                         height: roomDimensions.height,
                         coordinates: [100, 0, 100, 100],
+                      },
+                      {
+                        id: 'wall_south',
+                        name: 'South Wall',
+                        type: 'straight',
+                        length: roomDimensions.width,
+                        height: roomDimensions.height,
+                        coordinates: [0, 100, 100, 100],
                       },
                       {
                         id: 'wall_west',
@@ -1326,8 +1456,8 @@ const FloorPlanner = () => {
               height: `${canvasHeightPx}px`,
               background: 'transparent',
               backgroundImage:
-                'repeating-linear-gradient(0deg, rgba(255,255,255,0.04) 0, rgba(255,255,255,0.04) 1px, transparent 1px, transparent 20px),' +
-                'repeating-linear-gradient(90deg, rgba(255,255,255,0.04) 0, rgba(255,255,255,0.04) 1px, transparent 1px, transparent 20px)',
+                `repeating-linear-gradient(0deg, rgba(255,255,255,0.06) 0, rgba(255,255,255,0.06) 1px, transparent 1px, transparent ${METER_TO_PIXEL_SCALE}px),` +
+                `repeating-linear-gradient(90deg, rgba(255,255,255,0.06) 0, rgba(255,255,255,0.06) 1px, transparent 1px, transparent ${METER_TO_PIXEL_SCALE}px)`,
               border: 'none'
             }}
             onDrop={handleCanvasDrop}

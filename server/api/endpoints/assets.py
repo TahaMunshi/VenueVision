@@ -11,6 +11,7 @@ from flask import Blueprint, jsonify, request
 
 from middleware.auth_middleware import token_required
 from services.instantmesh_service import get_instantmesh_service
+from services.tripo3d_service import multiview_to_3d as tripo3d_multiview_to_3d, validate_image as tripo3d_validate_image, _get_api_key as tripo3d_get_api_key
 from services.asset_service import (
     create_user_asset,
     create_pending_asset,
@@ -31,81 +32,96 @@ assets_bp = Blueprint("assets", __name__)
 @token_required
 def generate_asset(current_user):
     """
-    Generate a 3D asset from an uploaded image using InstantMesh.
-    
-    Expects multipart form-data containing:
-        - file: Image file (jpg, jpeg, png, webp)
-        - asset_name: (Optional) Name for the asset
-        
-    The authenticated user's ID is extracted from the JWT token.
-    
-    Returns:
-        JSON response with asset details or error
+    Generate a 3D asset from one or more images.
+    - If TRIPO_API_KEY is set: uses Tripo3D (v2.5 turbo, standard texture).
+      Accepts multiple images for multiview-to-3D (order: front, right, back, left) or a single image.
+    - Otherwise: uses InstantMesh (single image only).
+
+    Expects multipart form-data:
+        - file: single image (jpg, png, webp) OR
+        - files: multiple images (same order as view labels)
+    Optional: asset_name, asset_layer, height_m
     """
     user_id = current_user['user_id']
-    
-    # Get uploaded file
-    file = request.files.get("file")
-    if not file:
+
+    # Collect images: multiple "files[]" or "file"
+    files_list = request.files.getlist("files") or request.files.getlist("files[]")
+    if not files_list:
+        single = request.files.get("file")
+        if single:
+            files_list = [single]
+    if not files_list or not any(f.filename for f in files_list):
         return jsonify({
             "status": "error",
-            "error": "No image file provided"
+            "error": "No image file(s) provided. Use 'file' or 'files'."
         }), 400
-    
-    # Get optional asset name and layer
+
+    # Read all files (keep order: front, right, back, left)
+    image_files = []
+    for f in files_list:
+        if not f.filename:
+            continue
+        data = f.read()
+        if data:
+            image_files.append((data, f.filename))
+
+    if not image_files:
+        return jsonify({
+            "status": "error",
+            "error": "No valid image data uploaded"
+        }), 400
+
     asset_name = request.form.get("asset_name", "").strip()
     asset_layer = request.form.get("asset_layer", "surface").strip().lower()
     if asset_layer not in ("floor", "surface", "ceiling"):
         asset_layer = "surface"
     height_m = request.form.get("height_m", type=float) or 1.0
-    # Width and depth derive from height (uniform scaling - proportions preserved)
     width_m = depth_m = height_m
     if not asset_name:
-        # Generate default name from filename
-        original_filename = file.filename or "asset"
-        asset_name = os.path.splitext(original_filename)[0][:50]  # Limit to 50 chars
-        if not asset_name:
-            asset_name = "Untitled Asset"
-    
-    # Read file content
-    file_bytes = file.read()
-    if not file_bytes:
-        return jsonify({
-            "status": "error",
-            "error": "Empty file uploaded"
-        }), 400
-    
-    # Get InstantMesh service
-    instantmesh = get_instantmesh_service()
-    
-    # Validate image
-    is_valid, error_msg = instantmesh.validate_image(file_bytes, file.filename or "image.jpg")
-    if not is_valid:
-        return jsonify({
-            "status": "error",
-            "error": error_msg
-        }), 400
-    
-    # Create pending asset record
+        first_name = image_files[0][1]
+        asset_name = os.path.splitext(first_name)[0][:50] or "Untitled Asset"
+
+    # Prefer Tripo3D when API key is set (supports 1 or more images)
+    use_tripo = bool(tripo3d_get_api_key())
+    if use_tripo:
+        for i, (data, name) in enumerate(image_files):
+            ok, msg = tripo3d_validate_image(data, name)
+            if not ok:
+                return jsonify({"status": "error", "error": msg}), 400
+    else:
+        if len(image_files) > 1:
+            return jsonify({
+                "status": "error",
+                "error": "Multiple images require Tripo3D. Set TRIPO_API_KEY in .env."
+            }), 400
+        instantmesh = get_instantmesh_service()
+        file_bytes, orig_name = image_files[0]
+        is_valid, error_msg = instantmesh.validate_image(file_bytes, orig_name)
+        if not is_valid:
+            return jsonify({"status": "error", "error": error_msg}), 400
+
     asset_id = create_pending_asset(user_id, asset_name)
     if not asset_id:
-        return jsonify({
-            "status": "error",
-            "error": "Failed to create asset record"
-        }), 500
-    
-    # Update status to processing
+        return jsonify({"status": "error", "error": "Failed to create asset record"}), 500
     update_asset_status(asset_id, 'processing')
-    
+
     try:
-        # Convert image to 3D
-        result = instantmesh.convert_image_to_3d(
-            user_id=user_id,
-            file_bytes=file_bytes,
-            original_filename=file.filename or "image.jpg",
-            asset_name=asset_name
-        )
-        
+        if use_tripo:
+            result = tripo3d_multiview_to_3d(
+                user_id=user_id,
+                image_files=image_files,
+                asset_name=asset_name,
+            )
+        else:
+            file_bytes, orig_name = image_files[0]
+            instantmesh = get_instantmesh_service()
+            result = instantmesh.convert_image_to_3d(
+                user_id=user_id,
+                file_bytes=file_bytes,
+                original_filename=orig_name,
+                asset_name=asset_name,
+            )
+
         if not result['success']:
             # Update asset as failed
             update_asset_status(
@@ -198,6 +214,7 @@ def get_my_assets(current_user):
             "width_m": asset.get('width_m') if asset.get('width_m') is not None else 1.0,
             "depth_m": asset.get('depth_m') if asset.get('depth_m') is not None else 1.0,
             "height_m": asset.get('height_m') if asset.get('height_m') is not None else 1.0,
+            "brightness": asset.get('brightness') if asset.get('brightness') is not None else 1.0,
             "metadata": asset.get('metadata', {}),
             "created_at": asset.get('created_at'),
             "updated_at": asset.get('updated_at')
@@ -248,6 +265,11 @@ def get_user_assets_by_id(current_user, user_id):
             "source_image_url": f"/static/{asset['source_image_path']}" if asset.get('source_image_path') else None,
             "file_size_bytes": asset.get('file_size_bytes'),
             "generation_status": asset['generation_status'],
+            "asset_layer": asset.get('asset_layer') or 'surface',
+            "width_m": asset.get('width_m') if asset.get('width_m') is not None else 1.0,
+            "depth_m": asset.get('depth_m') if asset.get('depth_m') is not None else 1.0,
+            "height_m": asset.get('height_m') if asset.get('height_m') is not None else 1.0,
+            "brightness": asset.get('brightness') if asset.get('brightness') is not None else 1.0,
             "metadata": asset.get('metadata', {}),
             "created_at": asset.get('created_at'),
             "updated_at": asset.get('updated_at')
@@ -300,6 +322,11 @@ def get_single_asset(current_user, asset_id):
             "file_size_bytes": asset.get('file_size_bytes'),
             "generation_status": asset['generation_status'],
             "generation_error": asset.get('generation_error'),
+            "asset_layer": asset.get('asset_layer', 'surface'),
+            "width_m": asset.get('width_m', 1.0),
+            "depth_m": asset.get('depth_m', 1.0),
+            "height_m": asset.get('height_m', 1.0),
+            "brightness": asset.get('brightness', 1.0),
             "metadata": asset.get('metadata', {}),
             "created_at": asset.get('created_at'),
             "updated_at": asset.get('updated_at')
@@ -311,8 +338,8 @@ def get_single_asset(current_user, asset_id):
 @token_required
 def update_asset(current_user, asset_id):
     """
-    Update asset layer, width, depth, or height.
-    Expects JSON: { "asset_layer": "floor"|"surface"|"ceiling", "width_m": 1.5, "depth_m": 1.2, "height_m": 0.8 }
+    Update asset layer, width, depth, height, or brightness.
+    Expects JSON: { "asset_layer": "floor"|"surface"|"ceiling", "width_m": 1.5, "depth_m": 1.2, "height_m": 0.8, "brightness": 1.2 }
     """
     user_id = current_user['user_id']
     data = request.get_json() or {}
@@ -320,9 +347,10 @@ def update_asset(current_user, asset_id):
     width_m = data.get('width_m')
     depth_m = data.get('depth_m')
     height_m = data.get('height_m')
-    if layer is None and width_m is None and depth_m is None and height_m is None:
+    brightness = data.get('brightness')
+    if layer is None and width_m is None and depth_m is None and height_m is None and brightness is None:
         return jsonify({"status": "error", "error": "No update fields provided"}), 400
-    success = update_asset_properties(asset_id, user_id, asset_layer=layer, width_m=width_m, depth_m=depth_m, height_m=height_m)
+    success = update_asset_properties(asset_id, user_id, asset_layer=layer, width_m=width_m, depth_m=depth_m, height_m=height_m, brightness=brightness)
     if not success:
         return jsonify({"status": "error", "error": "Asset not found or update failed"}), 404
     return jsonify({"status": "success", "message": "Asset updated", "asset_id": asset_id}), 200

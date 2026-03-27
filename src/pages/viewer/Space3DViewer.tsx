@@ -295,6 +295,10 @@ const Space3DViewer = () => {
         const renderer = new THREE.WebGLRenderer({ antialias: true })
         renderer.setSize(window.innerWidth, window.innerHeight)
         renderer.setPixelRatio(window.devicePixelRatio)
+        // Keep the original darker viewer look.
+        renderer.outputEncoding = THREE.sRGBEncoding
+        renderer.toneMapping = THREE.ACESFilmicToneMapping
+        renderer.toneMappingExposure = 1.0
         containerRef.current!.appendChild(renderer.domElement)
         rendererRef.current = renderer
 
@@ -304,16 +308,15 @@ const Space3DViewer = () => {
         controls.dampingFactor = 0.05
         controlsRef.current = controls
 
-        // Lights
-        const ambientLight = new THREE.AmbientLight(0xfff3f3, 1.2)
+        // Original darker light rig.
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6)
         scene.add(ambientLight)
-        const dirLight = new THREE.DirectionalLight(0xfff6f0, 0.7)
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8)
         dirLight.position.set(10, 20, 15)
         scene.add(dirLight)
-        // Subtle red accent tint to match requested mood lighting.
-        const redAccentLight = new THREE.PointLight(0xff6a6a, 0.22, 80)
-        redAccentLight.position.set(-6, dimensions.height * 0.7, 6)
-        scene.add(redAccentLight)
+        const fillLight = new THREE.DirectionalLight(0xffffff, 0.3)
+        fillLight.position.set(-8, 8, -8)
+        scene.add(fillLight)
 
         // Calculate actual floor level (room box is centered, so floor is at -height/2)
         const floorY = -dimensions.height / 2
@@ -405,6 +408,17 @@ const Space3DViewer = () => {
         // If a server-generated GLB exists, try to load it first
         if (generatedGlb) {
           try {
+            // Ensure GLTFLoader is available (may not be loaded yet on this page)
+            if (!(window as any).THREE?.GLTFLoader) {
+              await new Promise<void>((resolve, reject) => {
+                const script = document.createElement('script')
+                script.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js'
+                script.onload = () => resolve()
+                script.onerror = () => reject(new Error('Failed to load GLTFLoader'))
+                document.head.appendChild(script)
+              })
+            }
+
             const gltfLoader = new THREE.GLTFLoader()
             await new Promise<void>((resolve, reject) => {
               gltfLoader.load(
@@ -737,39 +751,29 @@ const Space3DViewer = () => {
                       gltf.scene.position.y = -box.min.y
                     }
 
-                    // STEP 2: Uniform scale with type-aware sizing for better visual proportions.
+                    // STEP 2: True-to-size scaling. Use only the object's height (Y axis) to determine scale
+                    // so objects match the room's meter scale. User provides height in m/ft/in; we store meters.
                     const assetType = String(asset.type ?? asset.asset_type ?? '').toLowerCase()
                     const isRug = assetType === 'rug' || asset.file === 'rug.glb'
-                    const isVase = assetType === 'vase' || asset.file === 'blue_vase.glb'
-                    const isChandelier = assetType === 'chandelier' || asset.file === 'chandelier.glb'
                     const isFloorAsset = asset.layer === 'floor' || isRug
 
                     const targetWidth = Number(asset.width ?? asset.width_m ?? 0)
                     const targetDepth = Number(asset.depth ?? asset.depth_m ?? 0)
                     const targetHeight = Number(asset.height ?? asset.height_m ?? 0)
 
+                    const scaleFromHeight = size.y > 0 && targetHeight > 0 ? targetHeight / size.y : null
                     const scaleX = size.x > 0 && targetWidth > 0 ? targetWidth / size.x : null
-                    const scaleY = size.y > 0 && targetHeight > 0 ? targetHeight / size.y : null
                     const scaleZ = size.z > 0 && targetDepth > 0 ? targetDepth / size.z : null
 
                     let scale = 1
                     if (isFloorAsset && (scaleX != null || scaleZ != null)) {
-                      // Rugs should match floor footprint.
+                      // Floor assets (e.g. rugs): scale by footprint so they fit the room.
                       scale = Math.min(scaleX ?? Number.POSITIVE_INFINITY, scaleZ ?? Number.POSITIVE_INFINITY)
-                    } else if (scaleY != null) {
-                      scale = scaleY
-                    } else if (scaleX != null || scaleZ != null) {
-                      // Fallback when height is unavailable.
-                      const candidates = [scaleX, scaleZ].filter((v): v is number => v != null)
-                      scale = candidates.reduce((sum, v) => sum + v, 0) / candidates.length
+                    } else if (scaleFromHeight != null) {
+                      // All other objects: scale uniformly from height only (true to room size).
+                      scale = scaleFromHeight
                     }
-
-                    // Targeted boosts for assets currently rendering too small.
-                    let sizeBoost = onCeiling ? 1.4 : (isFloorAsset ? 1.2 : 1)
-                    if (isRug) sizeBoost *= 2.0
-                    if (isVase) sizeBoost *= 2.2
-                    if (isChandelier) sizeBoost *= 2.0
-                    scale *= sizeBoost
+                    // No size boosts — scale is true to the user-provided height and room dimensions.
                     gltf.scene.scale.set(scale, scale, scale)
 
                     // STEP 3: Center the model horizontally (X and Z only)
@@ -799,18 +803,33 @@ const Space3DViewer = () => {
                       if (Math.abs(verifyBox.min.y) > 0.001) gltf.scene.position.y -= verifyBox.min.y
                     }
 
-                    group.add(gltf.scene)
-                    group.updateMatrixWorld(true)
-                    const groupBox = new THREE.Box3().setFromObject(group)
-                    if (onCeiling) {
-                      if (Math.abs(groupBox.max.y - worldY) > 0.001) {
-                        gltf.scene.position.y += worldY - groupBox.max.y
-                      }
-                    } else {
-                      if (Math.abs(groupBox.min.y - worldY) > 0.001) {
-                        gltf.scene.position.y += worldY - groupBox.min.y
-                      }
+                    // Apply per-asset brightness (clone materials so we don't affect other instances)
+                    const assetBrightness = Number(asset.brightness ?? 1)
+                    if (Math.abs(assetBrightness - 1) > 0.01) {
+                      gltf.scene.traverse((child: any) => {
+                        if (child.isMesh && child.material) {
+                          const mats = Array.isArray(child.material) ? child.material : [child.material]
+                          const cloned = mats.map((m: any) => {
+                            const clone = m.clone()
+                            if (clone.color) clone.color.multiplyScalar(assetBrightness)
+                            return clone
+                          })
+                          child.material = cloned.length === 1 ? cloned[0] : cloned
+                        }
+                      })
                     }
+
+                    group.add(gltf.scene)
+                    // Final world-space snap: force exact contact with floor/ceiling anchor.
+                    // This prevents tiny floating gaps caused by accumulated local transforms.
+                    group.updateMatrixWorld(true)
+                    let groupBox = new THREE.Box3().setFromObject(group)
+                    let anchorY = onCeiling ? groupBox.max.y : groupBox.min.y
+                    group.position.y += worldY - anchorY
+                    group.updateMatrixWorld(true)
+                    groupBox = new THREE.Box3().setFromObject(group)
+                    anchorY = onCeiling ? groupBox.max.y : groupBox.min.y
+                    group.position.y += worldY - anchorY
                     scene.add(group)
                     assetsRef.current.push(group)
                     if (layoutDataRef.current) {
@@ -848,12 +867,12 @@ const Space3DViewer = () => {
                   })
                 })
               
-              // Plane technique: same X/Z from 2D grid; Y = floor or ceiling. Floor assets slightly above floor plane so they sit on top (no z-fight).
-              const FLOOR_ASSET_OFFSET = 0.005
+              // Plane technique: same X/Z from 2D grid; Y snapped to floor/ceiling contact planes.
+              const FLOOR_ASSET_OFFSET = 0.0
               const getRootWorldPosition = (a: any) => {
                 const centerX2D = a.x + (a.width / 2)
                 const centerY2D = a.y + (a.depth / 2)
-                const worldY = isCeilingAsset(a) ? ceilingY : floorY + FLOOR_ASSET_OFFSET
+                const worldY = isCeilingAsset(a) ? (ceilingY - 0.002) : floorY + FLOOR_ASSET_OFFSET
                 return {
                   worldX: centerX2D - (layoutW / 2),
                   worldY,
@@ -872,7 +891,7 @@ const Space3DViewer = () => {
                 const ox = asset.offsetX ?? asset.offset_x ?? 0
                 const oy = asset.offsetY ?? asset.offset_y ?? 0
                 const worldX = surface ? surface.centerX + ox : (asset.x + asset.width / 2) - layoutW / 2
-                const worldY = surface ? surface.topY : (isCeilingAsset(asset) ? ceilingY : floorY + FLOOR_ASSET_OFFSET)
+                const worldY = surface ? surface.topY : (isCeilingAsset(asset) ? (ceilingY - 0.002) : floorY + FLOOR_ASSET_OFFSET)
                 const worldZ = surface ? surface.centerZ + oy : (asset.y + asset.depth / 2) - layoutD / 2
                 await loadOneAsset(asset, worldX, worldY, worldZ, false, isCeilingAsset(asset), parentId).catch(() => {})
               }
@@ -987,7 +1006,7 @@ const Space3DViewer = () => {
     const ch = dimensions.height
     const floorY = -ch / 2
     const ceilingY = ch / 2
-    const FLOOR_ASSET_OFFSET = 0.005
+    const FLOOR_ASSET_OFFSET = 0.0
 
     // Update camera position
     cameraRef.current.position.set(0, ch / 2, cd + 5)
@@ -1117,7 +1136,7 @@ const Space3DViewer = () => {
           const normZ = ld > 0 ? (asset.y + (asset.depth || 0) / 2) / ld : 0.5
           worldX = normX * cw - cw / 2
           worldZ = normZ * cd - cd / 2
-          worldY = onCeiling ? ceilingY : floorY + FLOOR_ASSET_OFFSET
+          worldY = onCeiling ? (ceilingY - 0.002) : floorY + FLOOR_ASSET_OFFSET
         } else {
           const parentId = String(asset.parentAssetId ?? asset.parent_asset_id ?? '')
           const surface = parentSurfaceByAssetId[parentId]
@@ -1132,7 +1151,7 @@ const Space3DViewer = () => {
             const normZ = ld > 0 ? (asset.y + (asset.depth || 0) / 2) / ld : 0.5
             worldX = normX * cw - cw / 2
             worldZ = normZ * cd - cd / 2
-            worldY = onCeiling ? ceilingY : floorY + FLOOR_ASSET_OFFSET
+            worldY = onCeiling ? (ceilingY - 0.002) : floorY + FLOOR_ASSET_OFFSET
           }
         }
 

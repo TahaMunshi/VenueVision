@@ -11,6 +11,12 @@ DEFAULT_WALLS = [
     {"id": "wall_south", "name": "South Wall", "direction": "South", "length": 20, "height": 8, "type": "straight"},
     {"id": "wall_west", "name": "West Wall", "direction": "West", "length": 20, "height": 8, "type": "straight"}
 ]
+WALL_ORDER = {
+    "wall_north": 0,
+    "wall_east": 1,
+    "wall_south": 2,
+    "wall_west": 3,
+}
 
 
 def _load_layout(venue_id: str) -> Optional[Dict]:
@@ -48,7 +54,7 @@ def _get_walls_metadata(venue_id: str) -> List[Dict]:
                 "height": wall.get("height"),
                 "type": wall.get("type"),
             })
-        return walls
+        return sorted(walls, key=lambda w: WALL_ORDER.get(w.get("id"), 999))
     return DEFAULT_WALLS
 
 

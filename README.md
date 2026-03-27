@@ -20,16 +20,18 @@ A multi-user 3D event space visualization tool that allows you to capture venue 
 **Prerequisites**: Docker Desktop installed and running
 
 ```bash
-# One command to start everything!
+# One command to start everything
 docker-compose up --build
 
-# Or use the startup script
-# Windows: double-click start-docker.bat
-# Linux/Mac: ./start-docker.sh
+# Or use the startup script (Windows: start-docker.bat | Linux/Mac: ./start-docker.sh)
 ```
 
 Then open: **http://localhost:5000/mobile**  
 Login: **demo** / **demo123**
+
+**If you get "failed to copy" or EOF when pulling images:**  
+Docker Hub’s CDN can drop connections on some networks. Add a registry mirror:  
+**Docker Desktop** → **Settings** → **Docker Engine** → add `"registry-mirrors": ["https://mirror.gcr.io"]` to the JSON → **Apply & restart**, then run `docker-compose up --build` again.
 
 📚 See [DOCKER_GUIDE.md](DOCKER_GUIDE.md) for more Docker commands
 

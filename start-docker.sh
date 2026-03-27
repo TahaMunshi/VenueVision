@@ -35,17 +35,8 @@ echo "[OK] docker-compose is available"
 echo ""
 
 echo "Starting VenueVision..."
+echo "This may take a few minutes on first run..."
 echo ""
-echo "This will:"
-echo "  1. Build the application (first time only)"
-echo "  2. Start PostgreSQL database"
-echo "  3. Set up database schema and demo user"
-echo "  4. Start the Flask server"
-echo ""
-echo "Please wait, this may take a few minutes on first run..."
-echo ""
-
-# Start docker-compose
 docker-compose up --build
 
 # Cleanup message

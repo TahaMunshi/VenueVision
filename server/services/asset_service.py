@@ -211,6 +211,7 @@ def get_user_assets(user_id: int, include_failed: bool = False) -> List[Dict]:
                        COALESCE(width_m, 1.0) as width_m,
                        COALESCE(depth_m, 1.0) as depth_m,
                        COALESCE(height_m, 1.0) as height_m,
+                       COALESCE(brightness, 1.0) as brightness,
                        metadata, created_at, updated_at
                 FROM user_assets
                 WHERE user_id = %s
@@ -224,6 +225,7 @@ def get_user_assets(user_id: int, include_failed: bool = False) -> List[Dict]:
                        COALESCE(width_m, 1.0) as width_m,
                        COALESCE(depth_m, 1.0) as depth_m,
                        COALESCE(height_m, 1.0) as height_m,
+                       COALESCE(brightness, 1.0) as brightness,
                        metadata, created_at, updated_at
                 FROM user_assets
                 WHERE user_id = %s AND generation_status = 'completed'
@@ -270,6 +272,11 @@ def get_asset_by_id(asset_id: int) -> Optional[Dict]:
             """
             SELECT asset_id, user_id, asset_name, file_path, source_image_path,
                    thumbnail_url, file_size_bytes, generation_status, generation_error,
+                   COALESCE(asset_layer, 'surface') as asset_layer,
+                   COALESCE(width_m, 1.0) as width_m,
+                   COALESCE(depth_m, 1.0) as depth_m,
+                   COALESCE(height_m, 1.0) as height_m,
+                   COALESCE(brightness, 1.0) as brightness,
                    metadata, created_at, updated_at
             FROM user_assets
             WHERE asset_id = %s
@@ -302,10 +309,11 @@ def update_asset_properties(
     asset_layer: Optional[str] = None,
     width_m: Optional[float] = None,
     depth_m: Optional[float] = None,
-    height_m: Optional[float] = None
+    height_m: Optional[float] = None,
+    brightness: Optional[float] = None
 ) -> bool:
     """
-    Update asset layer and dimensions (verifies ownership).
+    Update asset layer, dimensions, or brightness (verifies ownership).
     
     Returns:
         True if updated, False otherwise
@@ -327,6 +335,9 @@ def update_asset_properties(
         if height_m is not None:
             updates.append("height_m = %s")
             params.append(height_m)
+        if brightness is not None:
+            updates.append("brightness = %s")
+            params.append(max(0.1, min(3.0, float(brightness))))
         if not updates:
             return True
         params.extend([asset_id, user_id])

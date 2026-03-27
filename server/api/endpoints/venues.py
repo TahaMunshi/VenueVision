@@ -147,7 +147,7 @@ def create_venue(current_user):
         
         logger.info(f"Venue created: {venue_identifier} (ID: {venue_id}) by user {current_user['username']}")
         
-        # Create default 4 walls (north, south, east, west)
+        # Create default 4 walls (clockwise: north, east, south, west)
         default_walls = [
             {
                 'id': 'wall_north',
@@ -157,17 +157,17 @@ def create_venue(current_user):
                 'height': height
             },
             {
-                'id': 'wall_south',
-                'name': 'South Wall',
-                'coordinates': [0, 100, 100, 100],  # Bottom of floor plan
-                'length': width,
-                'height': height
-            },
-            {
                 'id': 'wall_east',
                 'name': 'East Wall',
                 'coordinates': [100, 10, 100, 100],  # Right side
                 'length': depth,
+                'height': height
+            },
+            {
+                'id': 'wall_south',
+                'name': 'South Wall',
+                'coordinates': [0, 100, 100, 100],  # Bottom of floor plan
+                'length': width,
                 'height': height
             },
             {
