@@ -516,8 +516,11 @@
   transform: translateX(-50%);
   z-index: 10;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 8px;
+  max-width: min(96vw, 420px);
 }
 
 /* Portrait phone: sit above the captured-walls strip */
@@ -564,6 +567,38 @@
   .review-wall-empty {
     height: 64px;
   }
+}
+
+.gallery-upload-button {
+  padding: 10px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.gallery-upload-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.gallery-upload-button:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+.capture-gallery-hint {
+  margin: 0;
+  padding: 0 8px;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.88);
+  text-align: center;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
 }
 
 .shutter-button {

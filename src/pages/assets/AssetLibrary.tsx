@@ -181,13 +181,31 @@ const AssetLibrary = () => {
 
   const VIEW_LABELS = ['Front (required)', 'Right', 'Back', 'Left']
 
+  const isAllowedImageFile = (file: File) => {
+    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
+    if (file.size > 10 * 1024 * 1024) return false
+    if (validTypes.includes(file.type)) return true
+    // Some browsers (esp. Windows) leave type empty; fall back to extension
+    if (file.type === '' && /\.(jpe?g|png|webp)$/i.test(file.name)) return true
+    return false
+  }
+
+  const closeUploadModal = () => {
+    setShowUploadModal(false)
+    setSelectedFiles([])
+    setSelectedFile(null)
+    setPreviewUrls([])
+    setError(null)
+    setUploadProgress('')
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files ? Array.from(e.target.files) : []
     if (files.length === 0) return
-    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
     const valid: File[] = []
     for (const file of files) {
-      if (!validTypes.includes(file.type) || file.size > 10 * 1024 * 1024) continue
+      if (!isAllowedImageFile(file)) continue
       valid.push(file)
     }
     if (valid.length === 0) {
@@ -214,9 +232,23 @@ const AssetLibrary = () => {
   }
 
   const handleGenerateAsset = async () => {
-    const filesToSend = selectedFiles.length > 0 ? selectedFiles : (selectedFile ? [selectedFile] : [])
+    // Prefer the live file input so we always send blobs from the current mount.
+    // Stale React state can still show previews (data URLs) after the modal unmounted
+    // while File objects no longer upload — which triggers "No image file(s) provided" on the server.
+    const input = fileInputRef.current
+    let filesToSend: File[] = []
+    if (input?.files && input.files.length > 0) {
+      filesToSend = Array.from(input.files).filter(isAllowedImageFile)
+    }
+    if (filesToSend.length === 0) {
+      filesToSend = selectedFiles.length > 0 ? selectedFiles : selectedFile ? [selectedFile] : []
+    }
     if (filesToSend.length === 0) {
       setError('Please select at least one image')
+      return
+    }
+    if (!filesToSend.every((f) => f.size > 0)) {
+      setError('Could not read image data. Please choose your photos again.')
       return
     }
 
@@ -713,12 +745,12 @@ const AssetLibrary = () => {
 
         {/* Upload Modal */}
         {showUploadModal && (
-          <div className="modal-overlay" onClick={() => !uploading && setShowUploadModal(false)}>
+          <div className="modal-overlay" onClick={() => !uploading && closeUploadModal()}>
             <div className="upload-modal" onClick={e => e.stopPropagation()}>
               <div className="modal-header">
                 <h2>Create 3D Asset from Photo</h2>
                 {!uploading && (
-                  <button className="close-button" onClick={() => setShowUploadModal(false)}>×</button>
+                  <button className="close-button" onClick={closeUploadModal}>×</button>
                 )}
               </div>
 
@@ -830,7 +862,7 @@ const AssetLibrary = () => {
               <div className="modal-footer">
                 <button 
                   className="cancel-button" 
-                  onClick={() => setShowUploadModal(false)}
+                  onClick={closeUploadModal}
                   disabled={uploading}
                 >
                   Cancel

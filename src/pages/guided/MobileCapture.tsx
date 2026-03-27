@@ -146,8 +146,35 @@ const MobileCapture = () => {
   // All refs must be declared at the top level
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const wallSetRef = useRef<string | null>(null)
+  const galleryInputRef = useRef<HTMLInputElement>(null)
 
   const targetVenue = useMemo(() => venueId ?? 'venue-unknown', [venueId])
+
+  /** Same endpoint as live camera capture; order of uploads = seq_01, seq_02, … (left → right). */
+  const uploadWallPhotoBlob = useCallback(
+    async (blob: Blob, filename: string, wallId: string) => {
+      const formData = new FormData()
+      formData.append('file', blob, filename)
+      formData.append('venue_id', targetVenue)
+      formData.append('wall_id', wallId)
+      const currentApiUrl = getApiBaseUrl()
+      const uploadUrl = `${currentApiUrl}/api/v1/capture/upload`
+      const response = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: formData,
+      })
+      let payload: any = {}
+      try {
+        const responseText = await response.text()
+        if (responseText) payload = JSON.parse(responseText)
+      } catch {
+        payload = { error: 'Invalid server response' }
+      }
+      return { ok: response.ok, payload }
+    },
+    [targetVenue]
+  )
 
   /** QR + “open on phone” is for desktop; hide on phones/small tablets to reduce clutter. */
   const [showDesktopHandoff, setShowDesktopHandoff] = useState(() =>
@@ -254,14 +281,16 @@ const MobileCapture = () => {
         if ('coordinates' in wall && Array.isArray((wall as any).coordinates)) {
           return wall as WallSegment
         }
-        // Default coordinates for 4 walls (North, East, South, West)
+        // Default coordinates for 4 walls (North, East, South, West); keep length/height from API
         const defaultCoords: [number, number, number, number][] = [
           [10, 10, 90, 10], // North
           [90, 10, 90, 90], // East
           [90, 90, 10, 90], // South
           [10, 90, 10, 10], // West
         ]
+        const w = wall as WallSegment & { height?: number }
         return {
+          ...w,
           id: wall.id,
           name: wall.name,
           coordinates: defaultCoords[index % 4] || [10, 10, 90, 10]
@@ -551,38 +580,13 @@ const MobileCapture = () => {
         throw new Error('Unable to capture photo. Please try again.')
       }
 
-      const formData = new FormData()
-      const filename = `capture-${Date.now()}.jpg`
-      formData.append('file', blob, filename)
-      formData.append('venue_id', targetVenue)
-      formData.append('wall_id', activeWallId)
+      const { ok, payload } = await uploadWallPhotoBlob(blob, `capture-${Date.now()}.jpg`, activeWallId)
 
-      // Re-detect API URL at runtime
-      const currentApiUrl = getApiBaseUrl()
-      const uploadUrl = `${currentApiUrl}/api/v1/capture/upload`
-
-      const response = await fetch(uploadUrl, {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: formData
-        // Don't set Content-Type header - browser will set it with boundary for FormData
-      })
-
-      let payload: any = {}
-      try {
-        const responseText = await response.text()
-        if (responseText) {
-          payload = JSON.parse(responseText)
-        }
-      } catch (parseError) {
-        console.error('[MobileCapture] Failed to parse response:', parseError)
-        payload = { error: 'Invalid server response' }
-      }
-
-      if (!response.ok) {
-        const errorMsg = (payload && typeof payload === 'object' && 'error' in payload) 
-          ? payload.error 
-          : `Server error: ${response.status}`
+      if (!ok) {
+        const errorMsg =
+          payload && typeof payload === 'object' && 'error' in payload
+            ? String((payload as { error: unknown }).error)
+            : 'Upload failed'
         console.error('[MobileCapture] Upload failed:', errorMsg)
         setAlertMessage(errorMsg)
         return
@@ -605,12 +609,8 @@ const MobileCapture = () => {
       setShowCheck(true)
       setTimeout(() => setShowCheck(false), 1200)
 
-      // Clear retaking flag since new capture was made
       setRetakingWallId(null)
-
-      // Refresh progress to update completed walls list
       await fetchProgress()
-      // DO NOT refetch wall images - the image will be loaded naturally when progress updates
     } catch (error) {
       console.error('[MobileCapture] Capture error:', error)
       if (error instanceof TypeError && error.message.includes('fetch')) {
@@ -618,6 +618,101 @@ const MobileCapture = () => {
       } else {
         setAlertMessage(`Unexpected error: ${error instanceof Error ? error.message : 'Unknown error'}. Please retry.`)
       }
+    } finally {
+      setIsUploading(false)
+    }
+  }
+
+  const handleGalleryFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Snapshot files BEFORE clearing the input. FileList is live — clearing `value` empties it in
+    // Chrome/Safari, so Array.from(files) after reset would be empty and uploads would silently no-op.
+    const rawFiles = e.target.files ? Array.from(e.target.files) : []
+    e.target.value = ''
+    if (rawFiles.length === 0) return
+
+    const activeWallId = currentWall?.id
+    if (!activeWallId) {
+      setAlertMessage('No target wall assigned yet. Please wait for guidance to load.')
+      return
+    }
+
+    const req = progress?.capture_requirements?.[activeWallId]
+    const required = req?.required_segments ?? 1
+    const captured = req?.captured_segments ?? 0
+    const remaining = Math.max(0, required - captured)
+
+    if (remaining === 0) {
+      setToast({ message: 'This wall already has enough photos.', type: 'success' })
+      return
+    }
+
+    const picked = rawFiles.filter((f) => {
+      const okType = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(f.type)
+      const extOk = f.type === '' && /\.(jpe?g|png|webp)$/i.test(f.name)
+      return (okType || extOk) && f.size > 0 && f.size <= 10 * 1024 * 1024
+    })
+
+    if (picked.length === 0) {
+      setAlertMessage('Please choose JPG, PNG, or WebP images under 10MB each.')
+      return
+    }
+
+    const toUpload = picked.slice(0, remaining)
+    if (picked.length > remaining) {
+      setToast({
+        message: `Using the first ${remaining} photo(s) in file order (left → right along the wall).`,
+        type: 'success',
+      })
+    }
+
+    setIsUploading(true)
+    setAlertMessage(null)
+
+    try {
+      let lastPayload: Record<string, unknown> | null = null
+      for (const file of toUpload) {
+        const { ok, payload } = await uploadWallPhotoBlob(file, file.name || `upload-${Date.now()}.jpg`, activeWallId)
+        if (!ok) {
+          const errorMsg =
+            payload && typeof payload === 'object' && 'error' in payload
+              ? String((payload as { error: unknown }).error)
+              : 'Upload failed'
+          setAlertMessage(errorMsg)
+          break
+        }
+
+        lastPayload = payload as Record<string, unknown>
+        const wallComplete = Boolean(payload?.wall_capture_complete)
+        await fetchProgress()
+
+        if (wallComplete && activeWallId) {
+          setToast({ message: 'All photos uploaded! Stitch & review.', type: 'success' })
+          setShowCheck(true)
+          setTimeout(() => setShowCheck(false), 1200)
+          setRetakingWallId(null)
+          navigate(`/review/${venueId}/${activeWallId}`)
+          return
+        }
+      }
+
+      if (lastPayload) {
+        const cap = Number(lastPayload.captured_segments ?? 0)
+        const reqN = Number(lastPayload.required_segments ?? 1)
+        if (reqN > 1 && cap < reqN) {
+          setToast({
+            message: `Uploaded ${cap}/${reqN} for this wall. Add more (left→right order) or use the camera.`,
+            type: 'success',
+          })
+        } else {
+          setToast({ message: 'Photos uploaded. Continue when ready.', type: 'success' })
+        }
+        setShowCheck(true)
+        setTimeout(() => setShowCheck(false), 1200)
+      }
+      setRetakingWallId(null)
+    } catch (err) {
+      console.error('[MobileCapture] Gallery upload error:', err)
+      setAlertMessage('Upload failed. Please try again.')
     } finally {
       setIsUploading(false)
     }
@@ -729,6 +824,12 @@ const MobileCapture = () => {
 
   const reviewDone = progress?.completed_walls.length ?? 0
   const reviewTotal = progress?.total_walls ?? progress?.walls?.length ?? 0
+
+  const segmentsRemaining = Math.max(0, currentRequiredSegments - currentCapturedSegments)
+  const wallLengthM =
+    currentWall && typeof currentWall.length === 'number' && currentWall.length > 0
+      ? currentWall.length
+      : null
 
   return (
     <div className="capture-container" style={{ width: '100vw', height: '100vh', position: 'fixed', top: 0, left: 0 }}>
@@ -1199,15 +1300,45 @@ const MobileCapture = () => {
         </div>
       </div>
 
-      {/* Floating Shutter Button */}
+      {/* Shutter + optional gallery upload (same API as camera; order = left→right → seq_01, seq_02, …) */}
       <div className="shutter-button-container">
         <button
           className="shutter-button"
           onClick={handleCapture}
           disabled={isUploading || !!cameraError || !currentWall}
+          aria-label="Capture photo"
         >
           {isUploading ? <span className="loader" /> : ''}
         </button>
+        <input
+          ref={galleryInputRef}
+          type="file"
+          accept="image/jpeg,image/jpg,image/png,image/webp"
+          multiple
+          style={{ display: 'none' }}
+          onChange={handleGalleryFiles}
+        />
+        <button
+          type="button"
+          className="gallery-upload-button"
+          onClick={() => galleryInputRef.current?.click()}
+          disabled={isUploading || !currentWall || !!progress?.is_complete}
+        >
+          Upload photos
+        </button>
+        {!progress?.is_complete && currentWall && segmentsRemaining > 0 ? (
+          <p className="capture-gallery-hint">
+            {currentRequiredSegments > 1 ? (
+              <>
+                This wall needs <strong>{currentRequiredSegments}</strong> segment photos (~1 per 10 m
+                {wallLengthM != null ? `; wall ≈ ${wallLengthM} m` : ''}). Select up to{' '}
+                <strong>{segmentsRemaining}</strong> image(s) in order: <strong>left → right</strong>.
+              </>
+            ) : (
+              <>Select <strong>1</strong> image for this wall, or use the shutter.</>
+            )}
+          </p>
+        ) : null}
       </div>
 
       <canvas ref={canvasRef} className="hidden-canvas" />
