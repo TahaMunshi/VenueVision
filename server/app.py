@@ -3,6 +3,12 @@ from flask_cors import CORS
 import sys
 import os
 
+from dotenv import load_dotenv
+
+# Project root .env (so TRIPO_API_KEY etc. apply when running `python server/app.py` locally)
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(_project_root, ".env"))
+
 # Add the server directory to the path to allow imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
