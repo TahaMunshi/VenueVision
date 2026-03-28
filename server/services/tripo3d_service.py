@@ -1,6 +1,6 @@
 """
 Tripo3D API service: upload images to Tripo STS, then create image_to_model or multiview_to_model task.
-Uses native API only (no public URLs, ngrok, or TempFile). API key: TRIPO_API_KEY (tsk_...) from https://www.tripo3d.ai
+Uses native API only (no public URLs, ngrok, or TempFile). API key: TRIPO_API_KEY from https://www.tripo3d.ai (Tripo issues tsk_ or tcli_ prefixes).
 """
 
 import io
@@ -32,7 +32,12 @@ OUR_VIEW_ORDER = ["front", "right", "back", "left"]
 
 def _get_api_key() -> Optional[str]:
     key = os.getenv("TRIPO_API_KEY", "").strip()
-    return key if key and key.startswith("tsk_") else None
+    if not key:
+        return None
+    # Tripo dashboard keys may be tsk_* (legacy docs) or tcli_* (current clients).
+    if key.startswith(("tsk_", "tcli_")):
+        return key
+    return None
 
 
 TRIPO_MAX_IMAGE_DIM = 1024
