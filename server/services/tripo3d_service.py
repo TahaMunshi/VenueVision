@@ -22,7 +22,15 @@ TRIPO_API_BASE = "https://api.tripo3d.ai/v2/openapi"
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 MAX_IMAGE_SIZE_MB = 10
 POLL_INTERVAL_SEC = 4
-POLL_TIMEOUT_SEC = 300  # 5 min
+POLL_TIMEOUT_SEC = 300  # 5 min overall wait for task completion
+
+# Tripo sometimes takes >15s to respond on GET /task/{id} under load; a short read timeout
+# caused false failures after credits were already charged (task created successfully).
+TRIPO_STS_TIMEOUT = (20, 120)  # STS can be as slow as task endpoints under load
+TRIPO_TASK_POST_TIMEOUT = (20, 120)
+TRIPO_POLL_GET_TIMEOUT = (20, 120)  # status polls — allow slow JSON responses
+TRIPO_DOWNLOAD_TIMEOUT = (20, 180)
+STS_TOKEN_MAX_ATTEMPTS = 3
 
 # Tripo multiview expects exactly: Front, Left, Back, Right (in that order).
 TRIPO_VIEW_ORDER = ["front", "left", "back", "right"]
@@ -68,35 +76,73 @@ def _resize_for_tripo(file_bytes: bytes, filename: str) -> bytes:
         return file_bytes
 
 
-def _get_sts_token(api_key: str, format: str = "jpeg") -> Optional[Dict]:
-    """Step 1: Get temporary S3 credentials from Tripo. Doc: POST .../upload/sts/token with format."""
-    try:
-        r = requests.post(
-            f"{TRIPO_API_BASE}/upload/sts/token",
-            json={"format": format},
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
-            timeout=30,
-        )
-        if r.status_code != 200:
-            logger.warning("Tripo STS token HTTP %s: %s", r.status_code, (r.text or "")[:200])
-            return None
-        data = r.json()
-        if data.get("code") != 0:
-            return None
-        payload = data.get("data") or {}
-        if not all(k in payload for k in ("resource_bucket", "resource_uri", "session_token", "sts_ak", "sts_sk")):
-            logger.warning("Tripo STS token missing fields: %s", list(payload.keys()))
-            return None
-        return payload
-    except Exception as e:
-        logger.warning("Tripo STS token failed: %s", e)
-        return None
+def _get_sts_token(api_key: str, format: str = "jpeg") -> Tuple[Optional[Dict], str]:
+    """Step 1: Get temporary S3 credentials from Tripo. Returns (payload, error_message)."""
+    last_err = ""
+    for attempt in range(STS_TOKEN_MAX_ATTEMPTS):
+        try:
+            r = requests.post(
+                f"{TRIPO_API_BASE}/upload/sts/token",
+                json={"format": format},
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                },
+                timeout=TRIPO_STS_TIMEOUT,
+            )
+            if r.status_code != 200:
+                snippet = (r.text or "")[:300]
+                logger.warning("Tripo STS token HTTP %s: %s", r.status_code, snippet)
+                try:
+                    body = r.json()
+                    msg = body.get("message") or body.get("error") or body.get("suggestion") or snippet
+                except Exception:
+                    msg = snippet or f"HTTP {r.status_code}"
+                return None, f"Tripo upload token request failed: {msg}"
+
+            data = r.json()
+            if data.get("code") != 0:
+                msg = data.get("message") or data.get("error") or str(data)[:200]
+                logger.warning("Tripo STS token business code: %s", data)
+                return None, f"Tripo upload token rejected: {msg}"
+
+            payload = data.get("data") or {}
+            required = ("resource_bucket", "resource_uri", "session_token", "sts_ak", "sts_sk")
+            if not all(k in payload for k in required):
+                logger.warning("Tripo STS token missing fields: %s", list(payload.keys()))
+                return None, "Tripo upload token response was incomplete. Try again or check Tripo status."
+
+            return payload, ""
+
+        except requests.exceptions.Timeout as e:
+            last_err = str(e)
+            logger.warning(
+                "Tripo STS token timeout (attempt %s/%s): %s",
+                attempt + 1,
+                STS_TOKEN_MAX_ATTEMPTS,
+                e,
+            )
+            if attempt + 1 < STS_TOKEN_MAX_ATTEMPTS:
+                time.sleep(2 * (attempt + 1))
+
+        except requests.exceptions.RequestException as e:
+            last_err = str(e)
+            logger.warning("Tripo STS token request error: %s", e)
+            break
+
+        except Exception as e:
+            last_err = str(e)
+            logger.warning("Tripo STS token failed: %s", e)
+            break
+
+    hint = (
+        " Tripo's servers may be slow; wait a minute and retry, or rebuild the app image "
+        "so longer timeouts apply."
+    )
+    return None, (last_err or "Tripo upload token failed") + hint
 
 
-def _upload_to_s3(sts: Dict, body: bytes, content_type: str = "image/jpeg") -> bool:
+def _upload_to_s3(sts: Dict, body: bytes, content_type: str = "image/jpeg") -> Tuple[bool, str]:
     """Step 2: Upload file to Tripo's S3 bucket using temporary credentials."""
     try:
         import boto3
@@ -113,24 +159,28 @@ def _upload_to_s3(sts: Dict, body: bytes, content_type: str = "image/jpeg") -> b
             Body=body,
             ContentType=content_type,
         )
-        return True
+        return True, ""
     except Exception as e:
         logger.warning("Tripo S3 upload failed: %s", e)
-        return False
+        return False, f"S3 upload failed: {e}"
 
 
-def _upload_to_tripo_sts(api_key: str, file_bytes: bytes, filename: str) -> Optional[Dict]:
+def _upload_to_tripo_sts(api_key: str, file_bytes: bytes, filename: str) -> Tuple[Optional[Dict], str]:
     """
     Upload image per Tripo docs: (1) get STS token, (2) upload to S3.
-    Returns {"bucket": str, "key": str} for use in task as file.object (STS format).
+    Returns ({"bucket", "key"}, "") on success, or (None, reason).
     """
     jpeg_bytes = _resize_for_tripo(file_bytes, filename)
-    sts = _get_sts_token(api_key, "jpeg")
+    sts, sts_err = _get_sts_token(api_key, "jpeg")
     if not sts:
-        return None
-    if not _upload_to_s3(sts, jpeg_bytes):
-        return None
-    return {"bucket": sts["resource_bucket"], "key": sts["resource_uri"]}
+        return None, sts_err or "Could not get Tripo upload credentials."
+    ok, s3_err = _upload_to_s3(sts, jpeg_bytes)
+    if not ok:
+        return None, s3_err
+    return (
+        {"bucket": sts["resource_bucket"], "key": sts["resource_uri"]},
+        "",
+    )
 
 
 def validate_image(file_bytes: bytes, filename: str) -> Tuple[bool, str]:
@@ -178,9 +228,12 @@ def multiview_to_3d(
         if i >= len(OUR_VIEW_ORDER):
             break
         view = OUR_VIEW_ORDER[i]
-        obj = _upload_to_tripo_sts(api_key, data, name or f"{view}.jpg")
+        obj, up_err = _upload_to_tripo_sts(api_key, data, name or f"{view}.jpg")
         if not obj:
-            return {"success": False, "error": f"Failed to upload image {i + 1} to Tripo. Check logs."}
+            return {
+                "success": False,
+                "error": f"Failed to upload image {i + 1} ({view}) to Tripo: {up_err}",
+            }
         tokens_by_view[view] = obj
 
     # 2) Build task payload. API requires exact structure: use "object" (bucket + key) for STS; files = exactly 4 items [front, left, back, right].
@@ -211,7 +264,7 @@ def multiview_to_3d(
             f"{TRIPO_API_BASE}/task",
             json=task_payload,
             headers=headers,
-            timeout=60,
+            timeout=TRIPO_TASK_POST_TIMEOUT,
         )
         if r.status_code >= 400:
             try:
@@ -235,8 +288,28 @@ def multiview_to_3d(
         started = time.time()
         model_url = None
         while time.time() - started < POLL_TIMEOUT_SEC:
-            status_r = requests.get(f"{TRIPO_API_BASE}/task/{task_id}", headers=headers, timeout=15)
-            status_r.raise_for_status()
+            # Retry a few times on read timeout — Tripo can be slow; job may still be running.
+            status_r = None
+            for attempt in range(4):
+                try:
+                    status_r = requests.get(
+                        f"{TRIPO_API_BASE}/task/{task_id}",
+                        headers=headers,
+                        timeout=TRIPO_POLL_GET_TIMEOUT,
+                    )
+                    status_r.raise_for_status()
+                    break
+                except requests.exceptions.Timeout:
+                    if attempt == 3:
+                        raise
+                    logger.warning(
+                        "Tripo task %s status poll timeout (attempt %s/4), retrying",
+                        task_id,
+                        attempt + 1,
+                    )
+                    time.sleep(POLL_INTERVAL_SEC)
+            if status_r is None:
+                raise requests.exceptions.RequestException("Tripo status poll failed")
             status_data = status_r.json()
             info = status_data.get("data") or status_data
             status = (info.get("status") or "").lower()
@@ -271,7 +344,7 @@ def multiview_to_3d(
             return {"success": False, "error": "Tripo3D task timed out"}
 
         # 4) Download GLB and save
-        glb_resp = requests.get(model_url, timeout=60)
+        glb_resp = requests.get(model_url, timeout=TRIPO_DOWNLOAD_TIMEOUT)
         glb_resp.raise_for_status()
         glb_bytes = glb_resp.content
 

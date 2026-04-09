@@ -10,9 +10,9 @@ interface CreateVenueModalProps {
 const CreateVenueModal = ({ onClose, onSuccess }: CreateVenueModalProps) => {
   const [formData, setFormData] = useState({
     venueName: '',
-    width: 20,
-    height: 8,
-    depth: 20
+    width: 40,
+    height: 9,
+    depth: 40
   })
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -40,18 +40,18 @@ const CreateVenueModal = ({ onClose, onSuccess }: CreateVenueModalProps) => {
       return
     }
 
-    if (formData.width < 5 || formData.width > 100) {
-      setError('Width must be between 5 and 100 meters')
+    if (formData.width < 5 || formData.width > 330) {
+      setError('Width must be between 5 and 330 feet')
       return
     }
 
-    if (formData.height < 2 || formData.height > 20) {
-      setError('Height must be between 2 and 20 meters')
+    if (formData.height < 6 || formData.height > 40) {
+      setError('Height must be between 6 and 40 feet')
       return
     }
 
-    if (formData.depth < 5 || formData.depth > 100) {
-      setError('Depth must be between 5 and 100 meters')
+    if (formData.depth < 5 || formData.depth > 330) {
+      setError('Depth must be between 5 and 330 feet')
       return
     }
 
@@ -121,56 +121,56 @@ const CreateVenueModal = ({ onClose, onSuccess }: CreateVenueModalProps) => {
 
           <div className="modal-form-group">
             <label htmlFor="width" className="modal-form-label">
-              Width (meters)
+              Width (feet)
             </label>
             <input
               id="width"
               type="number"
               className="modal-form-input"
               value={formData.width}
-              onChange={(e) => setFormData({ ...formData, width: parseFloat(e.target.value) || 20 })}
+              onChange={(e) => setFormData({ ...formData, width: parseFloat(e.target.value) || 40 })}
               min="5"
-              max="100"
+              max="330"
               step="1"
               disabled={loading}
             />
-            <p className="modal-form-hint">Recommended: 10-30m for event spaces</p>
+            <p className="modal-form-hint">Suggested: about 30–100 ft for typical event spaces</p>
           </div>
 
           <div className="modal-form-group">
             <label htmlFor="height" className="modal-form-label">
-              Height (meters)
+              Height (feet)
             </label>
             <input
               id="height"
               type="number"
               className="modal-form-input"
               value={formData.height}
-              onChange={(e) => setFormData({ ...formData, height: parseFloat(e.target.value) || 8 })}
-              min="2"
-              max="20"
+              onChange={(e) => setFormData({ ...formData, height: parseFloat(e.target.value) || 9 })}
+              min="6"
+              max="40"
               step="0.5"
               disabled={loading}
             />
-            <p className="modal-form-hint">Typical ceiling height: 3-8m</p>
+            <p className="modal-form-hint">Typical ceiling: about 9–16 ft</p>
           </div>
 
           <div className="modal-form-group">
             <label htmlFor="depth" className="modal-form-label">
-              Depth (meters)
+              Depth (feet)
             </label>
             <input
               id="depth"
               type="number"
               className="modal-form-input"
               value={formData.depth}
-              onChange={(e) => setFormData({ ...formData, depth: parseFloat(e.target.value) || 20 })}
+              onChange={(e) => setFormData({ ...formData, depth: parseFloat(e.target.value) || 40 })}
               min="5"
-              max="100"
+              max="330"
               step="1"
               disabled={loading}
             />
-            <p className="modal-form-hint">Recommended: 10-30m for event spaces</p>
+            <p className="modal-form-hint">Suggested: about 30–100 ft for typical event spaces</p>
           </div>
 
           <div className="modal-actions">

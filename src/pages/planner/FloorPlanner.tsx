@@ -3,9 +3,12 @@ import { useParams, useNavigate } from 'react-router-dom'
 import './FloorPlanner.css'
 import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
 import PageNavBar from '../../components/PageNavBar'
-
-const METER_TO_PIXEL_SCALE = 30 // 1 meter = 30 pixels (2D size matches 3D room scale)
-const GRID_SIZE = 6 // Snap every 6px = 0.2m so assets can be placed close together
+import {
+  PIXELS_PER_FOOT,
+  GRID_SIZE_PX,
+  metersToFeet,
+  ROOM_LENGTH_UNIT,
+} from '../../constants/roomUnits'
 
 /** Three vertical layers: floor (rugs/carpets), surface (middle: furniture + tabletop), ceiling (lights). */
 export type AssetLayer = 'floor' | 'surface' | 'ceiling'
@@ -19,15 +22,15 @@ type Asset = {
   x: number
   y: number
   rotation: number
-  /** If set, this asset is placed on top of another (e.g. vase on table). Offsets in meters from parent center. */
+  /** Offsets from parent center in feet (2D plane). */
   parentAssetId?: string
   offsetX?: number
   offsetY?: number
   /** Vertical layer for 2D overlap and view modes. */
   layer?: AssetLayer
-  /** Default height in meters (e.g. 0 = floor, 0.75 = table, 2.5 = chandelier). */
+  /** Reference elevation in feet (e.g. table top). */
   elevation?: number
-  /** Real-world height in meters (Y axis) for true-to-life scaling. */
+  /** Real-world height in feet (Y axis) for 3D scaling. */
   height?: number
   /** Brightness multiplier (0.3–2.5, 1 = default). */
   brightness?: number
@@ -62,15 +65,17 @@ const ASSET_CATALOG: Array<{
   elevation: number
   placeOnTable?: boolean
 }> = [
-  { type: 'rug', file: 'rug.glb', width: 4, depth: 4, height: 0.02, label: 'Rug (4×4m)', layer: 'floor', elevation: 0 },
-  { type: 'table', file: 'asset_table.glb', width: 4, depth: 2, height: 0.75, label: 'Table (4×2m)', layer: 'surface', elevation: 0.75 },
-  { type: 'vase', file: 'blue_vase.glb', width: 0.4, depth: 0.4, height: 0.4, label: 'Blue Vase (on table)', layer: 'surface', elevation: 0.8, placeOnTable: true },
-  { type: 'chandelier', file: 'chandelier.glb', width: 1.2, depth: 1.2, height: 0.6, label: 'Chandelier (ceiling)', layer: 'ceiling', elevation: 2.5 },
+  { type: 'rug', file: 'rug.glb', width: 13, depth: 13, height: 0.07, label: 'Rug (13×13 ft)', layer: 'floor', elevation: 0 },
+  { type: 'table', file: 'asset_table.glb', width: 13, depth: 6.5, height: 2.5, label: 'Table (13×6.5 ft)', layer: 'surface', elevation: 2.5 },
+  { type: 'vase', file: 'blue_vase.glb', width: 1.3, depth: 1.3, height: 1.3, label: 'Blue Vase (on table)', layer: 'surface', elevation: 2.6, placeOnTable: true },
+  { type: 'chandelier', file: 'chandelier.glb', width: 4, depth: 4, height: 2, label: 'Chandelier (ceiling)', layer: 'ceiling', elevation: 0 },
 ]
 
 type CatalogItem = (typeof ASSET_CATALOG)[number]
 type BuiltInAssetOverride = {
+  /** Vertical size for scaling built-ins, in feet (legacy key name `height_m` still supported). */
   height_m?: number
+  height_ft?: number
   asset_layer?: AssetLayer
   brightness?: number
 }
@@ -87,7 +92,9 @@ const getBuiltInOverrides = (): Record<string, BuiltInAssetOverride> => {
 const withCatalogOverrides = (item: CatalogItem): CatalogItem & { brightness: number } => {
   const override = getBuiltInOverrides()[item.file]
   if (!override) return { ...item, brightness: 1 }
-  const targetHeight = typeof override.height_m === 'number' && override.height_m > 0 ? override.height_m : item.height
+  const targetHeightRaw = override.height_ft ?? override.height_m
+  const targetHeight =
+    typeof targetHeightRaw === 'number' && targetHeightRaw > 0 ? targetHeightRaw : item.height
   const ratio = item.height > 0 ? targetHeight / item.height : 1
   return {
     ...item,
@@ -96,11 +103,11 @@ const withCatalogOverrides = (item: CatalogItem): CatalogItem & { brightness: nu
     depth: item.depth * ratio,
     layer: (override.asset_layer as AssetLayer) || item.layer,
     elevation: ((override.asset_layer as AssetLayer) || item.layer) === 'ceiling'
-      ? 2.5
+      ? 0
       : ((override.asset_layer as AssetLayer) || item.layer) === 'floor'
         ? 0
         : item.elevation * ratio,
-    label: `${item.label.split(' (')[0]} (${(item.width * ratio).toFixed(2)}×${(item.depth * ratio).toFixed(2)}m)`,
+    label: `${item.label.split(' (')[0]} (${(item.width * ratio).toFixed(2)}×${(item.depth * ratio).toFixed(2)} ${ROOM_LENGTH_UNIT})`,
     brightness: override.brightness ?? 1
   }
 }
@@ -123,12 +130,12 @@ function getAssetLayer(asset: Asset): AssetLayer {
   return catalog?.layer ?? 'surface'
 }
 
-/** Resolve elevation in meters for an asset. */
-function getAssetElevation(asset: Asset, roomHeight: number): number {
+/** Resolve reference elevation in feet (for 2D ordering / hints). */
+function getAssetElevation(asset: Asset, roomHeightFt: number): number {
   if (asset.elevation != null) return asset.elevation
   const catalog = ASSET_CATALOG.find((c) => c.file === asset.file)
-  if (catalog?.layer === 'ceiling') return Math.max(0, roomHeight - 0.5)
-  return catalog?.elevation ?? 0.75
+  if (catalog?.layer === 'ceiling') return Math.max(0, roomHeightFt - 0.5)
+  return catalog?.elevation ?? 2.5
 }
 
 const LAYER_ORDER: AssetLayer[] = ['floor', 'surface', 'ceiling']
@@ -148,8 +155,8 @@ const orderWallsClockwise = (walls: WallSpec[]): WallSpec[] => {
   })
 }
 
-/** Fallback only when venue/layout omit values (must match server layout defaults). */
-const FALLBACK_ROOM = { width: 20, height: 8, depth: 20 }
+/** Fallback only when venue/layout omit values (feet; keep in sync with server layout defaults). */
+const FALLBACK_ROOM = { width: 40, height: 9, depth: 40 }
 
 type VenueDimsSource = {
   width?: unknown
@@ -457,11 +464,11 @@ const FloorPlanner = () => {
         const x = e.clientX - rect.left
         const y = e.clientY - rect.top
 
-        const snappedX = Math.round(x / GRID_SIZE) * GRID_SIZE
-        const snappedY = Math.round(y / GRID_SIZE) * GRID_SIZE
+        const snappedX = Math.round(x / GRID_SIZE_PX) * GRID_SIZE_PX
+        const snappedY = Math.round(y / GRID_SIZE_PX) * GRID_SIZE_PX
 
-        const xM = snappedX / METER_TO_PIXEL_SCALE
-        const yM = snappedY / METER_TO_PIXEL_SCALE
+        const xM = snappedX / PIXELS_PER_FOOT
+        const yM = snappedY / PIXELS_PER_FOOT
 
         // Use functional update to avoid dependency on placedAssets
         setPlacedAssets(prevAssets => {
@@ -514,12 +521,15 @@ const FloorPlanner = () => {
 
   const handleDragStartUserAsset = (e: React.DragEvent, asset: UserAsset) => {
     const layer = asset.asset_layer || 'surface'
-    const elevation = layer === 'ceiling' ? 2.5 : layer === 'floor' ? 0 : 0.75
+    const elevation = layer === 'ceiling' ? 0 : layer === 'floor' ? 0 : 2.5
+    const wM = asset.width_m ?? 1
+    const dM = asset.depth_m ?? 1
+    const hM = asset.height_m ?? 1
     setDraggedAsset({
       type: asset.asset_name.toLowerCase().replace(/\s+/g, '_'),
-      width: asset.width_m ?? 1,
-      depth: asset.depth_m ?? 1,
-      height: asset.height_m ?? 1,
+      width: metersToFeet(wM),
+      depth: metersToFeet(dM),
+      height: metersToFeet(hM),
       file: asset.file_path || (asset.file_url?.replace(/^\/static\//, '') ?? ''),
       layer: layer as AssetLayer,
       elevation,
@@ -537,12 +547,12 @@ const FloorPlanner = () => {
     const y = e.clientY - rect.top
 
     // Snap to grid
-    const snappedX = Math.round(x / GRID_SIZE) * GRID_SIZE
-    const snappedY = Math.round(y / GRID_SIZE) * GRID_SIZE
+    const snappedX = Math.round(x / GRID_SIZE_PX) * GRID_SIZE_PX
+    const snappedY = Math.round(y / GRID_SIZE_PX) * GRID_SIZE_PX
 
-    // Convert to meters
-    const xM = snappedX / METER_TO_PIXEL_SCALE
-    const yM = snappedY / METER_TO_PIXEL_SCALE
+    // Convert pixels to feet (planner storage)
+    const xM = snappedX / PIXELS_PER_FOOT
+    const yM = snappedY / PIXELS_PER_FOOT
 
     // If dropping a place-on-table asset (e.g. vase), check if drop is inside a table
     let placedOnTable: Asset | null = null
@@ -722,7 +732,7 @@ const FloorPlanner = () => {
     // If no walls defined, prevent placement (must have bounding walls)
     if (walls.length === 0) return false
     
-    const MIN_WALL_DISTANCE = 0.05 // 5cm from walls so assets can sit close to walls
+    const MIN_WALL_DISTANCE = 0.15 // ~2 in from walls in feet
     const assetRight = assetX + assetWidth
     const assetBottom = assetY + assetDepth
     
@@ -1106,15 +1116,15 @@ const FloorPlanner = () => {
     return wrapper
   }
 
-  const canvasWidthPx = roomDimensions.width * METER_TO_PIXEL_SCALE
-  const canvasHeightPx = roomDimensions.depth * METER_TO_PIXEL_SCALE
+  const canvasWidthPx = roomDimensions.width * PIXELS_PER_FOOT
+  const canvasHeightPx = roomDimensions.depth * PIXELS_PER_FOOT
 
   return (
     <div className="floor-planner-container">
       <PageNavBar variant="dark" venueId={venueId} title="2D floor planner" backLabel="Back" />
       <div className="planner-subheader">
         <p className="planner-subheader-line">
-          Venue: {venueName || venueId} — room {roomDimensions.width}m × {roomDimensions.depth}m (1m = {METER_TO_PIXEL_SCALE}px)
+          Venue: {venueName || venueId} — room {roomDimensions.width}×{roomDimensions.depth} {ROOM_LENGTH_UNIT} (1 {ROOM_LENGTH_UNIT} = {PIXELS_PER_FOOT}px)
         </p>
         <details className="planner-tips">
           <summary>Quick tips</summary>
@@ -1217,7 +1227,9 @@ const FloorPlanner = () => {
                     />
                   )}
                   <span className="asset-name">{asset.asset_name}</span>
-                  <span className="asset-size">{(asset.height_m ?? 1)}m tall</span>
+                  <span className="asset-size">
+                    {metersToFeet(asset.height_m ?? 0.3048).toFixed(1)} {ROOM_LENGTH_UNIT} tall (model metadata)
+                  </span>
                 </div>
               )})
             )}
@@ -1499,7 +1511,7 @@ const FloorPlanner = () => {
         <div className="planning-area">
           <div className="controls-bar">
             <span className="controls-bar-info">
-              Room: {roomDimensions.width}m × {roomDimensions.depth}m × {roomDimensions.height}m (1m = 20px) | Floor: {materials.floor.type} | Assets: {placedAssets.length}
+              Room: {roomDimensions.width}×{roomDimensions.depth}×{roomDimensions.height} {ROOM_LENGTH_UNIT} (1 {ROOM_LENGTH_UNIT} = {PIXELS_PER_FOOT}px) | Floor: {materials.floor.type} | Assets: {placedAssets.length}
             </span>
             <div className="view-mode-toggle" role="group" aria-label="Layer view mode">
               <button
@@ -1544,8 +1556,8 @@ const FloorPlanner = () => {
               height: `${canvasHeightPx}px`,
               background: 'transparent',
               backgroundImage:
-                `repeating-linear-gradient(0deg, rgba(255,255,255,0.06) 0, rgba(255,255,255,0.06) 1px, transparent 1px, transparent ${METER_TO_PIXEL_SCALE}px),` +
-                `repeating-linear-gradient(90deg, rgba(255,255,255,0.06) 0, rgba(255,255,255,0.06) 1px, transparent 1px, transparent ${METER_TO_PIXEL_SCALE}px)`,
+                `repeating-linear-gradient(0deg, rgba(255,255,255,0.06) 0, rgba(255,255,255,0.06) 1px, transparent 1px, transparent ${PIXELS_PER_FOOT}px),` +
+                `repeating-linear-gradient(90deg, rgba(255,255,255,0.06) 0, rgba(255,255,255,0.06) 1px, transparent 1px, transparent ${PIXELS_PER_FOOT}px)`,
               border: 'none'
             }}
             onDrop={handleCanvasDrop}
@@ -1602,8 +1614,8 @@ const FloorPlanner = () => {
                 return
               }
 
-              const xM = xPx / METER_TO_PIXEL_SCALE
-              const yM = yPx / METER_TO_PIXEL_SCALE
+              const xM = xPx / PIXELS_PER_FOOT
+              const yM = yPx / PIXELS_PER_FOOT
               setIsDrawingWall(true)
               setDraftWall({ x1: xM, y1: yM, x2: xM, y2: yM })
               setSelectedWallId(null)
@@ -1703,8 +1715,8 @@ const FloorPlanner = () => {
               }
 
               if (isDrawingWall && draftWall) {
-                const xM = xPx / METER_TO_PIXEL_SCALE
-                const yM = yPx / METER_TO_PIXEL_SCALE
+                const xM = xPx / PIXELS_PER_FOOT
+                const yM = yPx / PIXELS_PER_FOOT
                 setDraftWall({ ...draftWall, x2: xM, y2: yM })
               }
             }}
@@ -1860,10 +1872,10 @@ const FloorPlanner = () => {
 
             {true && draftWall && (
               (() => {
-                const x1Px = draftWall.x1 * METER_TO_PIXEL_SCALE
-                const y1Px = draftWall.y1 * METER_TO_PIXEL_SCALE
-                const x2Px = draftWall.x2 * METER_TO_PIXEL_SCALE
-                const y2Px = draftWall.y2 * METER_TO_PIXEL_SCALE
+                const x1Px = draftWall.x1 * PIXELS_PER_FOOT
+                const y1Px = draftWall.y1 * PIXELS_PER_FOOT
+                const x2Px = draftWall.x2 * PIXELS_PER_FOOT
+                const y2Px = draftWall.y2 * PIXELS_PER_FOOT
                 const dx = x2Px - x1Px
                 const dy = y2Px - y1Px
                 const lengthPx = Math.sqrt(dx * dx + dy * dy)
@@ -1901,10 +1913,10 @@ const FloorPlanner = () => {
               })
               const baseZ = 20
               return sorted.map((asset, index) => {
-                const widthPx = asset.width * METER_TO_PIXEL_SCALE
-                const heightPx = asset.depth * METER_TO_PIXEL_SCALE
-                const leftPx = asset.x * METER_TO_PIXEL_SCALE
-                const topPx = asset.y * METER_TO_PIXEL_SCALE
+                const widthPx = asset.width * PIXELS_PER_FOOT
+                const heightPx = asset.depth * PIXELS_PER_FOOT
+                const leftPx = asset.x * PIXELS_PER_FOOT
+                const topPx = asset.y * PIXELS_PER_FOOT
                 const layer = getAssetLayer(asset)
                 const elevation = getAssetElevation(asset, roomDimensions.height)
                 const isGhost =

@@ -4,7 +4,7 @@ type WallSegment = {
   id: string
   name: string
   coordinates: [number, number, number, number]
-  /** Wall length in meters (from floor plan / layout); used for capture segment count. */
+  /** Wall length in feet (from floor plan / layout); used for capture segment count. */
   length?: number
 }
 

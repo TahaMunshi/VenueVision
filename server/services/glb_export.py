@@ -101,10 +101,11 @@ def generate_glb(
     """
     Generate a GLB representing the room with dimensions, walls, floor, and ceiling.
     Uses layout walls when available; otherwise falls back to a simple box.
+    Layout width/height/depth are in **feet** (same units as Three.js room box in the app).
     """
-    width = float(dimensions.get("width", 20))
-    height = float(dimensions.get("height", 8))
-    depth = float(dimensions.get("depth", 20))
+    width = float(dimensions.get("width", 40))
+    height = float(dimensions.get("height", 9))
+    depth = float(dimensions.get("depth", 40))
 
     materials = materials or {}
     floor_color = _hex_to_rgba(materials.get("floor", {}).get("color", "#c6b39e"))

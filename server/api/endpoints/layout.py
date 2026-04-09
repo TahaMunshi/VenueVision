@@ -1,3 +1,4 @@
+"""Layout API. ``dimensions`` width/height/depth are in **feet** (same as the floor planner and 3D viewer)."""
 import json
 import logging
 import os
@@ -17,7 +18,7 @@ layout_bp = Blueprint("layout", __name__)
 @layout_bp.route("/venue/<venue_id>/layout", methods=["GET"])
 @token_required
 def get_layout(current_user, venue_id: str):
-    """Get the layout (dimensions, walls, assets, materials) for a venue."""
+    """Get the layout (dimensions in feet, walls, assets, materials) for a venue."""
     venue, err = require_venue_access(venue_id, current_user, require_owner=False)
     if err:
         return err[0], err[1]
@@ -33,7 +34,7 @@ def get_layout(current_user, venue_id: str):
                         "status": "success",
                         "layout_file_exists": True,
                         "name": layout_data.get("name"),
-                        "dimensions": layout_data.get("dimensions", {"width": 20, "height": 8, "depth": 20}),
+                        "dimensions": layout_data.get("dimensions", {"width": 40, "height": 9, "depth": 40}),
                         "assets": layout_data.get("assets", []),
                         "polygon": layout_data.get("polygon"),
                         "walls": layout_data.get("walls"),
@@ -51,7 +52,7 @@ def get_layout(current_user, venue_id: str):
                         "status": "success",
                         "layout_file_exists": False,
                         "name": None,
-                        "dimensions": {"width": 20, "height": 8, "depth": 20},
+                        "dimensions": {"width": 40, "height": 9, "depth": 40},
                         "assets": [],
                         "polygon": None,
                         "walls": None,
@@ -75,7 +76,7 @@ def save_layout(current_user, venue_id: str):
     Save the layout (dimensions, walls, materials, assets) for a venue.
     Expects JSON body with:
         - name: venue name
-        - dimensions: {width, height, depth}
+        - dimensions: {width, height, depth} in feet
         - assets: array of asset objects
         - polygon: array of points (optional)
         - walls: array of walls (optional, supports curved metadata)
@@ -91,7 +92,7 @@ def save_layout(current_user, venue_id: str):
             return jsonify({"error": "Missing layout data."}), 400
 
         name = data.get("name")
-        dimensions = data.get("dimensions", {"width": 20, "height": 8, "depth": 20})
+        dimensions = data.get("dimensions", {"width": 40, "height": 9, "depth": 40})
         assets = data.get("assets", [])
         polygon = data.get("polygon")
         walls = data.get("walls")
@@ -160,7 +161,7 @@ def generate_glb_endpoint(current_user, venue_id: str):
         else:
             return jsonify({"status": "error", "message": "No layout saved yet."}), 400
 
-        dims = layout_data.get("dimensions", {"width": 20, "height": 8, "depth": 20})
+        dims = layout_data.get("dimensions", {"width": 40, "height": 9, "depth": 40})
         walls = layout_data.get("walls", [])
         materials = layout_data.get("materials", {})
         glb_path = generate_glb(venue_dir, dims, walls=walls, materials=materials)

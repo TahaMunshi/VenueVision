@@ -18,9 +18,9 @@ CREATE TABLE IF NOT EXISTS venues (
     user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
     venue_identifier VARCHAR(100) NOT NULL, -- unique string like 'my-venue-2024'
     venue_name VARCHAR(255) NOT NULL,
-    width FLOAT DEFAULT 20,
-    height FLOAT DEFAULT 8,
-    depth FLOAT DEFAULT 20,
+    width FLOAT DEFAULT 40,  -- feet
+    height FLOAT DEFAULT 9,  -- feet
+    depth FLOAT DEFAULT 40,  -- feet
     floor_material_type VARCHAR(50) DEFAULT 'carpet',
     floor_material_color VARCHAR(7) DEFAULT '#cccccc',
     ceiling_material_type VARCHAR(50) DEFAULT 'plain',

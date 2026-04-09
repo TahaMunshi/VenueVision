@@ -4,6 +4,22 @@ import './Space3DViewer.css'
 import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
 import { loadThreeBundle } from '../../utils/threeLoader'
 import PageNavBar from '../../components/PageNavBar'
+import { metersToFeet } from '../../constants/roomUnits'
+
+/** Epsilon above room box bottom so decorative floor/ceiling planes avoid z-fighting; same Y used for asset floor contact. */
+const FLOOR_CONTACT_EPS = 0.002
+
+function floorContactY(roomHeightFt: number): number {
+  return -roomHeightFt / 2 + FLOOR_CONTACT_EPS
+}
+
+function ceilingContactY(roomHeightFt: number): number {
+  return roomHeightFt / 2 - FLOOR_CONTACT_EPS
+}
+
+/** Set `VITE_USE_DECORATIVE_FLOOR_CEILING=false` to disable textured floor/ceiling planes and isolate placement vs. visuals. */
+const USE_DECORATIVE_FLOOR_CEILING =
+  import.meta.env.VITE_USE_DECORATIVE_FLOOR_CEILING !== 'false'
 
 // Type declarations for dynamically loaded Three.js
 declare global {
@@ -187,7 +203,7 @@ const Space3DViewer = () => {
   const containerRef = useRef<HTMLDivElement>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [dimensions, setDimensions] = useState({ width: 20, height: 8, depth: 20 })
+  const [dimensions, setDimensions] = useState({ width: 40, height: 9, depth: 40 })
   const [loadingAssets, setLoadingAssets] = useState<string[]>([])
   
   // Refs to prevent memory leaks
@@ -296,15 +312,20 @@ const Space3DViewer = () => {
         fillLight.position.set(-8, 8, -8)
         scene.add(fillLight)
 
-        // Calculate actual floor level (room box is centered, so floor is at -height/2)
-        const floorY = -dimensions.height / 2
-        const ceilingY = dimensions.height / 2
-
         // Texture loader for floor/ceiling (created early for custom image textures)
         const textureLoader = new THREE.TextureLoader()
 
         // Add a dedicated floor plane (beige) so the floor is always visible
         const addWhiteFloorPlane = async () => {
+          if (!USE_DECORATIVE_FLOOR_CEILING) {
+            if (floorPlaneRef.current) {
+              scene.remove(floorPlaneRef.current)
+              floorPlaneRef.current.geometry?.dispose()
+              floorPlaneRef.current.material?.dispose()
+              floorPlaneRef.current = null
+            }
+            return
+          }
           if (floorPlaneRef.current) {
             scene.remove(floorPlaneRef.current)
             floorPlaneRef.current.geometry?.dispose()
@@ -327,7 +348,7 @@ const Space3DViewer = () => {
           })
           const plane = new THREE.Mesh(floorGeo, floorMat)
           plane.rotation.x = -Math.PI / 2
-          plane.position.y = floorY + 0.002
+          plane.position.y = floorContactY(dimensions.height)
           plane.renderOrder = 1
           scene.add(plane)
           floorPlaneRef.current = plane
@@ -335,6 +356,15 @@ const Space3DViewer = () => {
 
         // Add a translucent horizontal plane at the ceiling so the chandelier is visible
         const addCeilingPlane = async () => {
+          if (!USE_DECORATIVE_FLOOR_CEILING) {
+            if (ceilingPlaneRef.current) {
+              scene.remove(ceilingPlaneRef.current)
+              ceilingPlaneRef.current.geometry?.dispose()
+              ceilingPlaneRef.current.material?.dispose()
+              ceilingPlaneRef.current = null
+            }
+            return
+          }
           if (ceilingPlaneRef.current) {
             scene.remove(ceilingPlaneRef.current)
             ceilingPlaneRef.current.geometry?.dispose()
@@ -357,7 +387,7 @@ const Space3DViewer = () => {
           })
           const plane = new THREE.Mesh(ceilingGeo, ceilingMat)
           plane.rotation.x = -Math.PI / 2
-          plane.position.y = ceilingY - 0.002
+          plane.position.y = ceilingContactY(dimensions.height)
           plane.renderOrder = 0
           scene.add(plane)
           ceilingPlaneRef.current = plane
@@ -367,7 +397,7 @@ const Space3DViewer = () => {
         // Uncomment these lines if you want to see the floor plane
         /*
         const floorGrid = new THREE.GridHelper(Math.max(dimensions.width, dimensions.depth) * 2, 20, 0x00ff00, 0x444444)
-        floorGrid.position.y = floorY
+        floorGrid.position.y = -dimensions.height / 2
         scene.add(floorGrid)
         
         const floorPlaneGeometry = new THREE.PlaneGeometry(dimensions.width * 2, dimensions.depth * 2)
@@ -379,7 +409,7 @@ const Space3DViewer = () => {
         })
         const floorPlane = new THREE.Mesh(floorPlaneGeometry, floorPlaneMaterial)
         floorPlane.rotation.x = -Math.PI / 2
-        floorPlane.position.y = floorY
+        floorPlane.position.y = -dimensions.height / 2
         scene.add(floorPlane)
         */
 
@@ -664,9 +694,8 @@ const Space3DViewer = () => {
                 assetPlacements: []
               }
 
-              // Calculate actual floor and ceiling (room box is centered: floor at -height/2, ceiling at +height/2)
-              const floorY = -layoutH / 2
-              const ceilingY = layoutH / 2
+              const floorContact = floorContactY(layoutH)
+              const ceilingContact = ceilingContactY(layoutH)
               const isCeilingAsset = (a: any) => a.layer === 'ceiling' || a.file === 'chandelier.glb'
               const rootAssets = data.assets.filter((a: any) => !(a.parentAssetId ?? a.parent_asset_id))
               const childAssets = data.assets.filter((a: any) => !!(a.parentAssetId ?? a.parent_asset_id))
@@ -716,15 +745,17 @@ const Space3DViewer = () => {
                       gltf.scene.position.y = -box.min.y
                     }
 
-                    // STEP 2: True-to-size scaling. Use only the object's height (Y axis) to determine scale
-                    // so objects match the room's meter scale. User provides height in m/ft/in; we store meters.
+                    // STEP 2: True-to-size scaling (planner / layout store feet; Tripo may only expose *_m in meters).
                     const assetType = String(asset.type ?? asset.asset_type ?? '').toLowerCase()
                     const isRug = assetType === 'rug' || asset.file === 'rug.glb'
                     const isFloorAsset = asset.layer === 'floor' || isRug
 
-                    const targetWidth = Number(asset.width ?? asset.width_m ?? 0)
-                    const targetDepth = Number(asset.depth ?? asset.depth_m ?? 0)
-                    const targetHeight = Number(asset.height ?? asset.height_m ?? 0)
+                    let targetWidth = Number(asset.width ?? 0)
+                    let targetDepth = Number(asset.depth ?? 0)
+                    let targetHeight = Number(asset.height ?? 0)
+                    if (targetWidth <= 0 && asset.width_m != null) targetWidth = metersToFeet(Number(asset.width_m))
+                    if (targetDepth <= 0 && asset.depth_m != null) targetDepth = metersToFeet(Number(asset.depth_m))
+                    if (targetHeight <= 0 && asset.height_m != null) targetHeight = metersToFeet(Number(asset.height_m))
 
                     const scaleFromHeight = size.y > 0 && targetHeight > 0 ? targetHeight / size.y : null
                     const scaleX = size.x > 0 && targetWidth > 0 ? targetWidth / size.x : null
@@ -832,12 +863,11 @@ const Space3DViewer = () => {
                   })
                 })
               
-              // Plane technique: same X/Z from 2D grid; Y snapped to floor/ceiling contact planes.
-              const FLOOR_ASSET_OFFSET = 0.0
+              // Plane technique: same X/Z from 2D grid; Y at decorative floor/ceiling contact (feet world space).
               const getRootWorldPosition = (a: any) => {
                 const centerX2D = a.x + (a.width / 2)
                 const centerY2D = a.y + (a.depth / 2)
-                const worldY = isCeilingAsset(a) ? (ceilingY - 0.002) : floorY + FLOOR_ASSET_OFFSET
+                const worldY = isCeilingAsset(a) ? ceilingContact : floorContact
                 return {
                   worldX: centerX2D - (layoutW / 2),
                   worldY,
@@ -856,7 +886,7 @@ const Space3DViewer = () => {
                 const ox = asset.offsetX ?? asset.offset_x ?? 0
                 const oy = asset.offsetY ?? asset.offset_y ?? 0
                 const worldX = surface ? surface.centerX + ox : (asset.x + asset.width / 2) - layoutW / 2
-                const worldY = surface ? surface.topY : (isCeilingAsset(asset) ? (ceilingY - 0.002) : floorY + FLOOR_ASSET_OFFSET)
+                const worldY = surface ? surface.topY : (isCeilingAsset(asset) ? ceilingContact : floorContact)
                 const worldZ = surface ? surface.centerZ + oy : (asset.y + asset.depth / 2) - layoutD / 2
                 await loadOneAsset(asset, worldX, worldY, worldZ, false, isCeilingAsset(asset), parentId).catch(() => {})
               }
@@ -969,9 +999,12 @@ const Space3DViewer = () => {
     const cw = dimensions.width
     const cd = dimensions.depth
     const ch = dimensions.height
-    const floorY = -ch / 2
-    const ceilingY = ch / 2
-    const FLOOR_ASSET_OFFSET = 0.0
+    const floorContact = floorContactY(ch)
+    const ceilingContact = ceilingContactY(ch)
+
+    if (layoutDataRef.current) {
+      layoutDataRef.current.layoutDimensions = { width: cw, height: ch, depth: cd }
+    }
 
     // Update camera position
     cameraRef.current.position.set(0, ch / 2, cd + 5)
@@ -1037,54 +1070,69 @@ const Space3DViewer = () => {
     roomMeshRef.current = roomMesh
     sceneRef.current.add(roomMesh)
 
-    // Recreate floor and ceiling planes with new dimensions (keeps floor/ceiling consistent with room)
-    if (floorPlaneRef.current) {
-      sceneRef.current.remove(floorPlaneRef.current)
-      floorPlaneRef.current.geometry?.dispose()
-      floorPlaneRef.current.material?.dispose()
-      floorPlaneRef.current = null
-    }
-    const floorGeo = new THREE.PlaneGeometry(cw, cd)
-    const floorPlaneTexture = createProceduralTexture(THREE, activeMaterials.floor.type, activeMaterials.floor.color)
-    if (floorPlaneTexture) floorPlaneTexture.repeat.set(4, 4)
-    const floorMat = new THREE.MeshBasicMaterial({
-      map: floorPlaneTexture || undefined,
-      color: floorPlaneTexture ? 0xffffff : parseInt(activeMaterials.floor.color.replace('#', ''), 16),
-      side: THREE.DoubleSide
-    })
-    const floorPlane = new THREE.Mesh(floorGeo, floorMat)
-    floorPlane.rotation.x = -Math.PI / 2
-    floorPlane.position.y = floorY + 0.002
-    floorPlane.renderOrder = 1
-    sceneRef.current.add(floorPlane)
-    floorPlaneRef.current = floorPlane
+    // Recreate decorative floor/ceiling planes (optional; disable via VITE_USE_DECORATIVE_FLOOR_CEILING=false)
+    if (USE_DECORATIVE_FLOOR_CEILING) {
+      if (floorPlaneRef.current) {
+        sceneRef.current.remove(floorPlaneRef.current)
+        floorPlaneRef.current.geometry?.dispose()
+        floorPlaneRef.current.material?.dispose()
+        floorPlaneRef.current = null
+      }
+      const floorGeo = new THREE.PlaneGeometry(cw, cd)
+      const floorPlaneTexture = createProceduralTexture(THREE, activeMaterials.floor.type, activeMaterials.floor.color)
+      if (floorPlaneTexture) floorPlaneTexture.repeat.set(4, 4)
+      const floorMat = new THREE.MeshBasicMaterial({
+        map: floorPlaneTexture || undefined,
+        color: floorPlaneTexture ? 0xffffff : parseInt(activeMaterials.floor.color.replace('#', ''), 16),
+        side: THREE.DoubleSide
+      })
+      const floorPlane = new THREE.Mesh(floorGeo, floorMat)
+      floorPlane.rotation.x = -Math.PI / 2
+      floorPlane.position.y = floorContact
+      floorPlane.renderOrder = 1
+      sceneRef.current.add(floorPlane)
+      floorPlaneRef.current = floorPlane
 
-    if (ceilingPlaneRef.current) {
-      sceneRef.current.remove(ceilingPlaneRef.current)
-      ceilingPlaneRef.current.geometry?.dispose()
-      ceilingPlaneRef.current.material?.dispose()
-      ceilingPlaneRef.current = null
+      if (ceilingPlaneRef.current) {
+        sceneRef.current.remove(ceilingPlaneRef.current)
+        ceilingPlaneRef.current.geometry?.dispose()
+        ceilingPlaneRef.current.material?.dispose()
+        ceilingPlaneRef.current = null
+      }
+      const ceilingGeo = new THREE.PlaneGeometry(cw, cd)
+      const ceilingPlaneTexture = createProceduralTexture(
+        THREE,
+        activeMaterials.ceiling.type,
+        activeMaterials.ceiling.color || '#f5f5f5'
+      )
+      if (ceilingPlaneTexture) ceilingPlaneTexture.repeat.set(3, 3)
+      const ceilingMat = new THREE.MeshBasicMaterial({
+        map: ceilingPlaneTexture || undefined,
+        color: ceilingPlaneTexture ? 0xffffff : parseInt((activeMaterials.ceiling.color || '#f5f5f5').replace('#', ''), 16),
+        side: THREE.DoubleSide
+      })
+      const ceilingPlane = new THREE.Mesh(ceilingGeo, ceilingMat)
+      ceilingPlane.rotation.x = -Math.PI / 2
+      ceilingPlane.position.y = ceilingContact
+      ceilingPlane.renderOrder = 0
+      sceneRef.current.add(ceilingPlane)
+      ceilingPlaneRef.current = ceilingPlane
+    } else {
+      if (floorPlaneRef.current) {
+        sceneRef.current.remove(floorPlaneRef.current)
+        floorPlaneRef.current.geometry?.dispose()
+        floorPlaneRef.current.material?.dispose()
+        floorPlaneRef.current = null
+      }
+      if (ceilingPlaneRef.current) {
+        sceneRef.current.remove(ceilingPlaneRef.current)
+        ceilingPlaneRef.current.geometry?.dispose()
+        ceilingPlaneRef.current.material?.dispose()
+        ceilingPlaneRef.current = null
+      }
     }
-    const ceilingGeo = new THREE.PlaneGeometry(cw, cd)
-    const ceilingPlaneTexture = createProceduralTexture(
-      THREE,
-      activeMaterials.ceiling.type,
-      activeMaterials.ceiling.color || '#f5f5f5'
-    )
-    if (ceilingPlaneTexture) ceilingPlaneTexture.repeat.set(3, 3)
-    const ceilingMat = new THREE.MeshBasicMaterial({
-      map: ceilingPlaneTexture || undefined,
-      color: ceilingPlaneTexture ? 0xffffff : parseInt((activeMaterials.ceiling.color || '#f5f5f5').replace('#', ''), 16),
-      side: THREE.DoubleSide
-    })
-    const ceilingPlane = new THREE.Mesh(ceilingGeo, ceilingMat)
-    ceilingPlane.rotation.x = -Math.PI / 2
-    ceilingPlane.position.y = ceilingY - 0.002
-    ceilingPlane.renderOrder = 0
-    sceneRef.current.add(ceilingPlane)
-    ceilingPlaneRef.current = ceilingPlane
 
-    // Reposition all assets using normalized layout coords so meter scale stays in sync
+    // Reposition all assets using normalized layout coords (planner coords and world are both feet)
     const layout = layoutDataRef.current
     if (layout && layout.assetPlacements.length > 0) {
       const lw = layout.layoutDimensions.width
@@ -1101,7 +1149,7 @@ const Space3DViewer = () => {
           const normZ = ld > 0 ? (asset.y + (asset.depth || 0) / 2) / ld : 0.5
           worldX = normX * cw - cw / 2
           worldZ = normZ * cd - cd / 2
-          worldY = onCeiling ? (ceilingY - 0.002) : floorY + FLOOR_ASSET_OFFSET
+          worldY = onCeiling ? ceilingContact : floorContact
         } else {
           const parentId = String(asset.parentAssetId ?? asset.parent_asset_id ?? '')
           const surface = parentSurfaceByAssetId[parentId]
@@ -1116,7 +1164,7 @@ const Space3DViewer = () => {
             const normZ = ld > 0 ? (asset.y + (asset.depth || 0) / 2) / ld : 0.5
             worldX = normX * cw - cw / 2
             worldZ = normZ * cd - cd / 2
-            worldY = onCeiling ? (ceilingY - 0.002) : floorY + FLOOR_ASSET_OFFSET
+            worldY = onCeiling ? ceilingContact : floorContact
           }
         }
 
@@ -1195,32 +1243,35 @@ const Space3DViewer = () => {
       <div className="viewer-controls">
         <div className="dimension-controls">
           <label>
-            Width: <input 
-              type="number" 
-              value={dimensions.width} 
-              onChange={(e) => setDimensions({...dimensions, width: parseFloat(e.target.value) || 20})}
-              min="5" 
-              max="50" 
+            Width (ft):{' '}
+            <input
+              type="number"
+              value={dimensions.width}
+              onChange={(e) => setDimensions({ ...dimensions, width: parseFloat(e.target.value) || 40 })}
+              min="5"
+              max="330"
               step="1"
             />
           </label>
           <label>
-            Height: <input 
-              type="number" 
-              value={dimensions.height} 
-              onChange={(e) => setDimensions({...dimensions, height: parseFloat(e.target.value) || 8})}
-              min="2" 
-              max="15" 
+            Height (ft):{' '}
+            <input
+              type="number"
+              value={dimensions.height}
+              onChange={(e) => setDimensions({ ...dimensions, height: parseFloat(e.target.value) || 9 })}
+              min="6"
+              max="40"
               step="0.5"
             />
           </label>
           <label>
-            Depth: <input 
-              type="number" 
-              value={dimensions.depth} 
-              onChange={(e) => setDimensions({...dimensions, depth: parseFloat(e.target.value) || 20})}
-              min="5" 
-              max="50" 
+            Depth (ft):{' '}
+            <input
+              type="number"
+              value={dimensions.depth}
+              onChange={(e) => setDimensions({ ...dimensions, depth: parseFloat(e.target.value) || 40 })}
+              min="5"
+              max="330"
               step="1"
             />
           </label>

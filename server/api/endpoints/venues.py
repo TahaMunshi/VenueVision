@@ -1,5 +1,9 @@
 """
 Venues management endpoints.
+
+Venue ``width``, ``height``, and ``depth`` are stored and interpreted as **feet** everywhere
+in the app (2D planner, layout JSON, 3D viewer). Existing rows created before this convention
+may have been entered as meters — migrate by multiplying by ~3.28084 if needed, or reset demo data.
 """
 
 from flask import Blueprint, request, jsonify
@@ -96,13 +100,13 @@ def create_venue(current_user):
     """
     Create a new venue for the authenticated user.
     
-    Expected JSON body:
+    Expected JSON body (dimensions in feet):
         {
             "venue_identifier": "my-venue-2024",
             "venue_name": "My Conference Hall",
-            "width": 20,
-            "height": 8,
-            "depth": 20
+            "width": 40,
+            "height": 9,
+            "depth": 40
         }
     
     Returns:
@@ -118,12 +122,26 @@ def create_venue(current_user):
         
         venue_identifier = data.get('venue_identifier', '').strip()
         venue_name = data.get('venue_name', '').strip()
-        width = data.get('width', 20)
-        height = data.get('height', 8)
-        depth = data.get('depth', 20)
+        width = data.get('width', 40)
+        height = data.get('height', 9)
+        depth = data.get('depth', 40)
         
         if not venue_identifier or not venue_name:
             return jsonify({'error': 'venue_identifier and venue_name are required'}), 400
+        
+        try:
+            width = float(width)
+            height = float(height)
+            depth = float(depth)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'width, height, and depth must be numbers'}), 400
+        
+        if not (5 <= width <= 330):
+            return jsonify({'error': 'width must be between 5 and 330 feet'}), 400
+        if not (6 <= height <= 40):
+            return jsonify({'error': 'height must be between 6 and 40 feet'}), 400
+        if not (5 <= depth <= 330):
+            return jsonify({'error': 'depth must be between 5 and 330 feet'}), 400
         
         # Check if venue identifier already exists for this user
         existing = execute_query(

@@ -283,14 +283,14 @@ const VenueHome = () => {
             <p className="stat-label">Dimensions</p>
             <p className="stat-value">
               {venue.width} × {venue.depth}
-              <span className="stat-unit">m</span>
+              <span className="stat-unit">ft</span>
             </p>
           </div>
           <div className="stat-card">
             <p className="stat-label">Height</p>
             <p className="stat-value">
               {venue.height}
-              <span className="stat-unit">m</span>
+              <span className="stat-unit">ft</span>
             </p>
           </div>
           <div className="stat-card">

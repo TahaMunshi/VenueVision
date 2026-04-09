@@ -245,15 +245,15 @@ const VenuesList = () => {
                 <div className="venue-card-stats">
                   <div className="venue-stat">
                     <span className="venue-stat-label">Width</span>
-                    <span className="venue-stat-value">{venue.width}m</span>
+                    <span className="venue-stat-value">{venue.width} ft</span>
                   </div>
                   <div className="venue-stat">
                     <span className="venue-stat-label">Depth</span>
-                    <span className="venue-stat-value">{venue.depth}m</span>
+                    <span className="venue-stat-value">{venue.depth} ft</span>
                   </div>
                   <div className="venue-stat">
                     <span className="venue-stat-label">Height</span>
-                    <span className="venue-stat-value">{venue.height}m</span>
+                    <span className="venue-stat-value">{venue.height} ft</span>
                   </div>
                 </div>
               </div>

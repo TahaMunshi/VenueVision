@@ -125,7 +125,7 @@ const AssetLibrary = () => {
   const [assetName, setAssetName] = useState('')
   const [assetLayer, setAssetLayer] = useState<'floor' | 'surface' | 'ceiling'>('surface')
   const [heightM, setHeightM] = useState(1)
-  const [heightUnit, setHeightUnit] = useState<HeightUnit>('m')
+  const [heightUnit, setHeightUnit] = useState<HeightUnit>('ft')
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [previewUrls, setPreviewUrls] = useState<string[]>([])
@@ -136,7 +136,7 @@ const AssetLibrary = () => {
   const [viewerError, setViewerError] = useState<string | null>(null)
   const [editingAsset, setEditingAsset] = useState<Asset | null>(null)
   const [editHeight, setEditHeight] = useState(1)
-  const [editHeightUnit, setEditHeightUnit] = useState<HeightUnit>('m')
+  const [editHeightUnit, setEditHeightUnit] = useState<HeightUnit>('ft')
   const [editBrightness, setEditBrightness] = useState(1)
   const [editLayer, setEditLayer] = useState<'floor' | 'surface' | 'ceiling'>('surface')
   const [savingEdit, setSavingEdit] = useState(false)
@@ -802,13 +802,13 @@ const AssetLibrary = () => {
                       disabled={uploading}
                       style={{ minWidth: 80 }}
                     >
-                      <option value="m">m</option>
                       <option value="ft">ft</option>
+                      <option value="m">m</option>
                       <option value="in">in</option>
                     </select>
                   </div>
                   <p style={{ fontSize: '0.85em', color: '#888', marginTop: 4 }}>
-                    Real-world height of the object. The 3D model is scaled to this size in the room.
+                    Real-world height (feet preferred; values are stored in meters for the API). Scaled to match room size in feet.
                   </p>
                 </div>
 
@@ -890,7 +890,9 @@ const AssetLibrary = () => {
                 )}
               </div>
               <div className="modal-body">
-                <p className="modal-description">Set the real-world height. The object is scaled to this height (true to room size).</p>
+                <p className="modal-description">
+                  Real-world height (feet preferred). Stored in meters for the API; scaled to the room in feet.
+                </p>
                 <div className="form-group">
                   <label>Height</label>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -907,8 +909,8 @@ const AssetLibrary = () => {
                       onChange={(e) => setEditHeightUnit(e.target.value as HeightUnit)}
                       style={{ minWidth: 80 }}
                     >
-                      <option value="m">m</option>
                       <option value="ft">ft</option>
+                      <option value="m">m</option>
                       <option value="in">in</option>
                     </select>
                   </div>
