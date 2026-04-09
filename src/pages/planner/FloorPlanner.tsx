@@ -5,7 +5,7 @@ import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
 import PageNavBar from '../../components/PageNavBar'
 import {
   PIXELS_PER_FOOT,
-  GRID_SIZE_PX,
+  GRID_STEP_FT,
   metersToFeet,
   ROOM_LENGTH_UNIT,
 } from '../../constants/roomUnits'
@@ -48,6 +48,47 @@ type UserAsset = {
   depth_m?: number
   height_m?: number
   brightness?: number
+}
+
+/**
+ * Map pointer (clientX, clientY) to asset **top-left** in feet.
+ * Uses the canvas element’s rendered rect so flex/CSS scaling does not skew coords.
+ * Treats the pointer as the asset **center** (expected drop/drag UX).
+ */
+function pointerToTopLeftFeet(
+  clientX: number,
+  clientY: number,
+  canvasEl: HTMLElement,
+  roomWidthFt: number,
+  roomDepthFt: number,
+  assetWidthFt: number,
+  assetDepthFt: number
+): { x: number; y: number } {
+  const rect = canvasEl.getBoundingClientRect()
+  const rw = rect.width
+  const rh = rect.height
+  if (rw <= 0 || rh <= 0) return { x: 0, y: 0 }
+  const u = (clientX - rect.left) / rw
+  const v = (clientY - rect.top) / rh
+  const cxFt = u * roomWidthFt
+  const cyFt = v * roomDepthFt
+  const topLeftX = cxFt - assetWidthFt / 2
+  const topLeftY = cyFt - assetDepthFt / 2
+  const snap = (val: number) => Math.round(val / GRID_STEP_FT) * GRID_STEP_FT
+  return { x: snap(topLeftX), y: snap(topLeftY) }
+}
+
+/** Clamp loaded layout assets so bad saved width/depth cannot block placement (server JSON unchanged). */
+function normalizePlacedAsset(asset: Asset, roomW: number, roomD: number): Asset {
+  const w0 = Number(asset.width)
+  const d0 = Number(asset.depth)
+  const x0 = Number(asset.x)
+  const y0 = Number(asset.y)
+  const w = Math.max(GRID_STEP_FT, Math.min(Number.isFinite(w0) && w0 > 0 ? w0 : 1, roomW))
+  const d = Math.max(GRID_STEP_FT, Math.min(Number.isFinite(d0) && d0 > 0 ? d0 : 1, roomD))
+  const x = Math.max(0, Math.min(Number.isFinite(x0) ? x0 : 0, Math.max(0, roomW - w)))
+  const y = Math.max(0, Math.min(Number.isFinite(y0) ? y0 : 0, Math.max(0, roomD - d)))
+  return { ...asset, width: w, depth: d, x, y }
 }
 
 /**
@@ -95,19 +136,18 @@ const withCatalogOverrides = (item: CatalogItem): CatalogItem & { brightness: nu
   const targetHeightRaw = override.height_ft ?? override.height_m
   const targetHeight =
     typeof targetHeightRaw === 'number' && targetHeightRaw > 0 ? targetHeightRaw : item.height
+  /** Scale reference elevation with height only; do not inflate footprint (avoids huge rugs when height is edited). */
   const ratio = item.height > 0 ? targetHeight / item.height : 1
+  const layer = (override.asset_layer as AssetLayer) || item.layer
   return {
     ...item,
     height: targetHeight,
-    width: item.width * ratio,
-    depth: item.depth * ratio,
-    layer: (override.asset_layer as AssetLayer) || item.layer,
-    elevation: ((override.asset_layer as AssetLayer) || item.layer) === 'ceiling'
-      ? 0
-      : ((override.asset_layer as AssetLayer) || item.layer) === 'floor'
-        ? 0
-        : item.elevation * ratio,
-    label: `${item.label.split(' (')[0]} (${(item.width * ratio).toFixed(2)}×${(item.depth * ratio).toFixed(2)} ${ROOM_LENGTH_UNIT})`,
+    width: item.width,
+    depth: item.depth,
+    layer,
+    elevation:
+      layer === 'ceiling' ? 0 : layer === 'floor' ? 0 : item.elevation * ratio,
+    label: `${item.label.split(' (')[0]} (${item.width.toFixed(2)}×${item.depth.toFixed(2)} ${ROOM_LENGTH_UNIT})`,
     brightness: override.brightness ?? 1
   }
 }
@@ -309,7 +349,9 @@ const FloorPlanner = () => {
           setWalls(defaultWalls)
         }
         if (data.assets && Array.isArray(data.assets)) {
-          setPlacedAssets(data.assets)
+          setPlacedAssets(
+            (data.assets as Asset[]).map((a) => normalizePlacedAsset(a, dims.width, dims.depth))
+          )
         }
       } catch (error) {
         console.error('Error loading layout:', error)
@@ -459,31 +501,39 @@ const FloorPlanner = () => {
 
   useEffect(() => {
     const handleGlobalMouseMove = (e: MouseEvent) => {
-      if (draggingAssetId && canvasRef.current) {
-        const rect = canvasRef.current.getBoundingClientRect()
-        const x = e.clientX - rect.left
-        const y = e.clientY - rect.top
+      if (!draggingAssetId || !canvasRef.current) return
+      const el = canvasRef.current
 
-        const snappedX = Math.round(x / GRID_SIZE_PX) * GRID_SIZE_PX
-        const snappedY = Math.round(y / GRID_SIZE_PX) * GRID_SIZE_PX
+      setPlacedAssets((prevAssets) => {
+        const asset = prevAssets.find((a) => a.id === draggingAssetId)
+        if (!asset) return prevAssets
 
-        const xM = snappedX / PIXELS_PER_FOOT
-        const yM = snappedY / PIXELS_PER_FOOT
+        const { x: topX, y: topY } = pointerToTopLeftFeet(
+          e.clientX,
+          e.clientY,
+          el,
+          roomDimensions.width,
+          roomDimensions.depth,
+          asset.width,
+          asset.depth
+        )
 
-        // Use functional update to avoid dependency on placedAssets
-        setPlacedAssets(prevAssets => {
-          const asset = prevAssets.find(a => a.id === draggingAssetId)
-          if (!asset) return prevAssets
-
-          if (checkCollision(draggingAssetId, xM, yM, asset.width, asset.depth, getAssetLayer(asset))) {
-            return prevAssets
-          }
-
-          return prevAssets.map(a => 
-            a.id === draggingAssetId ? { ...a, x: xM, y: yM } : a
+        if (
+          checkCollision(
+            draggingAssetId,
+            topX,
+            topY,
+            asset.width,
+            asset.depth,
+            getAssetLayer(asset),
+            prevAssets
           )
-        })
-      }
+        ) {
+          return prevAssets
+        }
+
+        return prevAssets.map((a) => (a.id === draggingAssetId ? { ...a, x: topX, y: topY } : a))
+      })
     }
 
     const handleGlobalMouseUp = () => {
@@ -498,7 +548,7 @@ const FloorPlanner = () => {
         window.removeEventListener('mouseup', handleGlobalMouseUp)
       }
     }
-  }, [draggingAssetId]) // Removed placedAssets from dependencies
+  }, [draggingAssetId, roomDimensions.width, roomDimensions.depth])
 
   const handleDragStart = (
     e: React.DragEvent,
@@ -542,17 +592,17 @@ const FloorPlanner = () => {
     e.preventDefault()
     if (!draggedAsset || !canvasRef.current) return
 
-    const rect = canvasRef.current.getBoundingClientRect()
-    const x = e.clientX - rect.left
-    const y = e.clientY - rect.top
-
-    // Snap to grid
-    const snappedX = Math.round(x / GRID_SIZE_PX) * GRID_SIZE_PX
-    const snappedY = Math.round(y / GRID_SIZE_PX) * GRID_SIZE_PX
-
-    // Convert pixels to feet (planner storage)
-    const xM = snappedX / PIXELS_PER_FOOT
-    const yM = snappedY / PIXELS_PER_FOOT
+    const { x: xM, y: yM } = pointerToTopLeftFeet(
+      e.clientX,
+      e.clientY,
+      canvasRef.current,
+      roomDimensions.width,
+      roomDimensions.depth,
+      draggedAsset.width,
+      draggedAsset.depth
+    )
+    const cxM = xM + draggedAsset.width / 2
+    const cyM = yM + draggedAsset.depth / 2
 
     // If dropping a place-on-table asset (e.g. vase), check if drop is inside a table
     let placedOnTable: Asset | null = null
@@ -561,8 +611,8 @@ const FloorPlanner = () => {
         if (a.file !== 'asset_table.glb') continue
         const halfW = draggedAsset.width / 2
         const halfD = draggedAsset.depth / 2
-        const dropCenterX = xM
-        const dropCenterY = yM
+        const dropCenterX = cxM
+        const dropCenterY = cyM
         if (
           dropCenterX - halfW >= a.x &&
           dropCenterX + halfW <= a.x + a.width &&
@@ -578,8 +628,8 @@ const FloorPlanner = () => {
     if (placedOnTable) {
       const tableCenterX = placedOnTable.x + placedOnTable.width / 2
       const tableCenterY = placedOnTable.y + placedOnTable.depth / 2
-      const offsetX = xM - tableCenterX
-      const offsetY = yM - tableCenterY
+      const offsetX = cxM - tableCenterX
+      const offsetY = cyM - tableCenterY
       const newAsset: Asset = {
         id: `placed-${Date.now()}`,
         type: draggedAsset.type,
@@ -684,8 +734,10 @@ const FloorPlanner = () => {
     y: number,
     width: number,
     depth: number,
-    layer?: AssetLayer
+    layer?: AssetLayer,
+    assetList?: Asset[]
   ): boolean => {
+    const others = assetList ?? placedAssets
     // Small gap (5cm) so assets can be placed close; set to 0 for touching
     const spacing = 0.05
 
@@ -708,7 +760,7 @@ const FloorPlanner = () => {
     const newTop = y - spacing / 2
     const newBottom = y + depth + spacing / 2
 
-    for (const asset of placedAssets) {
+    for (const asset of others) {
       if (excludeId && asset.id === excludeId) continue
       // Only collide with same layer
       const assetLayer = getAssetLayer(asset)
@@ -731,8 +783,7 @@ const FloorPlanner = () => {
   const checkAssetWithinWalls = (assetX: number, assetY: number, assetWidth: number, assetDepth: number): boolean => {
     // If no walls defined, prevent placement (must have bounding walls)
     if (walls.length === 0) return false
-    
-    const MIN_WALL_DISTANCE = 0.15 // ~2 in from walls in feet
+
     const assetRight = assetX + assetWidth
     const assetBottom = assetY + assetDepth
     
@@ -758,13 +809,12 @@ const FloorPlanner = () => {
       maxY = Math.max(maxY, y1M, y2M)
     })
     
-    // Asset must be within wall bounds with minimum clearance
-    const isWithinBounds = 
-      assetX >= minX + MIN_WALL_DISTANCE &&
-      assetRight <= maxX - MIN_WALL_DISTANCE &&
-      assetY >= minY + MIN_WALL_DISTANCE &&
-      assetBottom <= maxY - MIN_WALL_DISTANCE
-    
+    const isWithinBounds =
+      assetX >= minX &&
+      assetRight <= maxX &&
+      assetY >= minY &&
+      assetBottom <= maxY
+
     return isWithinBounds
   }
 
@@ -1159,7 +1209,7 @@ const FloorPlanner = () => {
                 key={item.file}
                 className="asset-item"
                 draggable
-                onDragStart={(e) => handleDragStart(e, item)}
+                onDragStart={(e) => handleDragStart(e, baseItem)}
                 onMouseEnter={() => { void handleAssetHover(item.file, item.label) }}
                 onMouseLeave={handleAssetHoverLeave}
                 data-layer={item.layer}
