@@ -260,6 +260,14 @@ const FloorPlanner = () => {
     brightness?: number
   } | null>(null)
   const [draggingAssetId, setDraggingAssetId] = useState<string | null>(null)
+  /** Live footprint preview while dragging from the library (HTML5 DnD). */
+  const [dropPreview, setDropPreview] = useState<{
+    x: number
+    y: number
+    width: number
+    depth: number
+    valid: boolean
+  } | null>(null)
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [userAssets, setUserAssets] = useState<UserAsset[]>([])
   const [loadingUserAssets, setLoadingUserAssets] = useState(false)
@@ -550,6 +558,114 @@ const FloorPlanner = () => {
     }
   }, [draggingAssetId, roomDimensions.width, roomDimensions.depth])
 
+  /** Tolerance on room / wall bounds (feet) so float/grid snap does not false-reject. */
+  const PLACEMENT_EPS = 1e-3
+
+  const checkAssetWithinWalls = (
+    assetX: number,
+    assetY: number,
+    assetWidth: number,
+    assetDepth: number
+  ): boolean => {
+    if (walls.length === 0) return false
+
+    const assetRight = assetX + assetWidth
+    const assetBottom = assetY + assetDepth
+
+    let minX = Infinity,
+      maxX = -Infinity
+    let minY = Infinity,
+      maxY = -Infinity
+
+    walls.forEach((wall) => {
+      if (!wall.coordinates) return
+      const [x1, y1, x2, y2] = wall.coordinates
+      const pctX = (val: number) => (val / 100) * roomDimensions.width
+      const pctY = (val: number) => (val / 100) * roomDimensions.depth
+
+      const x1M = pctX(x1)
+      const x2M = pctX(x2)
+      const y1M = pctY(y1)
+      const y2M = pctY(y2)
+
+      minX = Math.min(minX, x1M, x2M)
+      maxX = Math.max(maxX, x1M, x2M)
+      minY = Math.min(minY, y1M, y2M)
+      maxY = Math.max(maxY, y1M, y2M)
+    })
+
+    return (
+      assetX >= minX - PLACEMENT_EPS &&
+      assetRight <= maxX + PLACEMENT_EPS &&
+      assetY >= minY - PLACEMENT_EPS &&
+      assetBottom <= maxY + PLACEMENT_EPS
+    )
+  }
+
+  const getPlacementFailureReason = (
+    excludeId: string | null,
+    x: number,
+    y: number,
+    width: number,
+    depth: number,
+    layer?: AssetLayer,
+    assetList?: Asset[]
+  ): 'room' | 'walls' | 'overlap' | null => {
+    const others = assetList ?? placedAssets
+    const spacing = 0.05
+
+    if (
+      x < -PLACEMENT_EPS ||
+      y < -PLACEMENT_EPS ||
+      x + width > roomDimensions.width + PLACEMENT_EPS ||
+      y + depth > roomDimensions.depth + PLACEMENT_EPS
+    ) {
+      return 'room'
+    }
+
+    if (walls.length > 0 && !checkAssetWithinWalls(x, y, width, depth)) {
+      return 'walls'
+    }
+
+    const newLeft = x - spacing / 2
+    const newRight = x + width + spacing / 2
+    const newTop = y - spacing / 2
+    const newBottom = y + depth + spacing / 2
+
+    for (const asset of others) {
+      if (excludeId && asset.id === excludeId) continue
+      const assetLayer = getAssetLayer(asset)
+      if (layer != null && assetLayer !== layer) continue
+
+      const otherLeft = asset.x - spacing / 2
+      const otherRight = asset.x + asset.width + spacing / 2
+      const otherTop = asset.y - spacing / 2
+      const otherBottom = asset.y + asset.depth + spacing / 2
+
+      if (
+        !(
+          newRight <= otherLeft ||
+          newLeft >= otherRight ||
+          newBottom <= otherTop ||
+          newTop >= otherBottom
+        )
+      ) {
+        return 'overlap'
+      }
+    }
+    return null
+  }
+
+  const checkCollision = (
+    excludeId: string | null,
+    x: number,
+    y: number,
+    width: number,
+    depth: number,
+    layer?: AssetLayer,
+    assetList?: Asset[]
+  ): boolean => getPlacementFailureReason(excludeId, x, y, width, depth, layer, assetList) !== null
+
   const handleDragStart = (
     e: React.DragEvent,
     catalogItem: CatalogItem
@@ -566,6 +682,8 @@ const FloorPlanner = () => {
       placeOnTable: catalogItem.placeOnTable,
       brightness: item.brightness
     })
+    // Required on many browsers or drop never fires (Firefox; some Chromium builds).
+    e.dataTransfer.setData('text/plain', item.file)
     e.dataTransfer.effectAllowed = 'copy'
   }
 
@@ -585,11 +703,21 @@ const FloorPlanner = () => {
       elevation,
       brightness: asset.brightness ?? 1
     })
+    e.dataTransfer.setData(
+      'text/plain',
+      asset.file_path || asset.file_url || `user-${asset.asset_id}`
+    )
     e.dataTransfer.effectAllowed = 'copy'
+  }
+
+  const clearLibraryDragUi = () => {
+    setDropPreview(null)
+    setDraggedAsset(null)
   }
 
   const handleCanvasDrop = (e: React.DragEvent) => {
     e.preventDefault()
+    setDropPreview(null)
     if (!draggedAsset || !canvasRef.current) return
 
     const { x: xM, y: yM } = pointerToTopLeftFeet(
@@ -652,10 +780,23 @@ const FloorPlanner = () => {
       return
     }
 
-    // Same-layer collision only (different layers can share X/Y)
-    if (checkCollision(null, xM, yM, draggedAsset.width, draggedAsset.depth, draggedAsset.layer)) {
-      setMessage({ text: 'Cannot place here: overlaps another asset on this layer or is out of bounds.', type: 'error' })
-      setTimeout(() => setMessage(null), 3000)
+    const blockReason = getPlacementFailureReason(
+      null,
+      xM,
+      yM,
+      draggedAsset.width,
+      draggedAsset.depth,
+      draggedAsset.layer
+    )
+    if (blockReason) {
+      const hint =
+        blockReason === 'room'
+          ? 'extends outside the room — drag closer to the center.'
+          : blockReason === 'walls'
+            ? 'is outside your green wall outline. Use "Add rectangle" for a full room, drag walls to the edges, or use a smaller asset.'
+            : 'overlaps another asset on this layer.'
+      setMessage({ text: `Cannot place here: ${hint}`, type: 'error' })
+      setTimeout(() => setMessage(null), 5000)
       return
     }
 
@@ -681,6 +822,34 @@ const FloorPlanner = () => {
   const handleCanvasDragOver = (e: React.DragEvent) => {
     e.preventDefault()
     e.dataTransfer.dropEffect = 'copy'
+    if (!draggedAsset || !canvasRef.current) {
+      setDropPreview(null)
+      return
+    }
+    const { x, y } = pointerToTopLeftFeet(
+      e.clientX,
+      e.clientY,
+      canvasRef.current,
+      roomDimensions.width,
+      roomDimensions.depth,
+      draggedAsset.width,
+      draggedAsset.depth
+    )
+    const blocked = getPlacementFailureReason(
+      null,
+      x,
+      y,
+      draggedAsset.width,
+      draggedAsset.depth,
+      draggedAsset.layer
+    )
+    setDropPreview({
+      x,
+      y,
+      width: draggedAsset.width,
+      depth: draggedAsset.depth,
+      valid: blocked === null
+    })
   }
 
   const handleAssetDragStart = (assetId: string) => {
@@ -725,97 +894,6 @@ const FloorPlanner = () => {
     })
     if (closestWall && closestDist <= tolerancePx) return closestWall
     return null
-  }
-
-  /** Check collision only with assets on the same layer (different layers can share X/Y). */
-  const checkCollision = (
-    excludeId: string | null,
-    x: number,
-    y: number,
-    width: number,
-    depth: number,
-    layer?: AssetLayer,
-    assetList?: Asset[]
-  ): boolean => {
-    const others = assetList ?? placedAssets
-    // Small gap (5cm) so assets can be placed close; set to 0 for touching
-    const spacing = 0.05
-
-    if (
-      x < 0 ||
-      y < 0 ||
-      x + width > roomDimensions.width ||
-      y + depth > roomDimensions.depth
-    ) {
-      return true
-    }
-
-    if (walls.length > 0) {
-      const assetInWalls = checkAssetWithinWalls(x, y, width, depth)
-      if (!assetInWalls) return true
-    }
-
-    const newLeft = x - spacing / 2
-    const newRight = x + width + spacing / 2
-    const newTop = y - spacing / 2
-    const newBottom = y + depth + spacing / 2
-
-    for (const asset of others) {
-      if (excludeId && asset.id === excludeId) continue
-      // Only collide with same layer
-      const assetLayer = getAssetLayer(asset)
-      if (layer != null && assetLayer !== layer) continue
-
-      const otherLeft = asset.x - spacing / 2
-      const otherRight = asset.x + asset.width + spacing / 2
-      const otherTop = asset.y - spacing / 2
-      const otherBottom = asset.y + asset.depth + spacing / 2
-
-      if (!(newRight <= otherLeft || newLeft >= otherRight ||
-            newBottom <= otherTop || newTop >= otherBottom)) {
-        return true
-      }
-    }
-    return false
-  }
-
-  // Check if asset bounding box is within the walls
-  const checkAssetWithinWalls = (assetX: number, assetY: number, assetWidth: number, assetDepth: number): boolean => {
-    // If no walls defined, prevent placement (must have bounding walls)
-    if (walls.length === 0) return false
-
-    const assetRight = assetX + assetWidth
-    const assetBottom = assetY + assetDepth
-    
-    // Check if asset is within the bounding box formed by walls
-    let minX = Infinity, maxX = -Infinity
-    let minY = Infinity, maxY = -Infinity
-    
-    // Find bounding box of all walls
-    walls.forEach(wall => {
-      if (!wall.coordinates) return
-      const [x1, y1, x2, y2] = wall.coordinates
-      const pctX = (val: number) => (val / 100) * roomDimensions.width
-      const pctY = (val: number) => (val / 100) * roomDimensions.depth
-      
-      const x1M = pctX(x1)
-      const x2M = pctX(x2)
-      const y1M = pctY(y1)
-      const y2M = pctY(y2)
-      
-      minX = Math.min(minX, x1M, x2M)
-      maxX = Math.max(maxX, x1M, x2M)
-      minY = Math.min(minY, y1M, y2M)
-      maxY = Math.max(maxY, y1M, y2M)
-    })
-    
-    const isWithinBounds =
-      assetX >= minX &&
-      assetRight <= maxX &&
-      assetY >= minY &&
-      assetBottom <= maxY
-
-    return isWithinBounds
   }
 
   const handleSave = async () => {
@@ -1210,6 +1288,7 @@ const FloorPlanner = () => {
                 className="asset-item"
                 draggable
                 onDragStart={(e) => handleDragStart(e, baseItem)}
+                onDragEnd={clearLibraryDragUi}
                 onMouseEnter={() => { void handleAssetHover(item.file, item.label) }}
                 onMouseLeave={handleAssetHoverLeave}
                 data-layer={item.layer}
@@ -1262,6 +1341,7 @@ const FloorPlanner = () => {
                   className="asset-item user-asset"
                   draggable
                   onDragStart={(e) => handleDragStartUserAsset(e, asset)}
+                  onDragEnd={clearLibraryDragUi}
                   onMouseEnter={() => {
                     if (filePathForPreview) {
                       void handleAssetHover(filePathForPreview, asset.asset_name)
@@ -1612,6 +1692,11 @@ const FloorPlanner = () => {
             }}
             onDrop={handleCanvasDrop}
             onDragOver={handleCanvasDragOver}
+            onDragLeave={(e) => {
+              const to = e.relatedTarget
+              if (to instanceof Node && (e.currentTarget as HTMLElement).contains(to)) return
+              setDropPreview(null)
+            }}
             onMouseDown={(e) => {
               if (false || draggingAssetId || draggedAsset) return
               if (e.button !== 0) return
@@ -1809,6 +1894,22 @@ const FloorPlanner = () => {
               setDraftWall(null)
             }}
           >
+            {dropPreview && (
+              <div
+                className={`planner-drop-ghost ${dropPreview.valid ? 'planner-drop-ghost--valid' : 'planner-drop-ghost--invalid'}`}
+                style={{
+                  position: 'absolute',
+                  left: dropPreview.x * PIXELS_PER_FOOT,
+                  top: dropPreview.y * PIXELS_PER_FOOT,
+                  width: dropPreview.width * PIXELS_PER_FOOT,
+                  height: dropPreview.depth * PIXELS_PER_FOOT,
+                  zIndex: 40,
+                  pointerEvents: 'none',
+                  boxSizing: 'border-box'
+                }}
+                aria-hidden
+              />
+            )}
             {/* Draw interactive walls */}
             {true &&
               walls.map((wall) => {
@@ -1993,7 +2094,7 @@ const FloorPlanner = () => {
                     onContextMenu={isGhost ? undefined : (e) => handleAssetRightClick(e, asset.id)}
                   >
                     <span className="asset-label">
-                      {asset.type.toUpperCase()} ({asset.width}×{asset.depth}m)
+                      {asset.type.toUpperCase()} ({asset.width}×{asset.depth} {ROOM_LENGTH_UNIT})
                     </span>
                     {!isGhost && (
                       <button

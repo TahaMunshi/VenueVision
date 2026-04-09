@@ -407,6 +407,21 @@
   margin: 0 auto;
 }
 
+/* Drag-from-library preview (HTML5 DnD): green = valid drop, red = collision/out of bounds */
+.planner-drop-ghost {
+  border-radius: 2px;
+  border-width: 2px;
+  border-style: dashed;
+}
+.planner-drop-ghost--valid {
+  border-color: rgba(76, 175, 80, 0.95);
+  background: rgba(76, 175, 80, 0.12);
+}
+.planner-drop-ghost--invalid {
+  border-color: rgba(244, 67, 54, 0.95);
+  background: rgba(244, 67, 54, 0.12);
+}
+
 .placed-asset {
   background-color: #007bff;
   border: 2px solid #000;
