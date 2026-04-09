@@ -826,7 +826,7 @@ const MobileCapture = () => {
   const reviewTotal = progress?.total_walls ?? progress?.walls?.length ?? 0
 
   const segmentsRemaining = Math.max(0, currentRequiredSegments - currentCapturedSegments)
-  const wallLengthM =
+  const wallLengthFt =
     currentWall && typeof currentWall.length === 'number' && currentWall.length > 0
       ? currentWall.length
       : null
@@ -1330,8 +1330,8 @@ const MobileCapture = () => {
           <p className="capture-gallery-hint">
             {currentRequiredSegments > 1 ? (
               <>
-                This wall needs <strong>{currentRequiredSegments}</strong> segment photos (~1 per 10 m
-                {wallLengthM != null ? `; wall ≈ ${wallLengthM} m` : ''}). Select up to{' '}
+                This wall needs <strong>{currentRequiredSegments}</strong> segment photos (~1 per 10 ft
+                {wallLengthFt != null ? `; wall ≈ ${wallLengthFt} ft` : ''}). Select up to{' '}
                 <strong>{segmentsRemaining}</strong> image(s) in order: <strong>left → right</strong>.
               </>
             ) : (

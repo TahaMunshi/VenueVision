@@ -9,18 +9,19 @@ SEQ_PATTERN = re.compile(r"^seq_(\d+)\.jpg$", re.IGNORECASE)
 
 def required_photos_for_wall(wall: Dict) -> int:
     """
-    Photos per wall: 1 for 0-10m, 2 for 10-20m, etc.
-    Rule: ceil(length_m / 10), minimum 1.
+    Photos per wall: 1 for 0-10 ft, 2 for 10-20 ft, etc.
+    Rule: ceil(length_ft / 10), minimum 1.
+    Wall ``length`` is in feet (same units as venue / floor planner).
     """
     import math
     length = wall.get("length")
     if length is None:
         return 1
     try:
-        length_m = float(length)
-        if length_m <= 0:
+        length_ft = float(length)
+        if length_ft <= 0:
             return 1
-        return max(1, int(math.ceil(length_m / 10)))
+        return max(1, int(math.ceil(length_ft / 10)))
     except (TypeError, ValueError):
         return 1
 

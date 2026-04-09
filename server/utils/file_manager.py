@@ -56,7 +56,7 @@ def save_wall_photo(
     target_dir = os.path.join(UPLOAD_ROOT, safe_venue, safe_wall)
     _ensure_directory(target_dir)
 
-    # Multi-segment mode: append seq_02.jpg, seq_03.jpg, etc. (1 pic per 10m rule)
+    # Multi-segment mode: append seq_02.jpg, seq_03.jpg, etc. (1 pic per 10 ft rule)
     seq_num = _next_sequence_number(target_dir)
     filename = f"seq_{seq_num:02d}.jpg"
     file_path = os.path.join(target_dir, filename)
