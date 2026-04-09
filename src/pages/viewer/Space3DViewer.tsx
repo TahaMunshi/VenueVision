@@ -240,6 +240,26 @@ const Space3DViewer = () => {
     // Dynamically load Three.js
     const loadThreeJS = async () => {
       try {
+        /**
+         * Live room size used for all meshes in this init path. Must NOT rely on `dimensions`
+         * from the React render closure — `setDimensions` does not update that binding.
+         * Asset placement uses API layout dims; walls/floor/planes must use the same values.
+         */
+        let sceneDims = {
+          width: dimensions.width,
+          height: dimensions.height,
+          depth: dimensions.depth
+        }
+        const applyLayoutDimensions = (d: { width?: number; height?: number; depth?: number } | undefined) => {
+          if (!d) return
+          const w = Number(d.width)
+          const h = Number(d.height)
+          const dep = Number(d.depth)
+          if (!Number.isFinite(w) || !Number.isFinite(h) || !Number.isFinite(dep)) return
+          sceneDims = { width: w, height: h, depth: dep }
+          setDimensions({ width: w, height: h, depth: dep })
+        }
+
         // Fetch wall images and layout (for materials / generated glb)
         let wallImageUrls: { [key: string]: string } = {}
         let generatedGlb: string | null = null
@@ -258,13 +278,13 @@ const Space3DViewer = () => {
           const layoutResponse = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/layout`, {
             headers: getAuthHeaders()
           })
-          const layoutData = await layoutResponse.json()
-          materialSettingsRef.current = getLayoutMaterials(layoutData)
-          if (layoutData.status === 'success' && layoutData.generated_glb) {
-            generatedGlb = `${API_BASE_URL}${layoutData.generated_glb}`
+          const bootstrapLayout = await layoutResponse.json()
+          materialSettingsRef.current = getLayoutMaterials(bootstrapLayout)
+          if (bootstrapLayout.status === 'success' && bootstrapLayout.generated_glb) {
+            generatedGlb = `${API_BASE_URL}${bootstrapLayout.generated_glb}`
           }
-          if (layoutData.status === 'success' && layoutData.dimensions) {
-            setDimensions(layoutData.dimensions)
+          if (bootstrapLayout.status === 'success' && bootstrapLayout.dimensions) {
+            applyLayoutDimensions(bootstrapLayout.dimensions)
           }
         } catch (err) {
           console.warn('[Space3DViewer] Failed to fetch layout for GLB info:', err)
@@ -283,7 +303,7 @@ const Space3DViewer = () => {
         sceneRef.current = scene
 
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000)
-        camera.position.set(0, dimensions.height / 2, dimensions.depth + 5)
+        camera.position.set(0, sceneDims.height / 2, sceneDims.depth + 5)
         cameraRef.current = camera
 
         const renderer = new THREE.WebGLRenderer({ antialias: true })
@@ -297,7 +317,7 @@ const Space3DViewer = () => {
         rendererRef.current = renderer
 
         const controls = new THREE.OrbitControls(camera, renderer.domElement)
-        controls.target.set(0, dimensions.height / 2, 0)
+        controls.target.set(0, sceneDims.height / 2, 0)
         controls.enableDamping = true
         controls.dampingFactor = 0.05
         controlsRef.current = controls
@@ -332,7 +352,7 @@ const Space3DViewer = () => {
             floorPlaneRef.current.material?.dispose()
             floorPlaneRef.current = null
           }
-          const floorGeo = new THREE.PlaneGeometry(dimensions.width, dimensions.depth)
+          const floorGeo = new THREE.PlaneGeometry(sceneDims.width, sceneDims.depth)
           const floorTexture = await getFloorOrCeilingTexture(
             THREE,
             textureLoader,
@@ -348,7 +368,7 @@ const Space3DViewer = () => {
           })
           const plane = new THREE.Mesh(floorGeo, floorMat)
           plane.rotation.x = -Math.PI / 2
-          plane.position.y = floorContactY(dimensions.height)
+          plane.position.y = floorContactY(sceneDims.height)
           plane.renderOrder = 1
           scene.add(plane)
           floorPlaneRef.current = plane
@@ -371,7 +391,7 @@ const Space3DViewer = () => {
             ceilingPlaneRef.current.material?.dispose()
             ceilingPlaneRef.current = null
           }
-          const ceilingGeo = new THREE.PlaneGeometry(dimensions.width, dimensions.depth)
+          const ceilingGeo = new THREE.PlaneGeometry(sceneDims.width, sceneDims.depth)
           const ceilingTexture = await getFloorOrCeilingTexture(
             THREE,
             textureLoader,
@@ -387,7 +407,7 @@ const Space3DViewer = () => {
           })
           const plane = new THREE.Mesh(ceilingGeo, ceilingMat)
           plane.rotation.x = -Math.PI / 2
-          plane.position.y = ceilingContactY(dimensions.height)
+          plane.position.y = ceilingContactY(sceneDims.height)
           plane.renderOrder = 0
           scene.add(plane)
           ceilingPlaneRef.current = plane
@@ -396,11 +416,11 @@ const Space3DViewer = () => {
         // Optional: Add visible floor grid at actual floor level for debugging
         // Uncomment these lines if you want to see the floor plane
         /*
-        const floorGrid = new THREE.GridHelper(Math.max(dimensions.width, dimensions.depth) * 2, 20, 0x00ff00, 0x444444)
-        floorGrid.position.y = -dimensions.height / 2
+        const floorGrid = new THREE.GridHelper(Math.max(sceneDims.width, sceneDims.depth) * 2, 20, 0x00ff00, 0x444444)
+        floorGrid.position.y = -sceneDims.height / 2
         scene.add(floorGrid)
         
-        const floorPlaneGeometry = new THREE.PlaneGeometry(dimensions.width * 2, dimensions.depth * 2)
+        const floorPlaneGeometry = new THREE.PlaneGeometry(sceneDims.width * 2, sceneDims.depth * 2)
         const floorPlaneMaterial = new THREE.MeshBasicMaterial({ 
           color: 0xff0000, 
           opacity: 0.3, 
@@ -409,7 +429,7 @@ const Space3DViewer = () => {
         })
         const floorPlane = new THREE.Mesh(floorPlaneGeometry, floorPlaneMaterial)
         floorPlane.rotation.x = -Math.PI / 2
-        floorPlane.position.y = -dimensions.height / 2
+        floorPlane.position.y = -sceneDims.height / 2
         scene.add(floorPlane)
         */
 
@@ -495,6 +515,7 @@ const Space3DViewer = () => {
           .then(res => res.json())
           .then(async (data) => {
             layoutData = data
+            applyLayoutDimensions(data.dimensions)
 
             if (!data.walls || data.walls.length === 0) {
               await createRoom()
@@ -594,7 +615,7 @@ const Space3DViewer = () => {
           ]
           materialsRef.current = currentMaterials
 
-          const geometry = new THREE.BoxGeometry(dimensions.width, dimensions.height, dimensions.depth)
+          const geometry = new THREE.BoxGeometry(sceneDims.width, sceneDims.height, sceneDims.depth)
           const roomMesh = new THREE.Mesh(geometry, currentMaterials)
           roomMeshRef.current = roomMesh
           scene.add(roomMesh)
@@ -604,7 +625,7 @@ const Space3DViewer = () => {
         const create3DWalls = (wallsData: any[]) => {
           if (!wallsData || wallsData.length === 0) return
 
-          const wallHeight = dimensions.height
+          const wallHeight = sceneDims.height
           const wallThickness = 0.05 // Ultra-thin walls (5cm) to eliminate gaps between connected walls
 
           wallsData.forEach((wall: any, idx: number) => {
@@ -620,10 +641,10 @@ const Space3DViewer = () => {
             // 3D World: origin at center, z increases from back to front
             // Conversion: world = (normalized / 100) * dimension - dimension/2
             
-            const x1World = (x1Norm / 100) * dimensions.width - dimensions.width / 2
-            const z1World = (y1Norm / 100) * dimensions.depth - dimensions.depth / 2
-            const x2World = (x2Norm / 100) * dimensions.width - dimensions.width / 2
-            const z2World = (y2Norm / 100) * dimensions.depth - dimensions.depth / 2
+            const x1World = (x1Norm / 100) * sceneDims.width - sceneDims.width / 2
+            const z1World = (y1Norm / 100) * sceneDims.depth - sceneDims.depth / 2
+            const x2World = (x2Norm / 100) * sceneDims.width - sceneDims.width / 2
+            const z2World = (y2Norm / 100) * sceneDims.depth - sceneDims.depth / 2
 
             // Calculate wall vector
             const dx = x2World - x1World
@@ -677,17 +698,13 @@ const Space3DViewer = () => {
             // Store layout data - it will be used once textures are loaded
             layoutData = data
             materialSettingsRef.current = getLayoutMaterials(data)
+            applyLayoutDimensions(data.dimensions)
 
             if (data.status === 'success' && data.assets && data.assets.length > 0) {
-              // Update room dimensions if provided
-              if (data.dimensions) {
-                setDimensions(data.dimensions)
-              }
-              
               const gltfLoader = new THREE.GLTFLoader()
-              const layoutW = data.dimensions?.width || dimensions.width
-              const layoutD = data.dimensions?.depth || dimensions.depth
-              const layoutH = data.dimensions?.height || dimensions.height
+              const layoutW = data.dimensions?.width ?? sceneDims.width
+              const layoutD = data.dimensions?.depth ?? sceneDims.depth
+              const layoutH = data.dimensions?.height ?? sceneDims.height
 
               layoutDataRef.current = {
                 layoutDimensions: { width: layoutW, height: layoutH, depth: layoutD },
