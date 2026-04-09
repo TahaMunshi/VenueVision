@@ -4,8 +4,11 @@
  */
 export const ROOM_LENGTH_UNIT = 'ft' as const
 
-/** Canvas scale: one foot spans this many CSS pixels on the floor planner. */
-export const PIXELS_PER_FOOT = 15
+/**
+ * Fallback planner scale before the layout viewport is measured, and when the viewport is too small.
+ * The live floor planner uses **fit-to-viewport** scaling; see `FloorPlanner.tsx`.
+ */
+export const PIXELS_PER_FOOT = 40
 
 /** Snap grid: quarter-foot steps on the planner (convert to pixels). */
 export const GRID_STEP_FT = 0.25

@@ -10,6 +10,14 @@ import {
   ROOM_LENGTH_UNIT,
 } from '../../constants/roomUnits'
 
+/** Room footprint must fit inside the viewport (padding + border); keep below 1 to avoid sub-pixel overflow. */
+const PLANNER_FIT_FILL = 0.94
+const PLANNER_VIEWPORT_PAD_PX = 16
+/** If the “fit” scale is tinier than this, keep this minimum (viewport will scroll — rare for huge rooms). */
+const PLANNER_MIN_PPF = 6
+/** Must match `.floor-plan-canvas` border width; border is outside content-box width/height. */
+const PLANNER_CANVAS_BORDER_PX = 3
+
 /** Three vertical layers: floor (rugs/carpets), surface (middle: furniture + tabletop), ceiling (lights). */
 export type AssetLayer = 'floor' | 'surface' | 'ceiling'
 
@@ -274,6 +282,8 @@ const FloorPlanner = () => {
   const [sidebarWidth, setSidebarWidth] = useState(250)
   const [isResizing, setIsResizing] = useState(false)
   const sidebarRef = useRef<HTMLDivElement>(null)
+  const planningViewportRef = useRef<HTMLDivElement>(null)
+  const [viewportSize, setViewportSize] = useState({ w: 0, h: 0 })
   const previewContainerRef = useRef<HTMLDivElement>(null)
   const previewLoadTokenRef = useRef(0)
   const previewScriptsPromiseRef = useRef<Promise<void> | null>(null)
@@ -455,6 +465,19 @@ const FloorPlanner = () => {
       document.body.style.userSelect = ''
     }
   }, [isResizing, sidebarWidth])
+
+  useEffect(() => {
+    const el = planningViewportRef.current
+    if (!el) return
+    const ro = new ResizeObserver((entries) => {
+      const target = entries[0]?.target as HTMLElement | undefined
+      if (!target) return
+      // clientWidth/clientHeight match the box we fit into (includes padding, excludes scrollbar).
+      setViewportSize({ w: Math.round(target.clientWidth), h: Math.round(target.clientHeight) })
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   // Keyboard shortcuts: Delete selected wall, Escape to deselect, etc.
   useEffect(() => {
@@ -1244,15 +1267,36 @@ const FloorPlanner = () => {
     return wrapper
   }
 
-  const canvasWidthPx = roomDimensions.width * PIXELS_PER_FOOT
-  const canvasHeightPx = roomDimensions.depth * PIXELS_PER_FOOT
+  const rwFt = roomDimensions.width
+  const rdFt = roomDimensions.depth
+  let displayPixelsPerFoot = PIXELS_PER_FOOT
+  let canvasWidthPx = Math.max(1, Math.floor(rwFt * PIXELS_PER_FOOT))
+  let canvasHeightPx = Math.max(1, Math.floor(rdFt * PIXELS_PER_FOOT))
+
+  if (Number.isFinite(rwFt) && Number.isFinite(rdFt) && rwFt > 0 && rdFt > 0) {
+    const borderOut = PLANNER_CANVAS_BORDER_PX * 2
+    const vw = Math.max(0, viewportSize.w - PLANNER_VIEWPORT_PAD_PX * 2 - borderOut)
+    const vh = Math.max(0, viewportSize.h - PLANNER_VIEWPORT_PAD_PX * 2 - borderOut)
+    if (vw >= 64 && vh >= 64) {
+      const fitPpf = Math.min(vw / rwFt, vh / rdFt) * PLANNER_FIT_FILL
+      if (Number.isFinite(fitPpf) && fitPpf > 0) {
+        const ppf = Math.max(PLANNER_MIN_PPF, fitPpf)
+        // Floor — rounding up made the canvas slightly larger than the panel (border + sub-pixel).
+        canvasWidthPx = Math.max(1, Math.floor(rwFt * ppf))
+        canvasHeightPx = Math.max(1, Math.floor(rdFt * ppf))
+        displayPixelsPerFoot = Math.min(canvasWidthPx / rwFt, canvasHeightPx / rdFt)
+      }
+    }
+  }
+  const pxPerFootX = rwFt > 0 ? canvasWidthPx / rwFt : displayPixelsPerFoot
+  const pxPerFootY = rdFt > 0 ? canvasHeightPx / rdFt : displayPixelsPerFoot
 
   return (
     <div className="floor-planner-container">
       <PageNavBar variant="dark" venueId={venueId} title="2D floor planner" backLabel="Back" />
       <div className="planner-subheader">
         <p className="planner-subheader-line">
-          Venue: {venueName || venueId} — room {roomDimensions.width}×{roomDimensions.depth} {ROOM_LENGTH_UNIT} (1 {ROOM_LENGTH_UNIT} = {PIXELS_PER_FOOT}px)
+          Venue: {venueName || venueId} — room {roomDimensions.width}×{roomDimensions.depth} {ROOM_LENGTH_UNIT} (scaled to panel: ~{displayPixelsPerFoot.toFixed(1)} px/{ROOM_LENGTH_UNIT})
         </p>
         <details className="planner-tips">
           <summary>Quick tips</summary>
@@ -1641,7 +1685,7 @@ const FloorPlanner = () => {
         <div className="planning-area">
           <div className="controls-bar">
             <span className="controls-bar-info">
-              Room: {roomDimensions.width}×{roomDimensions.depth}×{roomDimensions.height} {ROOM_LENGTH_UNIT} (1 {ROOM_LENGTH_UNIT} = {PIXELS_PER_FOOT}px) | Floor: {materials.floor.type} | Assets: {placedAssets.length}
+              Room: {roomDimensions.width}×{roomDimensions.depth}×{roomDimensions.height} {ROOM_LENGTH_UNIT} (~{displayPixelsPerFoot.toFixed(1)} px/{ROOM_LENGTH_UNIT}) | Floor: {materials.floor.type} | Assets: {placedAssets.length}
             </span>
             <div className="view-mode-toggle" role="group" aria-label="Layer view mode">
               <button
@@ -1678,6 +1722,7 @@ const FloorPlanner = () => {
               </button>
             </div>
           </div>
+          <div ref={planningViewportRef} className="floor-plan-viewport">
           <div
             ref={canvasRef}
             className="floor-plan-canvas"
@@ -1686,8 +1731,8 @@ const FloorPlanner = () => {
               height: `${canvasHeightPx}px`,
               background: 'transparent',
               backgroundImage:
-                `repeating-linear-gradient(0deg, rgba(255,255,255,0.06) 0, rgba(255,255,255,0.06) 1px, transparent 1px, transparent ${PIXELS_PER_FOOT}px),` +
-                `repeating-linear-gradient(90deg, rgba(255,255,255,0.06) 0, rgba(255,255,255,0.06) 1px, transparent 1px, transparent ${PIXELS_PER_FOOT}px)`,
+                `repeating-linear-gradient(0deg, rgba(255,255,255,0.06) 0, rgba(255,255,255,0.06) 1px, transparent 1px, transparent ${pxPerFootY}px),` +
+                `repeating-linear-gradient(90deg, rgba(255,255,255,0.06) 0, rgba(255,255,255,0.06) 1px, transparent 1px, transparent ${pxPerFootX}px)`,
               border: 'none'
             }}
             onDrop={handleCanvasDrop}
@@ -1749,8 +1794,8 @@ const FloorPlanner = () => {
                 return
               }
 
-              const xM = xPx / PIXELS_PER_FOOT
-              const yM = yPx / PIXELS_PER_FOOT
+              const xM = xPx / pxPerFootX
+              const yM = yPx / pxPerFootY
               setIsDrawingWall(true)
               setDraftWall({ x1: xM, y1: yM, x2: xM, y2: yM })
               setSelectedWallId(null)
@@ -1850,8 +1895,8 @@ const FloorPlanner = () => {
               }
 
               if (isDrawingWall && draftWall) {
-                const xM = xPx / PIXELS_PER_FOOT
-                const yM = yPx / PIXELS_PER_FOOT
+                const xM = xPx / pxPerFootX
+                const yM = yPx / pxPerFootY
                 setDraftWall({ ...draftWall, x2: xM, y2: yM })
               }
             }}
@@ -1899,10 +1944,10 @@ const FloorPlanner = () => {
                 className={`planner-drop-ghost ${dropPreview.valid ? 'planner-drop-ghost--valid' : 'planner-drop-ghost--invalid'}`}
                 style={{
                   position: 'absolute',
-                  left: dropPreview.x * PIXELS_PER_FOOT,
-                  top: dropPreview.y * PIXELS_PER_FOOT,
-                  width: dropPreview.width * PIXELS_PER_FOOT,
-                  height: dropPreview.depth * PIXELS_PER_FOOT,
+                  left: dropPreview.x * pxPerFootX,
+                  top: dropPreview.y * pxPerFootY,
+                  width: dropPreview.width * pxPerFootX,
+                  height: dropPreview.depth * pxPerFootY,
                   zIndex: 40,
                   pointerEvents: 'none',
                   boxSizing: 'border-box'
@@ -2023,10 +2068,10 @@ const FloorPlanner = () => {
 
             {true && draftWall && (
               (() => {
-                const x1Px = draftWall.x1 * PIXELS_PER_FOOT
-                const y1Px = draftWall.y1 * PIXELS_PER_FOOT
-                const x2Px = draftWall.x2 * PIXELS_PER_FOOT
-                const y2Px = draftWall.y2 * PIXELS_PER_FOOT
+                const x1Px = draftWall.x1 * pxPerFootX
+                const y1Px = draftWall.y1 * pxPerFootY
+                const x2Px = draftWall.x2 * pxPerFootX
+                const y2Px = draftWall.y2 * pxPerFootY
                 const dx = x2Px - x1Px
                 const dy = y2Px - y1Px
                 const lengthPx = Math.sqrt(dx * dx + dy * dy)
@@ -2064,10 +2109,10 @@ const FloorPlanner = () => {
               })
               const baseZ = 20
               return sorted.map((asset, index) => {
-                const widthPx = asset.width * PIXELS_PER_FOOT
-                const heightPx = asset.depth * PIXELS_PER_FOOT
-                const leftPx = asset.x * PIXELS_PER_FOOT
-                const topPx = asset.y * PIXELS_PER_FOOT
+                const widthPx = asset.width * pxPerFootX
+                const heightPx = asset.depth * pxPerFootY
+                const leftPx = asset.x * pxPerFootX
+                const topPx = asset.y * pxPerFootY
                 const layer = getAssetLayer(asset)
                 const elevation = getAssetElevation(asset, roomDimensions.height)
                 const isGhost =
@@ -2111,6 +2156,7 @@ const FloorPlanner = () => {
                 )
               })
             })()}
+          </div>
           </div>
         </div>
       </div>

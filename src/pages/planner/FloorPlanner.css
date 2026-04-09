@@ -1,5 +1,11 @@
 .floor-planner-container {
   min-height: 100vh;
+  height: 100vh;
+  max-height: 100vh;
+  min-height: 100dvh;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
   background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
   color: #fff;
   display: flex;
@@ -95,6 +101,7 @@
 .planner-content {
   display: flex;
   flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -344,10 +351,24 @@
 
 .planning-area {
   flex: 1;
-  padding: 20px;
+  min-height: 0;
+  padding: 16px 20px 20px;
   display: flex;
   flex-direction: column;
-  overflow: auto;
+  overflow: hidden;
+}
+
+/* Region used to measure fit; canvas stays inside — no inner scroll so the grid is never clipped. */
+.floor-plan-viewport {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.18);
 }
 
 .controls-bar {
