@@ -1,5 +1,6 @@
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, jsonify, send_from_directory, request
 from flask_cors import CORS
+from flask_compress import Compress
 import sys
 import os
 
@@ -43,9 +44,23 @@ def create_app():
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     client_dist_folder = os.path.abspath(os.path.join(BASE_DIR, '..', 'dist'))
 
-    # Configure Flask to serve static files from the server/static directory
     app = Flask(__name__, static_folder='static', static_url_path='/static')
-    CORS(app) 
+    CORS(app)
+
+    # Gzip/deflate compression for responses (including GLB model files)
+    app.config['COMPRESS_MIMETYPES'] = [
+        'text/html', 'text/css', 'text/xml', 'text/javascript',
+        'application/json', 'application/javascript',
+        'application/octet-stream', 'model/gltf-binary',
+    ]
+    app.config['COMPRESS_MIN_SIZE'] = 512
+    Compress(app)
+
+    @app.after_request
+    def add_cache_headers(response):
+        if request.path.startswith('/static/'):
+            response.headers['Cache-Control'] = 'public, max-age=86400'
+        return response
 
     # Register the Blueprint for API routes
     app.register_blueprint(api_bp, url_prefix='/api/v1')
