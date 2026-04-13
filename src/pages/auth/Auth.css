@@ -58,6 +58,36 @@
   margin: 0;
 }
 
+.role-toggle {
+  display: flex;
+  gap: 0;
+  margin-bottom: 20px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 2px solid #e2e8f0;
+}
+
+.role-toggle__btn {
+  flex: 1;
+  padding: 12px;
+  border: none;
+  background: #f7fafc;
+  font-size: 14px;
+  font-weight: 600;
+  color: #718096;
+  cursor: pointer;
+  transition: all 0.25s;
+}
+
+.role-toggle__btn--active {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+}
+
+.role-toggle__btn:not(.role-toggle__btn--active):hover {
+  background: #edf2f7;
+}
+
 .auth-form {
   display: flex;
   flex-direction: column;

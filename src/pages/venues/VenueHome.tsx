@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, Link } from 'react-router-dom'
+import { useAuth } from '../../context/AuthContext'
 import './VenueHome.css'
 import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
 import PageNavBar from '../../components/PageNavBar'
 
 interface Venue {
   venue_id: number
+  user_id?: number
   venue_identifier: string
   venue_name: string
   width: number
@@ -62,6 +64,7 @@ function computeWorkflowSteps(
 const VenueHome = () => {
   const { venueId } = useParams<{ venueId: string }>()
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [venue, setVenue] = useState<Venue | null>(null)
   const [loading, setLoading] = useState(true)
   const [deletingWallImages, setDeletingWallImages] = useState(false)
@@ -211,6 +214,17 @@ const VenueHome = () => {
       <div className="venue-home-meta">
         <p className="venue-home-subtitle">{venue.venue_identifier}</p>
       </div>
+
+      {user?.role === 'vendor' &&
+        venue.user_id != null &&
+        user.user_id === venue.user_id &&
+        venue.venue_id != null && (
+          <div className="venue-home-vendor-bar">
+            <Link className="venue-home-vendor-edit" to={`/vendor/venues/${venue.venue_id}/edit`}>
+              Edit description, pricing, packages &amp; floor plan setup
+            </Link>
+          </div>
+        )}
 
       <div className="venue-home-content">
         {/* Recommended path + primary CTA */}

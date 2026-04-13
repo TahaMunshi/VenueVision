@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ViewModeMenu from './ViewModeMenu'
+import { useAuth } from '../context/AuthContext'
 import './PageNavBar.css'
 
 export type PageNavBarVariant = 'light' | 'dark'
@@ -33,6 +34,7 @@ export default function PageNavBar({
   showLayoutMenu = true,
 }: PageNavBarProps) {
   const navigate = useNavigate()
+  const { user } = useAuth()
 
   const handleBack = () => {
     if (backTo) {
@@ -43,16 +45,23 @@ export default function PageNavBar({
   }
 
   const handleHome = () => {
+    if (user?.role === 'vendor') {
+      navigate('/vendor')
+      return
+    }
     if (venueId) {
       navigate(`/venue/${venueId}`)
     } else {
-      navigate('/venues')
+      navigate('/marketplace')
     }
   }
 
-  const homeTitle = venueId
-    ? 'Venue home (dashboard for this venue)'
-    : 'My venues (all venues list)'
+  const homeTitle =
+    user?.role === 'vendor'
+      ? 'Vendor dashboard'
+      : venueId
+        ? 'Venue home (dashboard for this venue)'
+        : 'Marketplace'
 
   return (
     <header

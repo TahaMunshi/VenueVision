@@ -11,18 +11,30 @@ from database import execute_query
 
 def get_venue_by_identifier(venue_identifier: str) -> Optional[dict]:
     """
-    Resolve venue_identifier to venue record.
-    Returns venue dict or None if not found.
+    Resolve venue slug or numeric venue_id (from URL) to venue record.
     """
     venue = execute_query(
         """
-        SELECT venue_id, venue_identifier, user_id, is_public
+        SELECT venue_id, venue_identifier, user_id, is_public, is_published
         FROM venues
         WHERE venue_identifier = %s
         """,
         (venue_identifier,),
         fetch_one=True,
     )
+    if venue:
+        return venue
+    # Links that used numeric id (e.g. /planner/1) still work
+    if venue_identifier and venue_identifier.isdigit():
+        venue = execute_query(
+            """
+            SELECT venue_id, venue_identifier, user_id, is_public, is_published
+            FROM venues
+            WHERE venue_id = %s
+            """,
+            (int(venue_identifier),),
+            fetch_one=True,
+        )
     return venue
 
 
@@ -51,8 +63,10 @@ def require_venue_access(
         if venue["user_id"] != current_user["user_id"]:
             return None, (jsonify({"error": "Not authorized to access this venue"}), 403)
     else:
-        # Read access: owner or public
-        if venue["user_id"] != current_user["user_id"] and not venue.get("is_public"):
+        # Read access: owner, legacy public flag, or marketplace-published venue
+        is_owner = venue["user_id"] == current_user["user_id"]
+        can_public_read = bool(venue.get("is_public") or venue.get("is_published"))
+        if not is_owner and not can_public_read:
             return None, (jsonify({"error": "Not authorized to access this venue"}), 403)
 
     return venue, None

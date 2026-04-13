@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import './AssetLibrary.css'
 import { getApiBaseUrl } from '../../utils/api'
+import { feetToMeters, metersToFeet } from '../../constants/roomUnits'
 import { loadThreeBundle } from '../../utils/threeLoader'
 import PageNavBar from '../../components/PageNavBar'
 
@@ -27,6 +28,8 @@ interface Asset {
   depth_m?: number
   height_m?: number
   brightness?: number
+  /** User: this model is a table surface (props snap on top in planner / 3D). */
+  is_table?: boolean
   created_at: string
   is_preloaded?: boolean
 }
@@ -43,8 +46,12 @@ type BuiltInAssetDef = {
 
 type BuiltInAssetOverride = {
   height_m?: number
+  /** Floor footprint in feet (same keys as floor planner localStorage). */
+  width_ft?: number
+  depth_ft?: number
   asset_layer?: 'floor' | 'surface' | 'ceiling'
   brightness?: number
+  is_table?: boolean
 }
 
 const BUILTIN_ASSETS: BuiltInAssetDef[] = [
@@ -90,6 +97,17 @@ const buildBuiltInAssets = (): Asset[] => {
     const override = overrides[item.file] || {}
     const height = override.height_m ?? item.height_m
     const brightness = override.brightness ?? 1
+    const layer = override.asset_layer ?? item.asset_layer
+    const is_table =
+      item.file === 'asset_table.glb' ? true : override.is_table === true ? true : false
+    const width_m =
+      typeof override.width_ft === 'number' && override.width_ft > 0
+        ? feetToMeters(override.width_ft)
+        : item.width_m
+    const depth_m =
+      typeof override.depth_ft === 'number' && override.depth_ft > 0
+        ? feetToMeters(override.depth_ft)
+        : item.depth_m
     return {
       asset_id: item.asset_id,
       asset_name: item.asset_name,
@@ -100,11 +118,12 @@ const buildBuiltInAssets = (): Asset[] => {
       file_size_bytes: 0,
       generation_status: 'completed',
       generation_error: null,
-      asset_layer: override.asset_layer ?? item.asset_layer,
-      width_m: item.width_m,
-      depth_m: item.depth_m,
+      asset_layer: layer,
+      width_m,
+      depth_m,
       height_m: height,
       brightness,
+      is_table,
       created_at: new Date(0).toISOString(),
       is_preloaded: true
     }
@@ -137,8 +156,13 @@ const AssetLibrary = () => {
   const [editingAsset, setEditingAsset] = useState<Asset | null>(null)
   const [editHeight, setEditHeight] = useState(1)
   const [editHeightUnit, setEditHeightUnit] = useState<HeightUnit>('ft')
+  /** Floor footprint in meters (shown as width × depth in the UI when layer is floor). */
+  const [editWidthM, setEditWidthM] = useState(1)
+  const [editDepthM, setEditDepthM] = useState(1)
   const [editBrightness, setEditBrightness] = useState(1)
   const [editLayer, setEditLayer] = useState<'floor' | 'surface' | 'ceiling'>('surface')
+  const [editIsTable, setEditIsTable] = useState(false)
+  const [uploadIsTable, setUploadIsTable] = useState(false)
   const [savingEdit, setSavingEdit] = useState(false)
   const [savingBrightness, setSavingBrightness] = useState(false)
 
@@ -197,6 +221,7 @@ const AssetLibrary = () => {
     setPreviewUrls([])
     setError(null)
     setUploadProgress('')
+    setUploadIsTable(false)
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
@@ -263,6 +288,9 @@ const AssetLibrary = () => {
       formData.append('asset_name', assetName || 'Untitled Asset')
       formData.append('asset_layer', assetLayer)
       formData.append('height_m', String(heightM))
+      if (assetLayer === 'surface' && uploadIsTable) {
+        formData.append('is_table', 'true')
+      }
 
       setUploadProgress(
         filesToSend.length > 1
@@ -293,6 +321,7 @@ const AssetLibrary = () => {
         setAssetName('')
         setAssetLayer('surface')
         setHeightM(1)
+        setUploadIsTable(false)
         setShowUploadModal(false)
         if (fileInputRef.current) {
           fileInputRef.current.value = ''
@@ -424,8 +453,11 @@ const AssetLibrary = () => {
   const openEditAsset = (asset: Asset) => {
     setEditingAsset(asset)
     setEditHeight(asset.height_m ?? 1)
+    setEditWidthM(asset.width_m ?? 1)
+    setEditDepthM(asset.depth_m ?? 1)
     setEditBrightness(asset.brightness ?? 1)
     setEditLayer((asset.asset_layer as 'floor' | 'surface' | 'ceiling') ?? 'surface')
+    setEditIsTable(Boolean(asset.is_table))
   }
 
   const handleSaveAssetEdit = async () => {
@@ -435,17 +467,39 @@ const AssetLibrary = () => {
       if (editingAsset.is_preloaded) {
         const overrides = getBuiltInOverrides()
         const fileKey = editingAsset.file_path.replace(/^models\//, '')
-        overrides[fileKey] = {
+        const base: BuiltInAssetOverride = {
           ...(overrides[fileKey] || {}),
-          height_m: editHeight,
           asset_layer: editLayer,
-          brightness: editBrightness
+          brightness: editBrightness,
         }
+        if (editLayer === 'surface') {
+          base.is_table = editIsTable
+        } else {
+          delete base.is_table
+        }
+        if (editLayer === 'floor') {
+          base.width_ft = metersToFeet(editWidthM)
+          base.depth_ft = metersToFeet(editDepthM)
+          base.height_m = editHeight > 0 ? editHeight : editingAsset.height_m ?? 0.02
+        } else {
+          base.height_m = editHeight
+          delete base.width_ft
+          delete base.depth_ft
+        }
+        overrides[fileKey] = base
         setBuiltInOverrides(overrides)
-        setAssets(prev =>
-          prev.map(a =>
+        setAssets((prev) =>
+          prev.map((a) =>
             a.asset_id === editingAsset.asset_id
-              ? { ...a, height_m: editHeight, asset_layer: editLayer, brightness: editBrightness }
+              ? {
+                  ...a,
+                  height_m: base.height_m ?? a.height_m,
+                  width_m: editLayer === 'floor' ? editWidthM : a.width_m,
+                  depth_m: editLayer === 'floor' ? editDepthM : a.depth_m,
+                  asset_layer: editLayer,
+                  brightness: editBrightness,
+                  is_table: editLayer === 'surface' && editIsTable,
+                }
               : a
           )
         )
@@ -453,17 +507,25 @@ const AssetLibrary = () => {
         return
       }
       const token = localStorage.getItem('token')
+      const body: Record<string, unknown> = {
+        asset_layer: editLayer,
+        brightness: editBrightness,
+        is_table: editLayer === 'surface' ? editIsTable : false,
+      }
+      if (editLayer === 'floor') {
+        body.width_m = editWidthM
+        body.depth_m = editDepthM
+        body.height_m = editHeight > 0 ? editHeight : editingAsset.height_m ?? 0.02
+      } else {
+        body.height_m = editHeight
+      }
       const res = await fetch(`${API_BASE_URL}/api/v1/assets/detail/${editingAsset.asset_id}`, {
         method: 'PATCH',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          height_m: editHeight,
-          asset_layer: editLayer,
-          brightness: editBrightness
-        })
+        body: JSON.stringify(body)
       })
       if (res.ok) {
         await fetchAssets()
@@ -774,7 +836,11 @@ const AssetLibrary = () => {
                   <label>Category (Layer)</label>
                   <select
                     value={assetLayer}
-                    onChange={(e) => setAssetLayer(e.target.value as 'floor' | 'surface' | 'ceiling')}
+                    onChange={(e) => {
+                      const v = e.target.value as 'floor' | 'surface' | 'ceiling'
+                      setAssetLayer(v)
+                      if (v !== 'surface') setUploadIsTable(false)
+                    }}
                     disabled={uploading}
                   >
                     <option value="floor">Floor (rugs, carpets)</option>
@@ -782,6 +848,20 @@ const AssetLibrary = () => {
                     <option value="ceiling">Ceiling (lights, chandeliers)</option>
                   </select>
                 </div>
+
+                {assetLayer === 'surface' && (
+                  <div className="form-group">
+                    <label className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={uploadIsTable}
+                        onChange={(e) => setUploadIsTable(e.target.checked)}
+                        disabled={uploading}
+                      />
+                      <span>This is a table (small props snap on top in floor plan &amp; 3D)</span>
+                    </label>
+                  </div>
+                )}
 
                 <div className="form-group">
                   <label>Height (object height for true-to-size scaling)</label>
@@ -890,31 +970,106 @@ const AssetLibrary = () => {
                 )}
               </div>
               <div className="modal-body">
-                <p className="modal-description">
-                  Real-world height (feet preferred). Stored in meters for the API; scaled to the room in feet.
-                </p>
-                <div className="form-group">
-                  <label>Height</label>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <input
-                      type="number"
-                      min={editHeightUnit === 'in' ? 1 : 0.1}
-                      step={editHeightUnit === 'in' ? 1 : 0.1}
-                      value={metersToHeight(editHeight, editHeightUnit)}
-                      onChange={(e) => setEditHeight(heightToMeters(parseFloat(e.target.value) || 0, editHeightUnit))}
-                      style={{ flex: '1 1 120px' }}
-                    />
-                    <select
-                      value={editHeightUnit}
-                      onChange={(e) => setEditHeightUnit(e.target.value as HeightUnit)}
-                      style={{ minWidth: 80 }}
-                    >
-                      <option value="ft">ft</option>
-                      <option value="m">m</option>
-                      <option value="in">in</option>
-                    </select>
+                {editLayer === 'floor' ? (
+                  <p className="modal-description">
+                    Floor layer: set the rug or carpet footprint (length and width on the ground). Values are stored in
+                    meters and match the floor planner / 3D viewer. Model thickness stays small so it does not drive
+                    scale.
+                  </p>
+                ) : (
+                  <p className="modal-description">
+                    Real-world height (feet preferred). Stored in meters for the API; scaled to the room in feet.
+                  </p>
+                )}
+                {editLayer === 'floor' ? (
+                  <>
+                    <div className="form-group">
+                      <label>Width (along one edge)</label>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <input
+                          type="number"
+                          min={editHeightUnit === 'in' ? 1 : 0.1}
+                          step={editHeightUnit === 'in' ? 1 : 0.1}
+                          value={metersToHeight(editWidthM, editHeightUnit)}
+                          onChange={(e) =>
+                            setEditWidthM(heightToMeters(parseFloat(e.target.value) || 0, editHeightUnit))
+                          }
+                          style={{ flex: '1 1 120px' }}
+                        />
+                        <select
+                          value={editHeightUnit}
+                          onChange={(e) => setEditHeightUnit(e.target.value as HeightUnit)}
+                          style={{ minWidth: 80 }}
+                        >
+                          <option value="ft">ft</option>
+                          <option value="m">m</option>
+                          <option value="in">in</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="form-group">
+                      <label>Depth (other edge)</label>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <input
+                          type="number"
+                          min={editHeightUnit === 'in' ? 1 : 0.1}
+                          step={editHeightUnit === 'in' ? 1 : 0.1}
+                          value={metersToHeight(editDepthM, editHeightUnit)}
+                          onChange={(e) =>
+                            setEditDepthM(heightToMeters(parseFloat(e.target.value) || 0, editHeightUnit))
+                          }
+                          style={{ flex: '1 1 120px' }}
+                        />
+                        <select
+                          value={editHeightUnit}
+                          onChange={(e) => setEditHeightUnit(e.target.value as HeightUnit)}
+                          style={{ minWidth: 80 }}
+                        >
+                          <option value="ft">ft</option>
+                          <option value="m">m</option>
+                          <option value="in">in</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="form-group">
+                      <label>Thickness (optional, for 3D contact)</label>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <input
+                          type="number"
+                          min={0.01}
+                          step={0.01}
+                          value={metersToHeight(editHeight, editHeightUnit)}
+                          onChange={(e) => setEditHeight(heightToMeters(parseFloat(e.target.value) || 0, editHeightUnit))}
+                          style={{ flex: '1 1 120px' }}
+                        />
+                        <span style={{ fontSize: '0.85rem', color: '#666' }}>{editHeightUnit}</span>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="form-group">
+                    <label>Height</label>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <input
+                        type="number"
+                        min={editHeightUnit === 'in' ? 1 : 0.1}
+                        step={editHeightUnit === 'in' ? 1 : 0.1}
+                        value={metersToHeight(editHeight, editHeightUnit)}
+                        onChange={(e) => setEditHeight(heightToMeters(parseFloat(e.target.value) || 0, editHeightUnit))}
+                        style={{ flex: '1 1 120px' }}
+                      />
+                      <select
+                        value={editHeightUnit}
+                        onChange={(e) => setEditHeightUnit(e.target.value as HeightUnit)}
+                        style={{ minWidth: 80 }}
+                      >
+                        <option value="ft">ft</option>
+                        <option value="m">m</option>
+                        <option value="in">in</option>
+                      </select>
+                    </div>
                   </div>
-                </div>
+                )}
                 <div className="form-group">
                   <label>Brightness</label>
                   <div className="edit-brightness-row">
@@ -952,12 +1107,36 @@ const AssetLibrary = () => {
                 </div>
                 <div className="form-group">
                   <label>Layer</label>
-                  <select value={editLayer} onChange={(e) => setEditLayer(e.target.value as 'floor' | 'surface' | 'ceiling')}>
+                  <select
+                    value={editLayer}
+                    onChange={(e) => {
+                      const next = e.target.value as 'floor' | 'surface' | 'ceiling'
+                      setEditLayer(next)
+                      if (next !== 'surface') setEditIsTable(false)
+                      if (next === 'floor' && editingAsset) {
+                        setEditWidthM(editingAsset.width_m ?? 1)
+                        setEditDepthM(editingAsset.depth_m ?? 1)
+                      }
+                    }}
+                  >
                     <option value="floor">Floor</option>
                     <option value="surface">Surface</option>
                     <option value="ceiling">Ceiling</option>
                   </select>
                 </div>
+                {editLayer === 'surface' && (
+                  <div className="form-group">
+                    <label className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={editIsTable}
+                        onChange={(e) => setEditIsTable(e.target.checked)}
+                        disabled={savingEdit}
+                      />
+                      <span>This is a table (small props snap on top in floor plan &amp; 3D)</span>
+                    </label>
+                  </div>
+                )}
                 <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
                   <button className="generate-button" onClick={handleSaveAssetEdit} disabled={savingEdit}>
                     {savingEdit ? 'Saving...' : 'Save'}

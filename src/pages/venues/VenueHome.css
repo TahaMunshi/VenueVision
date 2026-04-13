@@ -9,6 +9,28 @@
   padding: 4px 20px 0;
 }
 
+.venue-home-vendor-bar {
+  max-width: var(--vv-shell, min(1440px, 96vw));
+  margin: 0 auto;
+  padding: 12px 20px 0;
+}
+
+.venue-home-vendor-edit {
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.venue-home-vendor-edit:hover {
+  filter: brightness(1.06);
+}
+
 .venue-home-header {
   background: var(--vv-glass-bg-raised);
   backdrop-filter: blur(var(--vv-glass-blur)) saturate(var(--vv-glass-saturate));

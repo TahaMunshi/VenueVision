@@ -17,6 +17,8 @@ type Props = {
   className?: string
   /** Tighter padding for mobile capture / small viewports */
   compact?: boolean
+  /** When true, capture links include ?wall= so you return to the same wall. */
+  linkCaptureToWall?: boolean
 }
 
 const stepIndex = (s: GuidedFlowStep) => STEPS.findIndex((x) => x.id === s)
@@ -27,6 +29,7 @@ export default function GuidedFlowStepper({
   active,
   className = '',
   compact = false,
+  linkCaptureToWall = false,
 }: Props) {
   const current = stepIndex(active)
   const canLinkWall = Boolean(wallId)
@@ -34,7 +37,9 @@ export default function GuidedFlowStepper({
   const hrefFor = (step: GuidedFlowStep): string | null => {
     switch (step) {
       case 'capture':
-        return `/capture/${venueId}`
+        return canLinkWall && linkCaptureToWall
+          ? `/capture/${venueId}?wall=${encodeURIComponent(wallId!)}`
+          : `/capture/${venueId}`
       case 'review':
         return canLinkWall ? `/review/${venueId}/${wallId}` : null
       case 'remove':
@@ -85,8 +90,11 @@ export default function GuidedFlowStepper({
           )
         })}
       </ol>
+      <p className="guided-flow-stepper-hint guided-flow-stepper-hint--always">
+        Optional workflow — upload or capture any wall, then open Stitch or Corners when you want.
+      </p>
       {!canLinkWall && current > 0 && (
-        <p className="guided-flow-stepper-hint">Select a wall in capture to open later steps.</p>
+        <p className="guided-flow-stepper-hint">Pick a wall on the capture screen (or wall list) to deep-link later steps.</p>
       )}
     </nav>
   )

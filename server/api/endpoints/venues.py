@@ -76,12 +76,25 @@ def get_venue(current_user, venue_identifier: str):
             (venue_identifier,),
             fetch_one=True
         )
-        
+        if not venue and venue_identifier and str(venue_identifier).isdigit():
+            venue = execute_query(
+                """
+                SELECT v.*, 
+                       (SELECT COUNT(*) FROM venue_walls WHERE venue_id = v.venue_id) as wall_count,
+                       (SELECT COUNT(*) FROM venue_assets WHERE venue_id = v.venue_id) as asset_count
+                FROM venues v
+                WHERE v.venue_id = %s
+                """,
+                (int(venue_identifier),),
+                fetch_one=True,
+            )
+
         if not venue:
             return jsonify({'error': 'Venue not found'}), 404
         
-        # Check if user owns this venue or if it's public
-        if venue['user_id'] != current_user['user_id'] and not venue.get('is_public'):
+        # Owner, legacy public, or marketplace-published
+        is_owner = venue['user_id'] == current_user['user_id']
+        if not is_owner and not venue.get('is_public') and not venue.get('is_published'):
             return jsonify({'error': 'Not authorized to access this venue'}), 403
         
         return jsonify({

@@ -9,6 +9,11 @@ import {
   metersToFeet,
   ROOM_LENGTH_UNIT,
 } from '../../constants/roomUnits'
+import {
+  wantsTableTopDecor,
+  findTableUnderDecorCenter,
+  tableAttachOffsets,
+} from '../../utils/tableSurfaceAttach'
 
 /** Room footprint must fit inside the viewport (padding + border); keep below 1 to avoid sub-pixel overflow. */
 const PLANNER_FIT_FILL = 0.94
@@ -42,6 +47,10 @@ type Asset = {
   height?: number
   /** Brightness multiplier (0.3–2.5, 1 = default). */
   brightness?: number
+  /** When true, 3D viewer places on table top if center is over a table (see ASSET_CATALOG). */
+  placeOnTable?: boolean
+  /** From Asset Library: this footprint is a table surface for snapping smaller props on top. */
+  is_table?: boolean
 }
 
 type UserAsset = {
@@ -56,6 +65,7 @@ type UserAsset = {
   depth_m?: number
   height_m?: number
   brightness?: number
+  is_table?: boolean
 }
 
 /**
@@ -120,11 +130,39 @@ const ASSET_CATALOG: Array<{
   { type: 'chandelier', file: 'chandelier.glb', width: 4, depth: 4, height: 2, label: 'Chandelier (ceiling)', layer: 'ceiling', elevation: 0 },
 ]
 
+/** Tabletop decor: catalog flag, explicit placeOnTable, or small surface footprint (e.g. candle). */
+function wantsTableSurface(asset: Asset): boolean {
+  return wantsTableTopDecor(asset)
+}
+
+function attachDecorToTable(asset: Asset, table: Asset): Asset {
+  const o = tableAttachOffsets(asset, table)
+  return {
+    ...asset,
+    parentAssetId: table.id,
+    offsetX: o.offsetX,
+    offsetY: o.offsetY,
+    x: o.x,
+    y: o.y,
+  }
+}
+
+function detachDecorFromTable(asset: Asset): Asset {
+  const next = { ...asset }
+  delete next.parentAssetId
+  delete next.offsetX
+  delete next.offsetY
+  return next
+}
+
 type CatalogItem = (typeof ASSET_CATALOG)[number]
 type BuiltInAssetOverride = {
   /** Vertical size for scaling built-ins, in feet (legacy key name `height_m` still supported). */
   height_m?: number
   height_ft?: number
+  /** Floor footprint for built-in rug only (feet). */
+  width_ft?: number
+  depth_ft?: number
   asset_layer?: AssetLayer
   brightness?: number
 }
@@ -141,6 +179,15 @@ const getBuiltInOverrides = (): Record<string, BuiltInAssetOverride> => {
 const withCatalogOverrides = (item: CatalogItem): CatalogItem & { brightness: number } => {
   const override = getBuiltInOverrides()[item.file]
   if (!override) return { ...item, brightness: 1 }
+  const isBuiltinRug = item.layer === 'floor' && item.file === 'rug.glb'
+  let width = item.width
+  let depth = item.depth
+  if (isBuiltinRug) {
+    const wf = override.width_ft
+    const df = override.depth_ft
+    if (typeof wf === 'number' && wf > 0) width = wf
+    if (typeof df === 'number' && df > 0) depth = df
+  }
   const targetHeightRaw = override.height_ft ?? override.height_m
   const targetHeight =
     typeof targetHeightRaw === 'number' && targetHeightRaw > 0 ? targetHeightRaw : item.height
@@ -150,12 +197,12 @@ const withCatalogOverrides = (item: CatalogItem): CatalogItem & { brightness: nu
   return {
     ...item,
     height: targetHeight,
-    width: item.width,
-    depth: item.depth,
+    width,
+    depth,
     layer,
     elevation:
       layer === 'ceiling' ? 0 : layer === 'floor' ? 0 : item.elevation * ratio,
-    label: `${item.label.split(' (')[0]} (${item.width.toFixed(2)}×${item.depth.toFixed(2)} ${ROOM_LENGTH_UNIT})`,
+    label: `${item.label.split(' (')[0]} (${width.toFixed(2)}×${depth.toFixed(2)} ${ROOM_LENGTH_UNIT})`,
     brightness: override.brightness ?? 1
   }
 }
@@ -184,6 +231,15 @@ function getAssetElevation(asset: Asset, roomHeightFt: number): number {
   const catalog = ASSET_CATALOG.find((c) => c.file === asset.file)
   if (catalog?.layer === 'ceiling') return Math.max(0, roomHeightFt - 0.5)
   return catalog?.elevation ?? 2.5
+}
+
+/** Rugs/mats/carpets on the floor layer: size by width×depth in the planner/viewer, not by model height. */
+function usesFootprintScaling(asset: Asset): boolean {
+  if (getAssetLayer(asset) !== 'floor') return false
+  const t = String(asset.type ?? '').toLowerCase()
+  const f = String(asset.file ?? '').toLowerCase()
+  if (f === 'rug.glb') return true
+  return /(rug|mat|carpet)/.test(t) || /(rug|mat|carpet)/.test(f)
 }
 
 const LAYER_ORDER: AssetLayer[] = ['floor', 'surface', 'ceiling']
@@ -266,6 +322,8 @@ const FloorPlanner = () => {
     elevation: number
     placeOnTable?: boolean
     brightness?: number
+    /** User-marked table in Asset Library (or built-in table). */
+    isTable?: boolean
   } | null>(null)
   const [draggingAssetId, setDraggingAssetId] = useState<string | null>(null)
   /** Live footprint preview while dragging from the library (HTML5 DnD). */
@@ -279,6 +337,9 @@ const FloorPlanner = () => {
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [userAssets, setUserAssets] = useState<UserAsset[]>([])
   const [loadingUserAssets, setLoadingUserAssets] = useState(false)
+  /** Bumps when built-in rug footprint overrides change in localStorage (re-read labels). */
+  const [builtinOverridesRev, setBuiltinOverridesRev] = useState(0)
+  const [selectedPlacedAssetId, setSelectedPlacedAssetId] = useState<string | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(250)
   const [isResizing, setIsResizing] = useState(false)
   const sidebarRef = useRef<HTMLDivElement>(null)
@@ -310,6 +371,7 @@ const FloorPlanner = () => {
   })
 
   const API_BASE_URL = getApiBaseUrl()
+
   const [isDrawingWall, setIsDrawingWall] = useState(false)
   const [draftWall, setDraftWall] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
   const [selectedWallId, setSelectedWallId] = useState<string | null>(null)
@@ -368,7 +430,10 @@ const FloorPlanner = () => {
         }
         if (data.assets && Array.isArray(data.assets)) {
           setPlacedAssets(
-            (data.assets as Asset[]).map((a) => normalizePlacedAsset(a, dims.width, dims.depth))
+            (data.assets as Asset[]).map((a) => {
+              const n = normalizePlacedAsset(a, dims.width, dims.depth)
+              return wantsTableTopDecor(n) ? { ...n, placeOnTable: true } : n
+            })
           )
         }
       } catch (error) {
@@ -500,6 +565,7 @@ const FloorPlanner = () => {
       if (e.key === 'Escape') {
         e.preventDefault()
         setSelectedWallId(null)
+        setSelectedPlacedAssetId(null)
         setDraggingEndpoint(null)
         setDraggingWallId(null)
         setIsDrawingWall(false)
@@ -568,6 +634,22 @@ const FloorPlanner = () => {
     }
 
     const handleGlobalMouseUp = () => {
+      const id = draggingAssetId
+      if (id) {
+        setPlacedAssets((prev) => {
+          const asset = prev.find((a) => a.id === id)
+          if (!asset || !wantsTableSurface(asset)) return prev
+          const others = prev.filter((a) => a.id !== id)
+          const table = findTableUnderDecorCenter(asset, others)
+          if (table) {
+            return prev.map((a) => (a.id === id ? attachDecorToTable(asset, table) : a))
+          }
+          if (asset.parentAssetId) {
+            return prev.map((a) => (a.id === id ? detachDecorFromTable(asset) : a))
+          }
+          return prev
+        })
+      }
       setDraggingAssetId(null)
     }
 
@@ -659,6 +741,8 @@ const FloorPlanner = () => {
       if (excludeId && asset.id === excludeId) continue
       const assetLayer = getAssetLayer(asset)
       if (layer != null && assetLayer !== layer) continue
+      // Middle/surface layer: same 2D footprint may overlap (e.g. several items on one table).
+      if (layer === 'surface') continue
 
       const otherLeft = asset.x - spacing / 2
       const otherRight = asset.x + asset.width + spacing / 2
@@ -703,7 +787,8 @@ const FloorPlanner = () => {
       layer: item.layer,
       elevation: item.elevation,
       placeOnTable: catalogItem.placeOnTable,
-      brightness: item.brightness
+      brightness: item.brightness,
+      isTable: catalogItem.file === 'asset_table.glb',
     })
     // Required on many browsers or drop never fires (Firefox; some Chromium builds).
     e.dataTransfer.setData('text/plain', item.file)
@@ -724,7 +809,8 @@ const FloorPlanner = () => {
       file: asset.file_path || (asset.file_url?.replace(/^\/static\//, '') ?? ''),
       layer: layer as AssetLayer,
       elevation,
-      brightness: asset.brightness ?? 1
+      brightness: asset.brightness ?? 1,
+      isTable: Boolean(asset.is_table),
     })
     e.dataTransfer.setData(
       'text/plain',
@@ -755,25 +841,31 @@ const FloorPlanner = () => {
     const cxM = xM + draggedAsset.width / 2
     const cyM = yM + draggedAsset.depth / 2
 
-    // If dropping a place-on-table asset (e.g. vase), check if drop is inside a table
+    // Tabletop decor: center over table → parent link (catalog flag or small surface footprint, e.g. candle)
     let placedOnTable: Asset | null = null
-    if (draggedAsset.placeOnTable) {
-      for (const a of placedAssets) {
-        if (a.file !== 'asset_table.glb') continue
-        const halfW = draggedAsset.width / 2
-        const halfD = draggedAsset.depth / 2
-        const dropCenterX = cxM
-        const dropCenterY = cyM
-        if (
-          dropCenterX - halfW >= a.x &&
-          dropCenterX + halfW <= a.x + a.width &&
-          dropCenterY - halfD >= a.y &&
-          dropCenterY + halfD <= a.y + a.depth
-        ) {
-          placedOnTable = a
-          break
-        }
+    if (
+      wantsTableTopDecor({
+        type: draggedAsset.type,
+        file: draggedAsset.file,
+        layer: draggedAsset.layer,
+        width: draggedAsset.width,
+        depth: draggedAsset.depth,
+        placeOnTable: draggedAsset.placeOnTable,
+        is_table: draggedAsset.isTable,
+      })
+    ) {
+      const probe: Asset = {
+        id: '__drop__',
+        type: draggedAsset.type,
+        file: draggedAsset.file,
+        width: draggedAsset.width,
+        depth: draggedAsset.depth,
+        x: xM,
+        y: yM,
+        rotation: 0,
+        is_table: draggedAsset.isTable,
       }
+      placedOnTable = findTableUnderDecorCenter(probe, placedAssets)
     }
 
     if (placedOnTable) {
@@ -796,7 +888,9 @@ const FloorPlanner = () => {
         offsetY,
         layer: draggedAsset.layer,
         elevation: draggedAsset.elevation,
-        brightness: draggedAsset.brightness ?? 1
+        brightness: draggedAsset.brightness ?? 1,
+        placeOnTable: true,
+        is_table: false,
       }
       setPlacedAssets([...placedAssets, newAsset])
       setDraggedAsset(null)
@@ -835,7 +929,19 @@ const FloorPlanner = () => {
       rotation: 0,
       layer: draggedAsset.layer,
       elevation: draggedAsset.elevation,
-      brightness: draggedAsset.brightness ?? 1
+      brightness: draggedAsset.brightness ?? 1,
+      ...(draggedAsset.isTable ? { is_table: true as const } : {}),
+      ...(wantsTableTopDecor({
+        type: draggedAsset.type,
+        file: draggedAsset.file,
+        layer: draggedAsset.layer,
+        width: draggedAsset.width,
+        depth: draggedAsset.depth,
+        placeOnTable: draggedAsset.placeOnTable,
+        is_table: draggedAsset.isTable,
+      })
+        ? { placeOnTable: true as const }
+        : {})
     }
 
     setPlacedAssets([...placedAssets, newAsset])
@@ -875,8 +981,25 @@ const FloorPlanner = () => {
     })
   }
 
-  const handleAssetDragStart = (assetId: string) => {
-    setDraggingAssetId(assetId)
+  const handlePlacedAssetMouseDown = (e: React.MouseEvent, asset: Asset) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    const sx = e.clientX
+    const sy = e.clientY
+    let dragged = false
+    const move = (ev: MouseEvent) => {
+      if (!dragged && Math.hypot(ev.clientX - sx, ev.clientY - sy) > 8) {
+        dragged = true
+        setDraggingAssetId(asset.id)
+      }
+    }
+    const up = () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+      if (!dragged) setSelectedPlacedAssetId(asset.id)
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
   }
 
   const handleAssetRightClick = (e: React.MouseEvent, assetId: string) => {
@@ -887,7 +1010,35 @@ const FloorPlanner = () => {
   }
 
   const handleDeleteAsset = (assetId: string) => {
-    setPlacedAssets(placedAssets.filter(a => a.id !== assetId))
+    setPlacedAssets(placedAssets.filter((a) => a.id !== assetId))
+    setSelectedPlacedAssetId((id) => (id === assetId ? null : id))
+  }
+
+  const persistBuiltinOverride = (file: string, patch: Partial<BuiltInAssetOverride>) => {
+    try {
+      const all = getBuiltInOverrides()
+      all[file] = { ...all[file], ...patch }
+      localStorage.setItem(BUILTIN_OVERRIDES_KEY, JSON.stringify(all))
+      setBuiltinOverridesRev((n) => n + 1)
+    } catch {
+      setMessage({ text: 'Could not save rug size preferences.', type: 'error' })
+      setTimeout(() => setMessage(null), 3000)
+    }
+  }
+
+  const updatePlacedFootprint = (id: string, width: number, depth: number) => {
+    setPlacedAssets((prev) =>
+      prev.map((a) => {
+        if (a.id !== id || !usesFootprintScaling(a)) return a
+        const w = Math.max(GRID_STEP_FT, Math.min(width, roomDimensions.width))
+        const d = Math.max(GRID_STEP_FT, Math.min(depth, roomDimensions.depth))
+        let x = a.x
+        let y = a.y
+        if (x + w > roomDimensions.width) x = Math.max(0, roomDimensions.width - w)
+        if (y + d > roomDimensions.depth) y = Math.max(0, roomDimensions.depth - d)
+        return { ...a, width: w, depth: d, x, y }
+      })
+    )
   }
 
   const hitTestWall = (xPx: number, yPx: number, tolerancePx = 10): WallSpec | null => {
@@ -945,10 +1096,31 @@ const FloorPlanner = () => {
       })
 
       if (response.ok) {
-        setMessage({ text: 'Layout saved! Opening guided tour to capture wall photos...', type: 'success' })
-        setTimeout(() => {
-          navigate(`/capture/${venueId}`)
-        }, 1500)
+        let hasWallPhotos = false
+        try {
+          const wiRes = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/wall-images`, {
+            headers: getAuthHeaders()
+          })
+          if (wiRes.ok) {
+            const wiJson = await wiRes.json()
+            const imgs = wiJson.wall_images as Record<string, string> | undefined
+            if (imgs && typeof imgs === 'object') {
+              hasWallPhotos = Object.keys(imgs).some((k) => Boolean(imgs[k]))
+            }
+          }
+        } catch {
+          /* treat as no photos if check fails */
+        }
+
+        if (hasWallPhotos) {
+          setMessage({ text: 'Layout saved.', type: 'success' })
+          setTimeout(() => setMessage(null), 3000)
+        } else {
+          setMessage({ text: 'Layout saved! Opening guided tour to capture wall photos...', type: 'success' })
+          setTimeout(() => {
+            navigate(`/capture/${venueId}`)
+          }, 1500)
+        }
       } else {
         setMessage({ text: 'Failed to save layout.', type: 'error' })
         setTimeout(() => setMessage(null), 3000)
@@ -1328,7 +1500,7 @@ const FloorPlanner = () => {
               const item = withCatalogOverrides(baseItem)
               return (
               <div
-                key={item.file}
+                key={`${baseItem.file}-${builtinOverridesRev}`}
                 className="asset-item"
                 draggable
                 onDragStart={(e) => handleDragStart(e, baseItem)}
@@ -1507,6 +1679,93 @@ const FloorPlanner = () => {
                 <option value="cool">Cool</option>
               </select>
             </label>
+            {(() => {
+              const rugBase = ASSET_CATALOG.find((c) => c.file === 'rug.glb')
+              if (!rugBase) return null
+              void builtinOverridesRev
+              const disp = withCatalogOverrides(rugBase)
+              return (
+                <div className="rug-footprint-panel">
+                  <h4>Default rug (library)</h4>
+                  <p className="rug-footprint-hint">
+                    Width and depth in {ROOM_LENGTH_UNIT} set the floor footprint for new rugs (2D and 3D). Thin model height is not used for scaling.
+                  </p>
+                  <label className="form-row compact">
+                    <span>Width</span>
+                    <input
+                      type="number"
+                      min={GRID_STEP_FT}
+                      step={0.5}
+                      value={disp.width}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        persistBuiltinOverride('rug.glb', { width_ft: Math.max(GRID_STEP_FT, v) })
+                      }}
+                    />
+                  </label>
+                  <label className="form-row compact">
+                    <span>Depth</span>
+                    <input
+                      type="number"
+                      min={GRID_STEP_FT}
+                      step={0.5}
+                      value={disp.depth}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        persistBuiltinOverride('rug.glb', { depth_ft: Math.max(GRID_STEP_FT, v) })
+                      }}
+                    />
+                  </label>
+                </div>
+              )
+            })()}
+            {(() => {
+              const sel = placedAssets.find((a) => a.id === selectedPlacedAssetId)
+              if (!sel || !usesFootprintScaling(sel)) return null
+              return (
+                <div className="rug-footprint-panel rug-footprint-panel--selected">
+                  <h4>Selected rug / mat</h4>
+                  <p className="rug-footprint-hint">Click empty floor to deselect. Drag the piece to move.</p>
+                  <label className="form-row compact">
+                    <span>Width</span>
+                    <input
+                      type="number"
+                      min={GRID_STEP_FT}
+                      step={0.5}
+                      value={sel.width}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        updatePlacedFootprint(sel.id, v, sel.depth)
+                      }}
+                    />
+                  </label>
+                  <label className="form-row compact">
+                    <span>Depth</span>
+                    <input
+                      type="number"
+                      min={GRID_STEP_FT}
+                      step={0.5}
+                      value={sel.depth}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        updatePlacedFootprint(sel.id, sel.width, v)
+                      }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="action-button secondary"
+                    onClick={() => setSelectedPlacedAssetId(null)}
+                  >
+                    Deselect
+                  </button>
+                </div>
+              )
+            })()}
             <div className="walls-editor">
               <div className="walls-editor-header">
                 <h4>Walls</h4>
@@ -1747,6 +2006,7 @@ const FloorPlanner = () => {
               if (e.button !== 0) return
               const target = e.target as HTMLElement
               if (target.closest('.placed-asset')) return
+              setSelectedPlacedAssetId(null)
               const rect = canvasRef.current?.getBoundingClientRect()
               if (!rect) return
               const xPx = e.clientX - rect.left
@@ -2103,6 +2363,9 @@ const FloorPlanner = () => {
                 const la = getAssetLayer(a)
                 const lb = getAssetLayer(b)
                 if (layerRank(la) !== layerRank(lb)) return layerRank(la) - layerRank(lb)
+                const childA = a.parentAssetId ? 1 : 0
+                const childB = b.parentAssetId ? 1 : 0
+                if (childA !== childB) return childA - childB // roots first → tabletop children on top in 2D
                 const areaA = a.width * a.depth
                 const areaB = b.width * b.depth
                 return areaB - areaA // larger first → smaller items get higher z-index
@@ -2119,10 +2382,11 @@ const FloorPlanner = () => {
                   (viewMode === 'floor' && (layer === 'surface' || layer === 'ceiling')) ||
                   (viewMode === 'middle' && (layer === 'floor' || layer === 'ceiling')) ||
                   (viewMode === 'ceiling' && (layer === 'floor' || layer === 'surface'))
+                const selected = selectedPlacedAssetId === asset.id
                 return (
                   <div
                     key={asset.id}
-                    className={`placed-asset ${isGhost ? 'placed-asset-ghost' : ''}`}
+                    className={`placed-asset${isGhost ? ' placed-asset-ghost' : ''}${selected ? ' placed-asset--selected' : ''}`}
                     data-layer={layer}
                     data-elevation={elevation}
                     style={{
@@ -2135,7 +2399,7 @@ const FloorPlanner = () => {
                       zIndex: baseZ + index,
                       ...(isGhost ? { opacity: 0.3, pointerEvents: 'none' as const } : {})
                     }}
-                    onMouseDown={isGhost ? undefined : () => handleAssetDragStart(asset.id)}
+                    onMouseDown={isGhost ? undefined : (e) => handlePlacedAssetMouseDown(e, asset)}
                     onContextMenu={isGhost ? undefined : (e) => handleAssetRightClick(e, asset.id)}
                   >
                     <span className="asset-label">
@@ -2143,7 +2407,9 @@ const FloorPlanner = () => {
                     </span>
                     {!isGhost && (
                       <button
+                        type="button"
                         className="delete-asset-btn"
+                        onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => {
                           e.stopPropagation()
                           handleDeleteAsset(asset.id)

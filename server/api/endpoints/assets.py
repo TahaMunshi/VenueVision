@@ -77,6 +77,9 @@ def generate_asset(current_user):
         asset_layer = "surface"
     height_m = request.form.get("height_m", type=float) or 1.0
     width_m = depth_m = height_m
+    is_table_flag = request.form.get("is_table", "false").strip().lower() in ("1", "true", "yes", "on")
+    if asset_layer == "floor":
+        is_table_flag = False
     if not asset_name:
         first_name = image_files[0][1]
         asset_name = os.path.splitext(first_name)[0][:50] or "Untitled Asset"
@@ -146,7 +149,8 @@ def generate_asset(current_user):
             asset_layer=asset_layer,
             width_m=width_m,
             depth_m=depth_m,
-            height_m=height_m
+            height_m=height_m,
+            is_table=is_table_flag,
         )
         
         # Get the complete asset record
@@ -215,6 +219,7 @@ def get_my_assets(current_user):
             "depth_m": asset.get('depth_m') if asset.get('depth_m') is not None else 1.0,
             "height_m": asset.get('height_m') if asset.get('height_m') is not None else 1.0,
             "brightness": asset.get('brightness') if asset.get('brightness') is not None else 1.0,
+            "is_table": bool(asset.get('is_table')),
             "metadata": asset.get('metadata', {}),
             "created_at": asset.get('created_at'),
             "updated_at": asset.get('updated_at')
@@ -270,6 +275,7 @@ def get_user_assets_by_id(current_user, user_id):
             "depth_m": asset.get('depth_m') if asset.get('depth_m') is not None else 1.0,
             "height_m": asset.get('height_m') if asset.get('height_m') is not None else 1.0,
             "brightness": asset.get('brightness') if asset.get('brightness') is not None else 1.0,
+            "is_table": bool(asset.get('is_table')),
             "metadata": asset.get('metadata', {}),
             "created_at": asset.get('created_at'),
             "updated_at": asset.get('updated_at')
@@ -327,6 +333,7 @@ def get_single_asset(current_user, asset_id):
             "depth_m": asset.get('depth_m', 1.0),
             "height_m": asset.get('height_m', 1.0),
             "brightness": asset.get('brightness', 1.0),
+            "is_table": bool(asset.get('is_table')),
             "metadata": asset.get('metadata', {}),
             "created_at": asset.get('created_at'),
             "updated_at": asset.get('updated_at')
@@ -339,7 +346,7 @@ def get_single_asset(current_user, asset_id):
 def update_asset(current_user, asset_id):
     """
     Update asset layer, width, depth, height, or brightness.
-    Expects JSON: { "asset_layer": "floor"|"surface"|"ceiling", "width_m": 1.5, "depth_m": 1.2, "height_m": 0.8, "brightness": 1.2 }
+    Expects JSON: { "asset_layer", "width_m", "depth_m", "height_m", "brightness", "is_table": true|false }
     """
     user_id = current_user['user_id']
     data = request.get_json() or {}
@@ -348,9 +355,30 @@ def update_asset(current_user, asset_id):
     depth_m = data.get('depth_m')
     height_m = data.get('height_m')
     brightness = data.get('brightness')
-    if layer is None and width_m is None and depth_m is None and height_m is None and brightness is None:
+    is_table = data.get('is_table')
+    if is_table is not None:
+        is_table = bool(is_table)
+    if (
+        layer is None
+        and width_m is None
+        and depth_m is None
+        and height_m is None
+        and brightness is None
+        and is_table is None
+    ):
         return jsonify({"status": "error", "error": "No update fields provided"}), 400
-    success = update_asset_properties(asset_id, user_id, asset_layer=layer, width_m=width_m, depth_m=depth_m, height_m=height_m, brightness=brightness)
+    if layer == "floor":
+        is_table = False
+    success = update_asset_properties(
+        asset_id,
+        user_id,
+        asset_layer=layer,
+        width_m=width_m,
+        depth_m=depth_m,
+        height_m=height_m,
+        brightness=brightness,
+        is_table=is_table,
+    )
     if not success:
         return jsonify({"status": "error", "error": "Asset not found or update failed"}), 404
     return jsonify({"status": "success", "message": "Asset updated", "asset_id": asset_id}), 200

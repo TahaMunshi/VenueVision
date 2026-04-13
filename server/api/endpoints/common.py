@@ -9,9 +9,10 @@ SEQ_PATTERN = re.compile(r"^seq_(\d+)\.jpg$", re.IGNORECASE)
 
 def required_photos_for_wall(wall: Dict) -> int:
     """
-    Photos per wall: 1 for 0-10 ft, 2 for 10-20 ft, etc.
-    Rule: ceil(length_ft / 10), minimum 1.
-    Wall ``length`` is in feet (same units as venue / floor planner).
+    Segment photos per wall (feet, same as venue / floor planner).
+
+    Walls under 25 ft need a single capture/upload. Longer walls use roughly
+    one segment per 10 ft: ceil(length_ft / 10), minimum 1.
     """
     import math
     length = wall.get("length")
@@ -20,6 +21,8 @@ def required_photos_for_wall(wall: Dict) -> int:
     try:
         length_ft = float(length)
         if length_ft <= 0:
+            return 1
+        if length_ft < 25:
             return 1
         return max(1, int(math.ceil(length_ft / 10)))
     except (TypeError, ValueError):

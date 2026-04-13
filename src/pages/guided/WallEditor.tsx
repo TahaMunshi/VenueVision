@@ -533,7 +533,7 @@ const WallEditor = () => {
     <div className="wall-editor-container">
       {venueId && <PageNavBar variant="dark" venueId={venueId} title="Edit wall" backLabel="Back" />}
       {venueId && wallId && (
-        <GuidedFlowStepper venueId={venueId} wallId={wallId} active="corners" />
+        <GuidedFlowStepper venueId={venueId} wallId={wallId} active="corners" linkCaptureToWall />
       )}
       <div className="wall-editor-header">
         <p className="wall-editor-wall-id">Wall: {wallId}</p>

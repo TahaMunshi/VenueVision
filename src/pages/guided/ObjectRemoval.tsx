@@ -126,7 +126,7 @@ const ObjectRemoval = () => {
           <PageNavBar variant="dark" venueId={venueId} title="Remove objects" backLabel="Back" />
         )}
         {venueId && wallId && (
-          <GuidedFlowStepper venueId={venueId} wallId={wallId} active="remove" />
+          <GuidedFlowStepper venueId={venueId} wallId={wallId} active="remove" linkCaptureToWall />
         )}
         <div className="object-removal-error">{error}</div>
         <button
@@ -147,7 +147,7 @@ const ObjectRemoval = () => {
         <PageNavBar variant="dark" venueId={venueId} title="Remove objects" backLabel="Back" />
       )}
       {venueId && wallId && (
-        <GuidedFlowStepper venueId={venueId} wallId={wallId} active="remove" />
+        <GuidedFlowStepper venueId={venueId} wallId={wallId} active="remove" linkCaptureToWall />
       )}
       <div className="object-removal-header">
         <p className="object-removal-subtitle">

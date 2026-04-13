@@ -27,11 +27,12 @@ def get_venue_progress(current_user, venue_id: str):
     Guarantees a valid current_target for new venues (always returns first wall).
     Includes floor plan URL and wall regions if floor plan exists.
     """
-    _, err = require_venue_access(venue_id, current_user, require_owner=False)
+    venue, err = require_venue_access(venue_id, current_user, require_owner=False)
     if err:
         return err[0], err[1]
-    walls_metadata = get_venue_walls(venue_id)
-    completed = completed_walls_for_venue(venue_id, walls_metadata)
+    fs_venue = venue["venue_identifier"]
+    walls_metadata = get_venue_walls(fs_venue)
+    completed = completed_walls_for_venue(fs_venue, walls_metadata)
     current_target = next_wall(walls_metadata, completed)
 
     floor_plan_url = None  # Floor plan upload removed; plans are created in-app only
@@ -65,7 +66,7 @@ def get_venue_progress(current_user, venue_id: str):
         "capture_requirements": {
             wall["id"]: {
                 "required_segments": required_photos_for_wall(wall),
-                "captured_segments": captured_segments_for_wall(venue_id, wall["id"]),
+                "captured_segments": captured_segments_for_wall(fs_venue, wall["id"]),
             }
             for wall in walls_metadata
         },
@@ -84,18 +85,19 @@ def get_wall_images(current_user, venue_id: str):
     Query parameters:
         original: if 'true', returns only original captured images (seq_XX.jpg), not processed ones
     """
-    _, err = require_venue_access(venue_id, current_user, require_owner=False)
+    venue, err = require_venue_access(venue_id, current_user, require_owner=False)
     if err:
         return err[0], err[1]
+    fs_venue = venue["venue_identifier"]
     try:
         request_original = request.args.get("original", "false").lower() == "true"
 
-        walls_metadata = get_venue_walls(venue_id)
+        walls_metadata = get_venue_walls(fs_venue)
         wall_images: Dict[str, str] = {}
 
         for wall in walls_metadata:
             wall_id = wall["id"]
-            wall_dir = os.path.join(UPLOAD_ROOT, venue_id, wall_id)
+            wall_dir = os.path.join(UPLOAD_ROOT, fs_venue, wall_id)
 
             if not os.path.isdir(wall_dir):
                 continue
@@ -115,17 +117,17 @@ def get_wall_images(current_user, venue_id: str):
                         reverse=True,
                     )
                     latest_file = seq_files[0]
-                    wall_images[wall_id] = f"/static/uploads/{venue_id}/{wall_id}/{latest_file}"
+                    wall_images[wall_id] = f"/static/uploads/{fs_venue}/{wall_id}/{latest_file}"
             else:
                 # Prefer processed (final), then stitched (master for corners/removal)
                 processed_path = os.path.join(wall_dir, f"processed_{wall_id}.jpg")
                 stitched_path = os.path.join(wall_dir, f"stitched_{wall_id}.jpg")
                 if os.path.exists(processed_path):
                     ts = int(os.path.getmtime(processed_path)) if os.path.exists(processed_path) else int(time.time())
-                    wall_images[wall_id] = f"/static/uploads/{venue_id}/{wall_id}/processed_{wall_id}.jpg?v={ts}"
+                    wall_images[wall_id] = f"/static/uploads/{fs_venue}/{wall_id}/processed_{wall_id}.jpg?v={ts}"
                 elif os.path.exists(stitched_path):
                     ts = int(os.path.getmtime(stitched_path)) if os.path.exists(stitched_path) else int(time.time())
-                    wall_images[wall_id] = f"/static/uploads/{venue_id}/{wall_id}/stitched_{wall_id}.jpg?v={ts}"
+                    wall_images[wall_id] = f"/static/uploads/{fs_venue}/{wall_id}/stitched_{wall_id}.jpg?v={ts}"
                 else:
                     seq_files = []
                     try:
@@ -143,7 +145,7 @@ def get_wall_images(current_user, venue_id: str):
                         latest_file = seq_files[0]
                         seq_path = os.path.join(wall_dir, latest_file)
                         ts = int(os.path.getmtime(seq_path)) if os.path.exists(seq_path) else int(time.time())
-                        wall_images[wall_id] = f"/static/uploads/{venue_id}/{wall_id}/{latest_file}?v={ts}"
+                        wall_images[wall_id] = f"/static/uploads/{fs_venue}/{wall_id}/{latest_file}?v={ts}"
 
         return jsonify({"status": "success", "wall_images": wall_images}), 200
 

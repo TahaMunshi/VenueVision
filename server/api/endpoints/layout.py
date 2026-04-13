@@ -22,8 +22,9 @@ def get_layout(current_user, venue_id: str):
     venue, err = require_venue_access(venue_id, current_user, require_owner=False)
     if err:
         return err[0], err[1]
+    fs_venue = venue["venue_identifier"]
     try:
-        layout_path = os.path.join(UPLOAD_ROOT, venue_id, "layout.json")
+        layout_path = os.path.join(UPLOAD_ROOT, fs_venue, "layout.json")
 
         if os.path.exists(layout_path):
             with open(layout_path, "r") as f:
@@ -85,6 +86,7 @@ def save_layout(current_user, venue_id: str):
     venue, err = require_venue_access(venue_id, current_user, require_owner=True)
     if err:
         return err[0], err[1]
+    fs_venue = venue["venue_identifier"]
     try:
         data = request.get_json()
 
@@ -102,7 +104,7 @@ def save_layout(current_user, venue_id: str):
         )
         lighting = data.get("lighting", {"preset": "neutral"})
 
-        venue_dir = os.path.join(UPLOAD_ROOT, venue_id)
+        venue_dir = os.path.join(UPLOAD_ROOT, fs_venue)
         os.makedirs(venue_dir, exist_ok=True)
 
         layout_path = os.path.join(venue_dir, "layout.json")
@@ -147,8 +149,9 @@ def generate_glb_endpoint(current_user, venue_id: str):
     venue, err = require_venue_access(venue_id, current_user, require_owner=True)
     if err:
         return err[0], err[1]
+    fs_venue = venue["venue_identifier"]
     try:
-        venue_dir = os.path.join(UPLOAD_ROOT, venue_id)
+        venue_dir = os.path.join(UPLOAD_ROOT, fs_venue)
         os.makedirs(venue_dir, exist_ok=True)
         layout_path = os.path.join(venue_dir, "layout.json")
         layout_data = {}
@@ -166,7 +169,7 @@ def generate_glb_endpoint(current_user, venue_id: str):
         materials = layout_data.get("materials", {})
         glb_path = generate_glb(venue_dir, dims, walls=walls, materials=materials)
 
-        layout_data["generated_glb"] = f"/static/uploads/{venue_id}/venue.glb"
+        layout_data["generated_glb"] = f"/static/uploads/{fs_venue}/venue.glb"
         with open(layout_path, "w") as f:
             json.dump(layout_data, f, indent=2)
 

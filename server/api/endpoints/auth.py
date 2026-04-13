@@ -41,24 +41,28 @@ def signup():
         email = data.get('email', '').strip()
         password = data.get('password', '')
         full_name = data.get('full_name', '').strip() or None
-        
-        # Validation
+        role = data.get('role', 'customer').strip().lower()
+        phone = data.get('phone', '').strip() or None
+        business_name = data.get('business_name', '').strip() or None
+
+        if role not in ('vendor', 'customer'):
+            role = 'customer'
+
         if not username or len(username) < 3:
             return jsonify({'error': 'Username must be at least 3 characters'}), 400
-        
         if not email or '@' not in email:
             return jsonify({'error': 'Valid email is required'}), 400
-        
         if not password or len(password) < 6:
             return jsonify({'error': 'Password must be at least 6 characters'}), 400
-        
-        # Register user
-        user = register_user(username, email, password, full_name)
+        if role == 'vendor' and not business_name:
+            return jsonify({'error': 'Business name is required for vendors'}), 400
+
+        user = register_user(username, email, password, full_name, role, phone, business_name)
         
         if not user:
             return jsonify({'error': 'Username or email already exists'}), 409
         
-        logger.info(f"New user registered: {username}")
+        logger.info(f"New user registered: {username} (role: {role})")
         return jsonify({
             'status': 'success',
             'message': 'User registered successfully',
@@ -66,7 +70,8 @@ def signup():
                 'user_id': user['user_id'],
                 'username': user['username'],
                 'email': user['email'],
-                'full_name': user['full_name']
+                'full_name': user['full_name'],
+                'role': user['role']
             },
             'token': user['token']
         }), 201
@@ -118,7 +123,8 @@ def login():
                 'user_id': user['user_id'],
                 'username': user['username'],
                 'email': user['email'],
-                'full_name': user['full_name']
+                'full_name': user['full_name'],
+                'role': user['role']
             },
             'token': user['token']
         }), 200
@@ -152,6 +158,11 @@ def get_current_user(current_user):
                 'username': user['username'],
                 'email': user['email'],
                 'full_name': user['full_name'],
+                'role': user.get('role', 'customer'),
+                'phone': user.get('phone'),
+                'business_name': user.get('business_name'),
+                'city': user.get('city'),
+                'country': user.get('country'),
                 'created_at': user['created_at'].isoformat() if user['created_at'] else None
             }
         }), 200

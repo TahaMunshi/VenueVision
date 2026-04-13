@@ -140,7 +140,7 @@ const SegmentReview = () => {
           <PageNavBar variant="dark" venueId={venueId} title="Stitch & review" backLabel="Back" />
         )}
         {venueId && wallId && (
-          <GuidedFlowStepper venueId={venueId} wallId={wallId} active="review" />
+          <GuidedFlowStepper venueId={venueId} wallId={wallId} active="review" linkCaptureToWall />
         )}
         <div className="segment-review-error">{error}</div>
       </div>
@@ -153,7 +153,7 @@ const SegmentReview = () => {
         <PageNavBar variant="dark" venueId={venueId} title="Stitch & review" backLabel="Back" />
       )}
       {venueId && wallId && (
-        <GuidedFlowStepper venueId={venueId} wallId={wallId} active="review" />
+        <GuidedFlowStepper venueId={venueId} wallId={wallId} active="review" linkCaptureToWall />
       )}
       <div className="segment-review-heading">
         <h1 className="segment-review-title">Wall: {wallId}</h1>

@@ -474,6 +474,42 @@
   display: none;
 }
 
+.placed-asset--selected {
+  outline: 3px solid #ffc107;
+  outline-offset: 1px;
+  box-shadow: 0 0 0 2px rgba(255, 193, 7, 0.35);
+}
+
+.rug-footprint-panel {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.rug-footprint-panel h4 {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+}
+
+.rug-footprint-hint {
+  font-size: 0.8rem;
+  opacity: 0.85;
+  margin: 0 0 8px;
+  line-height: 1.35;
+}
+
+.rug-footprint-panel--selected {
+  background: rgba(255, 193, 7, 0.08);
+  border-radius: 8px;
+  padding: 10px 8px 12px;
+  border: 1px solid rgba(255, 193, 7, 0.35);
+}
+
+.rug-footprint-panel--selected .action-button {
+  margin-top: 8px;
+  width: 100%;
+}
+
 .asset-label {
   text-shadow: 0 0 3px black;
   font-weight: bold;

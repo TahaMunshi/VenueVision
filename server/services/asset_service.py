@@ -111,7 +111,8 @@ def update_asset_status(
     asset_layer: Optional[str] = None,
     width_m: Optional[float] = None,
     depth_m: Optional[float] = None,
-    height_m: Optional[float] = None
+    height_m: Optional[float] = None,
+    is_table: Optional[bool] = None,
 ) -> bool:
     """
     Update asset generation status and related fields.
@@ -173,7 +174,11 @@ def update_asset_status(
         if height_m is not None:
             updates.append("height_m = %s")
             params.append(height_m)
-        
+
+        if is_table is not None:
+            updates.append("is_table = %s")
+            params.append(bool(is_table))
+
         params.append(asset_id)
         
         query = f"""
@@ -212,6 +217,7 @@ def get_user_assets(user_id: int, include_failed: bool = False) -> List[Dict]:
                        COALESCE(depth_m, 1.0) as depth_m,
                        COALESCE(height_m, 1.0) as height_m,
                        COALESCE(brightness, 1.0) as brightness,
+                       COALESCE(is_table, false) as is_table,
                        metadata, created_at, updated_at
                 FROM user_assets
                 WHERE user_id = %s
@@ -226,6 +232,7 @@ def get_user_assets(user_id: int, include_failed: bool = False) -> List[Dict]:
                        COALESCE(depth_m, 1.0) as depth_m,
                        COALESCE(height_m, 1.0) as height_m,
                        COALESCE(brightness, 1.0) as brightness,
+                       COALESCE(is_table, false) as is_table,
                        metadata, created_at, updated_at
                 FROM user_assets
                 WHERE user_id = %s AND generation_status = 'completed'
@@ -277,6 +284,7 @@ def get_asset_by_id(asset_id: int) -> Optional[Dict]:
                    COALESCE(depth_m, 1.0) as depth_m,
                    COALESCE(height_m, 1.0) as height_m,
                    COALESCE(brightness, 1.0) as brightness,
+                   COALESCE(is_table, false) as is_table,
                    metadata, created_at, updated_at
             FROM user_assets
             WHERE asset_id = %s
@@ -310,7 +318,8 @@ def update_asset_properties(
     width_m: Optional[float] = None,
     depth_m: Optional[float] = None,
     height_m: Optional[float] = None,
-    brightness: Optional[float] = None
+    brightness: Optional[float] = None,
+    is_table: Optional[bool] = None,
 ) -> bool:
     """
     Update asset layer, dimensions, or brightness (verifies ownership).
@@ -338,6 +347,9 @@ def update_asset_properties(
         if brightness is not None:
             updates.append("brightness = %s")
             params.append(max(0.1, min(3.0, float(brightness))))
+        if is_table is not None:
+            updates.append("is_table = %s")
+            params.append(bool(is_table))
         if not updates:
             return True
         params.extend([asset_id, user_id])

@@ -5,6 +5,35 @@ import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
 import { loadThreeBundle } from '../../utils/threeLoader'
 import PageNavBar from '../../components/PageNavBar'
 import { metersToFeet } from '../../constants/roomUnits'
+import {
+  wantsTableTopDecor,
+  findTableUnderDecorCenter,
+  tableAttachOffsets,
+  isLayoutTableSupport,
+} from '../../utils/tableSurfaceAttach'
+
+/** Root layout rows that should sit on a table top get a synthetic parent so 3D uses the table’s top Y. */
+function inferTableParentsFromLayout(assets: any[]): any[] {
+  if (!Array.isArray(assets)) return assets
+  return assets.map((asset: any) => {
+    if (asset.parentAssetId ?? asset.parent_asset_id) return asset
+    if (!wantsTableTopDecor(asset)) return asset
+    const table = findTableUnderDecorCenter(asset, assets)
+    const tid = table?.id
+    if (tid == null || tid === '') return asset
+    const o = tableAttachOffsets(asset, table)
+    const next = {
+      ...asset,
+      parentAssetId: String(tid),
+      offsetX: o.offsetX,
+      offsetY: o.offsetY,
+      x: o.x,
+      y: o.y,
+    }
+    delete next.parent_asset_id
+    return next
+  })
+}
 
 /** Epsilon above room box bottom so decorative floor/ceiling planes avoid z-fighting; same Y used for asset floor contact. */
 const FLOOR_CONTACT_EPS = 0.002
@@ -15,6 +44,32 @@ function floorContactY(roomHeightFt: number): number {
 
 function ceilingContactY(roomHeightFt: number): number {
   return roomHeightFt / 2 - FLOOR_CONTACT_EPS
+}
+
+/** Tabletop height above the room floor (feet), from layout — avoids relying on GLB bbox. */
+function tableTopHeightFt(parent: any): number {
+  let ft = Number(parent?.height)
+  if (Number.isFinite(ft) && ft > 0) return ft
+  if (parent?.height_m != null) {
+    const m = metersToFeet(Number(parent.height_m))
+    if (Number.isFinite(m) && m > 0) return m
+  }
+  ft = Number(parent?.elevation)
+  if (Number.isFinite(ft) && ft > 0) return ft
+  return 2.5
+}
+
+function layoutFeetCenterToWorld(
+  layoutW: number,
+  layoutD: number,
+  ax: number,
+  ay: number,
+  aw: number,
+  ad: number
+) {
+  const cx = (Number(ax) || 0) + (Number(aw) || 0) / 2
+  const cz = (Number(ay) || 0) + (Number(ad) || 0) / 2
+  return { worldX: cx - layoutW / 2, worldZ: cz - layoutD / 2 }
 }
 
 /** Set `VITE_USE_DECORATIVE_FLOOR_CEILING=false` to disable textured floor/ceiling planes and isolate placement vs. visuals. */
@@ -223,6 +278,8 @@ const Space3DViewer = () => {
   /** Layout dimensions and asset placement data - used to reposition assets when user changes room dimensions */
   const layoutDataRef = useRef<{
     layoutDimensions: { width: number; height: number; depth: number }
+    /** All layout assets by id (for parent height / plan-center XZ). */
+    assetsById?: Record<string, any>
     assetPlacements: Array<{
       group: any
       asset: any
@@ -708,6 +765,7 @@ const Space3DViewer = () => {
             applyLayoutDimensions(data.dimensions)
 
             if (data.status === 'success' && data.assets && data.assets.length > 0) {
+              const layoutAssets = inferTableParentsFromLayout(data.assets)
               const gltfLoader = new THREE.GLTFLoader()
 
               // Draco decompression for compressed GLB files
@@ -722,18 +780,31 @@ const Space3DViewer = () => {
               const layoutD = data.dimensions?.depth ?? sceneDims.depth
               const layoutH = data.dimensions?.height ?? sceneDims.height
 
+              const assetsById: Record<string, any> = {}
+              for (const a of layoutAssets) {
+                const sid = String(a.id ?? '')
+                if (sid) assetsById[sid] = a
+              }
+
               layoutDataRef.current = {
                 layoutDimensions: { width: layoutW, height: layoutH, depth: layoutD },
+                assetsById,
                 assetPlacements: []
               }
 
               const floorContact = floorContactY(layoutH)
               const ceilingContact = ceilingContactY(layoutH)
               const isCeilingAsset = (a: any) => a.layer === 'ceiling' || a.file === 'chandelier.glb'
-              const rootAssets = data.assets.filter((a: any) => !(a.parentAssetId ?? a.parent_asset_id))
-              const childAssets = data.assets.filter((a: any) => !!(a.parentAssetId ?? a.parent_asset_id))
+              const rootAssets = layoutAssets
+                .filter((a: any) => !(a.parentAssetId ?? a.parent_asset_id))
+                .sort((a: any, b: any) => {
+                  const ta = isLayoutTableSupport(a) ? 0 : 1
+                  const tb = isLayoutTableSupport(b) ? 0 : 1
+                  return ta - tb
+                })
+              const childAssets = layoutAssets.filter((a: any) => !!(a.parentAssetId ?? a.parent_asset_id))
               const parentSurfaceByAssetId: Record<string, { topY: number; centerX: number; centerZ: number }> = {}
-              setLoadingAssets(data.assets.map((a: any) => a.id || a.file))
+              setLoadingAssets(layoutAssets.map((a: any) => String(a.id ?? a.file ?? '')))
 
               // Model cache: load each unique GLB once, clone for duplicates
               const modelCache: Map<string, Promise<any>> = new Map()
@@ -774,8 +845,15 @@ const Space3DViewer = () => {
                 }
 
                 const assetType = String(asset.type ?? asset.asset_type ?? '').toLowerCase()
+                const fileLower = String(asset.file ?? '').toLowerCase()
                 const isRug = assetType === 'rug' || asset.file === 'rug.glb'
                 const isFloorAsset = asset.layer === 'floor' || isRug
+                /** Rugs/mats/carpets: scale by floor footprint (width × depth), not model height. */
+                const isFootprintFloorPiece =
+                  isFloorAsset &&
+                  (isRug ||
+                    /(rug|mat|carpet)/.test(assetType) ||
+                    /(rug|mat|carpet)/.test(fileLower))
 
                 let targetWidth = Number(asset.width ?? 0)
                 let targetDepth = Number(asset.depth ?? 0)
@@ -788,17 +866,27 @@ const Space3DViewer = () => {
                 const scaleX = size.x > 0 && targetWidth > 0 ? targetWidth / size.x : null
                 const scaleZ = size.z > 0 && targetDepth > 0 ? targetDepth / size.z : null
 
-                let scale = 1
-                if (isFloorAsset && (scaleX != null || scaleZ != null)) {
-                  scale = Math.min(scaleX ?? Number.POSITIVE_INFINITY, scaleZ ?? Number.POSITIVE_INFINITY)
-                } else if (scaleFromHeight != null) {
-                  scale = scaleFromHeight
+                let scaledCenterX: number
+                let scaledCenterZ: number
+                if (isFootprintFloorPiece && scaleX != null && scaleZ != null) {
+                  const sx = scaleX
+                  const sz = scaleZ
+                  const sy = Math.min(sx, sz)
+                  model.scale.set(sx, sy, sz)
+                  scaledCenterX = ((box.min.x + box.max.x) / 2) * sx
+                  scaledCenterZ = ((box.min.z + box.max.z) / 2) * sz
+                } else {
+                  let scale = 1
+                  if (isFloorAsset && (scaleX != null || scaleZ != null)) {
+                    scale = Math.min(scaleX ?? Number.POSITIVE_INFINITY, scaleZ ?? Number.POSITIVE_INFINITY)
+                  } else if (scaleFromHeight != null) {
+                    scale = scaleFromHeight
+                  }
+                  model.scale.set(scale, scale, scale)
+                  scaledCenterX = ((box.min.x + box.max.x) / 2) * scale
+                  scaledCenterZ = ((box.min.z + box.max.z) / 2) * scale
                 }
-                model.scale.set(scale, scale, scale)
 
-                // Derive centered position mathematically from the single box computation
-                const scaledCenterX = (box.min.x + box.max.x) / 2 * scale
-                const scaledCenterZ = (box.min.z + box.max.z) / 2 * scale
                 model.position.x = -scaledCenterX
                 model.position.z = -scaledCenterZ
 
@@ -836,7 +924,7 @@ const Space3DViewer = () => {
                   layoutDataRef.current.assetPlacements.push({ group, asset, isRoot, isCeiling: onCeiling, parentId })
                 }
 
-                const assetId = asset.id || asset.file
+                const assetId = String(asset.id ?? asset.file ?? '')
                 if (isRoot) {
                   group.updateMatrixWorld(true)
                   const worldBox = new THREE.Box3().setFromObject(group)
@@ -847,32 +935,37 @@ const Space3DViewer = () => {
                   }
                 }
 
-                setLoadingAssets((prev) => prev.filter(id => id !== assetId))
+                setLoadingAssets((prev) => prev.filter((id) => id !== assetId))
               }
 
               const loadOneAsset = async (asset: any, worldX: number, worldY: number, worldZ: number, isRoot: boolean, onCeiling: boolean, parentId?: string): Promise<void> => {
                 const modelPath = asset.file.includes('/')
                   ? `${API_BASE_URL}/static/${asset.file}`
                   : `${API_BASE_URL}/static/models/${asset.file}`
-                const assetId = asset.id || asset.file
+                const assetId = String(asset.id ?? asset.file ?? '')
 
                 try {
                   const gltf = await loadGltfCached(modelPath)
                   const model = cloneGltfScene(gltf)
                   placeAsset(model, asset, worldX, worldY, worldZ, isRoot, onCeiling, parentId)
                 } catch {
-                  setLoadingAssets((prev) => prev.filter(id => id !== assetId))
+                  setLoadingAssets((prev) => prev.filter((id) => id !== assetId))
                 }
               }
 
               const getRootWorldPosition = (a: any) => {
-                const centerX2D = a.x + (a.width / 2)
-                const centerY2D = a.y + (a.depth / 2)
-                const worldY = isCeilingAsset(a) ? ceilingContact : floorContact
+                const centerX2D = Number(a.x) + Number(a.width) / 2
+                const centerY2D = Number(a.y) + Number(a.depth) / 2
+                let worldY = isCeilingAsset(a) ? ceilingContact : floorContact
+                // Small decor centered over a table but missing parent row: lift to layout table height (flush on floor otherwise).
+                if (!isCeilingAsset(a) && wantsTableTopDecor(a)) {
+                  const table = findTableUnderDecorCenter(a, layoutAssets)
+                  if (table) worldY = floorContact + tableTopHeightFt(table)
+                }
                 return {
-                  worldX: centerX2D - (layoutW / 2),
+                  worldX: centerX2D - layoutW / 2,
                   worldY,
-                  worldZ: centerY2D - (layoutD / 2)
+                  worldZ: centerY2D - layoutD / 2
                 }
               }
 
@@ -888,12 +981,37 @@ const Space3DViewer = () => {
               await Promise.all(
                 childAssets.map((asset: any) => {
                   const parentId = String(asset.parentAssetId ?? asset.parent_asset_id ?? '')
+                  const parent = assetsById[parentId]
                   const surface = parentSurfaceByAssetId[parentId]
-                  const ox = asset.offsetX ?? asset.offset_x ?? 0
-                  const oy = asset.offsetY ?? asset.offset_y ?? 0
-                  const worldX = surface ? surface.centerX + ox : (asset.x + asset.width / 2) - layoutW / 2
-                  const worldY = surface ? surface.topY : (isCeilingAsset(asset) ? ceilingContact : floorContact)
-                  const worldZ = surface ? surface.centerZ + oy : (asset.y + asset.depth / 2) - layoutD / 2
+                  const ox = Number(asset.offsetX ?? asset.offset_x ?? 0)
+                  const oy = Number(asset.offsetY ?? asset.offset_y ?? 0)
+
+                  let worldX: number
+                  let worldY: number
+                  let worldZ: number
+
+                  if (parent && isLayoutTableSupport(parent)) {
+                    const pc = layoutFeetCenterToWorld(
+                      layoutW,
+                      layoutD,
+                      parent.x,
+                      parent.y,
+                      parent.width,
+                      parent.depth
+                    )
+                    worldX = pc.worldX + ox
+                    worldZ = pc.worldZ + oy
+                    worldY = floorContact + tableTopHeightFt(parent)
+                  } else if (surface) {
+                    worldX = surface.centerX + ox
+                    worldY = surface.topY
+                    worldZ = surface.centerZ + oy
+                  } else {
+                    worldX = Number(asset.x) + Number(asset.width) / 2 - layoutW / 2
+                    worldZ = Number(asset.y) + Number(asset.depth) / 2 - layoutD / 2
+                    worldY = isCeilingAsset(asset) ? ceilingContact : floorContact
+                  }
+
                   return loadOneAsset(asset, worldX, worldY, worldZ, false, isCeilingAsset(asset), parentId)
                 })
               ).catch(() => {})
@@ -1147,6 +1265,7 @@ const Space3DViewer = () => {
     if (layout && layout.assetPlacements.length > 0) {
       const lw = layout.layoutDimensions.width
       const ld = layout.layoutDimensions.depth
+      const byId = layout.assetsById || {}
       const parentSurfaceByAssetId: Record<string, { topY: number; centerX: number; centerZ: number }> = {}
 
       for (const { group, asset, isRoot, isCeiling: onCeiling } of layout.assetPlacements) {
@@ -1160,12 +1279,26 @@ const Space3DViewer = () => {
           worldX = normX * cw - cw / 2
           worldZ = normZ * cd - cd / 2
           worldY = onCeiling ? ceilingContact : floorContact
+          if (!onCeiling && wantsTableTopDecor(asset)) {
+            const hitList =
+              Object.keys(byId).length > 0
+                ? Object.values(byId)
+                : layout.assetPlacements.map((p) => p.asset)
+            const table = findTableUnderDecorCenter(asset, hitList)
+            if (table) worldY = floorContact + tableTopHeightFt(table)
+          }
         } else {
           const parentId = String(asset.parentAssetId ?? asset.parent_asset_id ?? '')
+          const parent = byId[parentId]
           const surface = parentSurfaceByAssetId[parentId]
-          const ox = asset.offsetX ?? asset.offset_x ?? 0
-          const oy = asset.offsetY ?? asset.offset_y ?? 0
-          if (surface) {
+          const ox = Number(asset.offsetX ?? asset.offset_x ?? 0)
+          const oy = Number(asset.offsetY ?? asset.offset_y ?? 0)
+          if (parent && isLayoutTableSupport(parent)) {
+            const pc = layoutFeetCenterToWorld(lw, ld, parent.x, parent.y, parent.width, parent.depth)
+            worldX = pc.worldX + ox
+            worldZ = pc.worldZ + oy
+            worldY = floorContact + tableTopHeightFt(parent)
+          } else if (surface) {
             worldX = surface.centerX + ox
             worldY = surface.topY
             worldZ = surface.centerZ + oy
@@ -1179,11 +1312,15 @@ const Space3DViewer = () => {
         }
 
         group.position.set(worldX, worldY, worldZ)
+        group.updateMatrixWorld(true)
+        const groupBox = new THREE.Box3().setFromObject(group)
+        const anchorY = onCeiling ? groupBox.max.y : groupBox.min.y
+        group.position.y += worldY - anchorY
+        group.updateMatrixWorld(true)
 
         if (isRoot) {
-          group.updateMatrixWorld(true)
           const worldBox = new THREE.Box3().setFromObject(group)
-          const assetId = asset.id || asset.file
+          const assetId = String(asset.id ?? asset.file ?? '')
           parentSurfaceByAssetId[assetId] = {
             topY: worldBox.max.y,
             centerX: (worldBox.min.x + worldBox.max.x) / 2,

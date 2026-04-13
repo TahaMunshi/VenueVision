@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import './MobileCapture.css'
 import type { WallSegment } from '../../components/MiniMap'
 import GuidedFlowStepper from '../../components/GuidedFlowStepper'
@@ -34,6 +34,21 @@ type ProgressState = {
   floor_plan_url?: string | null
   wall_regions?: WallRegion[]
   capture_requirements?: Record<string, { required_segments: number; captured_segments: number }>
+}
+
+/** Active wall: URL ?wall= wins, then server current_target, then first incomplete. */
+function pickWallForCapture(data: ProgressState, preferredWallId: string | null): WallSegment | null {
+  if (!data.walls?.length) return null
+  if (preferredWallId) {
+    const hit = data.walls.find((w) => w.id === preferredWallId)
+    if (hit) return hit
+  }
+  if (data.current_target) {
+    const next = data.walls.find((wall) => wall.id === data.current_target?.id)
+    if (next) return next
+  }
+  const incompleteWall = data.walls.find((wall) => !data.completed_walls.includes(wall.id))
+  return incompleteWall ?? data.walls[0] ?? null
 }
 
 /** Encode quality for uploads (was 0.92; higher = closer to native camera JPEGs). */
@@ -127,8 +142,15 @@ const MobileCapture = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const wallQueryId = searchParams.get('wall')
 
   const { venueId } = useParams<{ venueId: string }>()
+
+  const preferredWallIdRef = useRef<string | null>(wallQueryId)
+  useEffect(() => {
+    preferredWallIdRef.current = wallQueryId
+  }, [wallQueryId])
 
   const [isUploading, setIsUploading] = useState(false)
   const [toast, setToast] = useState<Toast | null>(null)
@@ -208,22 +230,6 @@ const MobileCapture = () => {
     }
   }, [])
 
-  const determineCurrentWall = useCallback((data: ProgressState): WallSegment | null => {
-    if (!data.walls || data.walls.length === 0) {
-      console.warn('No walls found in progress data')
-      return null
-    }
-    
-    if (data.current_target) {
-      const next = data.walls.find((wall) => wall.id === data.current_target?.id)
-      if (next) return next
-    }
-    
-    // Find first incomplete wall
-    const incompleteWall = data.walls.find((wall) => !data.completed_walls.includes(wall.id))
-    return incompleteWall ?? null
-  }, [])
-
   const fetchProgress = useCallback(async () => {
     if (!venueId) {
       console.error('No venueId provided')
@@ -262,7 +268,7 @@ const MobileCapture = () => {
             wall_regions: []
           }
           setProgress(defaultProgress)
-          setCurrentWall(defaultProgress.walls[0])
+          setCurrentWall(pickWallForCapture(defaultProgress, preferredWallIdRef.current))
           return
         }
         
@@ -309,8 +315,7 @@ const MobileCapture = () => {
       }
       
       setProgress(dataWithCoords)
-      const wall = determineCurrentWall(dataWithCoords)
-      setCurrentWall(wall)
+      setCurrentWall(pickWallForCapture(dataWithCoords, preferredWallIdRef.current))
 
       // Preload wall images for review
       try {
@@ -345,7 +350,7 @@ const MobileCapture = () => {
           wall_regions: []
         }
         setProgress(defaultProgress)
-        setCurrentWall(defaultProgress.walls[0])
+        setCurrentWall(pickWallForCapture(defaultProgress, preferredWallIdRef.current))
         // Don't show alert for network errors - just use defaults silently
         // The app will work with default values
       } else {
@@ -368,10 +373,10 @@ const MobileCapture = () => {
           wall_regions: []
         }
         setProgress(defaultProgress)
-        setCurrentWall(defaultProgress.walls[0])
+        setCurrentWall(pickWallForCapture(defaultProgress, preferredWallIdRef.current))
       }
     }
-  }, [determineCurrentWall, venueId])
+  }, [venueId])
 
   useEffect(() => {
     let cancelled = false
@@ -601,8 +606,10 @@ const MobileCapture = () => {
           type: 'success',
         })
       } else if (wallComplete && activeWallId) {
-        setToast({ message: 'All photos captured! Stitch & review.', type: 'success' })
-        navigate(`/review/${venueId}/${activeWallId}`)
+        setToast({
+          message: 'This wall has all required photos. Open Stitch or Corners from the list below when you want.',
+          type: 'success',
+        })
       } else {
         setToast({ message: 'Great capture! Move to the next wall.', type: 'success' })
       }
@@ -686,11 +693,13 @@ const MobileCapture = () => {
         await fetchProgress()
 
         if (wallComplete && activeWallId) {
-          setToast({ message: 'All photos uploaded! Stitch & review.', type: 'success' })
+          setToast({
+            message: 'This wall has all required photos. Open Stitch or Corners from the list below when you want.',
+            type: 'success',
+          })
           setShowCheck(true)
           setTimeout(() => setShowCheck(false), 1200)
           setRetakingWallId(null)
-          navigate(`/review/${venueId}/${activeWallId}`)
           return
         }
       }
@@ -747,7 +756,7 @@ const MobileCapture = () => {
           wall_regions: []
         }
         setProgress(defaultProgress)
-        setCurrentWall(defaultProgress.walls[0])
+        setCurrentWall(pickWallForCapture(defaultProgress, preferredWallIdRef.current))
       }, 10000) // 10 second timeout
     } else {
       // Progress loaded, clear timeout
@@ -768,15 +777,23 @@ const MobileCapture = () => {
   // IMPORTANT: This must be before any conditional returns
   useEffect(() => {
     if (!currentWall && !progress?.is_complete && progress?.walls && progress.walls.length > 0) {
-      // Use the first incomplete wall or first wall if all are incomplete
-      const firstIncomplete = progress.walls.find(w => !progress.completed_walls.includes(w.id))
-      const wallToUse = firstIncomplete || progress.walls[0]
+      const wallToUse = pickWallForCapture(progress, preferredWallIdRef.current)
       if (wallToUse && wallSetRef.current !== wallToUse.id) {
         wallSetRef.current = wallToUse.id
         setCurrentWall(wallToUse)
       }
     }
   }, [progress, currentWall]) // Keep currentWall to reset ref when it changes
+
+  /** If ?wall= changes (e.g. deep link), switch the active capture target without waiting for the next poll. */
+  useEffect(() => {
+    if (!progress?.walls?.length || !wallQueryId) return
+    const hit = progress.walls.find((w) => w.id === wallQueryId)
+    if (hit) {
+      wallSetRef.current = hit.id
+      setCurrentWall(hit)
+    }
+  }, [wallQueryId, progress])
 
   // NOW we can do conditional returns - all hooks are above
   if (!progress) {
@@ -852,6 +869,7 @@ const MobileCapture = () => {
             wallId={currentWall?.id}
             active="capture"
             compact={!showDesktopHandoff}
+            linkCaptureToWall
           />
         </div>
       )}
@@ -1256,6 +1274,35 @@ const MobileCapture = () => {
                   )}
                   <div className="review-wall-actions">
                     <button
+                      type="button"
+                      className="review-wall-btn"
+                      title="Use this wall for camera / gallery on this screen"
+                      onClick={() => {
+                        wallSetRef.current = wall.id
+                        setCurrentWall(wall as WallSegment)
+                        setToast({ message: `Active wall: ${wall.name}`, type: 'success' })
+                      }}
+                      disabled={isUploading}
+                    >
+                      Use for capture
+                    </button>
+                    <button
+                      type="button"
+                      className="review-wall-btn"
+                      title="Upload images from files"
+                      onClick={() => navigate(`/upload/${venueId}/${wall.id}`)}
+                    >
+                      Upload files
+                    </button>
+                    <button
+                      type="button"
+                      className="review-wall-btn"
+                      title="Stitch segments"
+                      onClick={() => navigate(`/review/${venueId}/${wall.id}`)}
+                    >
+                      Stitch
+                    </button>
+                    <button
                       className="review-wall-btn retake"
                       onClick={async () => {
                         const target = progress?.walls?.find(w => w.id === wall.id) as WallSegment | undefined
@@ -1330,8 +1377,9 @@ const MobileCapture = () => {
           <p className="capture-gallery-hint">
             {currentRequiredSegments > 1 ? (
               <>
-                This wall needs <strong>{currentRequiredSegments}</strong> segment photos (~1 per 10 ft
-                {wallLengthFt != null ? `; wall ≈ ${wallLengthFt} ft` : ''}). Select up to{' '}
+                This wall needs <strong>{currentRequiredSegments}</strong> segment photo
+                {currentRequiredSegments !== 1 ? 's' : ''} (walls under 25 ft need 1; longer walls ~1 per 10 ft
+                {wallLengthFt != null ? `; this wall ≈ ${wallLengthFt} ft` : ''}). Select up to{' '}
                 <strong>{segmentsRemaining}</strong> image(s) in order: <strong>left → right</strong>.
               </>
             ) : (

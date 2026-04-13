@@ -83,15 +83,40 @@ const WallSelector = () => {
             <div key={wall.id} className="wall-card">
               <h3>{wall.name}</h3>
               <p>Wall ID: {wall.id}</p>
-              <button
-                type="button"
-                onClick={() => handleWallSelect(wall.id)}
-                className="wall-button"
-                style={{ marginBottom: '0.5rem' }}
-                title={`Open corner & crop editor for ${wall.name}`}
-              >
-                Edit corners — {wall.name}
-              </button>
+              <div className="wall-card-actions">
+                <button
+                  type="button"
+                  onClick={() => navigate(`/capture/${venueId}?wall=${encodeURIComponent(wall.id)}`)}
+                  className="wall-button"
+                  title="Open guided capture with this wall selected"
+                >
+                  Capture / camera
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/upload/${venueId}/${wall.id}`)}
+                  className="wall-button"
+                  title="Upload photos from files for this wall"
+                >
+                  Upload images
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/review/${venueId}/${wall.id}`)}
+                  className="wall-button"
+                  title="Stitch captured segments"
+                >
+                  Stitch
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleWallSelect(wall.id)}
+                  className="wall-button"
+                  title={`Open corner & crop editor for ${wall.name}`}
+                >
+                  Edit corners
+                </button>
+              </div>
             </div>
           ))}
         </div>
