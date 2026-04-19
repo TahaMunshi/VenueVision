@@ -45,7 +45,13 @@ def create_app():
     client_dist_folder = os.path.abspath(os.path.join(BASE_DIR, '..', 'dist'))
 
     app = Flask(__name__, static_folder='static', static_url_path='/static')
-    CORS(app)
+    # Allow Vercel / any origin + ngrok browser-warning bypass header on cross-origin fetches
+    CORS(
+        app,
+        resources={r"/*": {"origins": "*"}},
+        allow_headers=["Content-Type", "Authorization", "ngrok-skip-browser-warning"],
+        expose_headers=["Content-Type"],
+    )
 
     # Gzip/deflate compression for responses (including GLB model files)
     app.config['COMPRESS_MIMETYPES'] = [

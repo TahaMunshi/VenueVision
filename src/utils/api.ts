@@ -24,7 +24,9 @@ export const getApiBaseUrl = () => {
     hostname.includes('vercel') ||
     hostname.includes('netlify')
   ) {
-    console.warn('VITE_API_BASE_URL is not set — API calls will fail on hosted deployments.')
+    console.error(
+      '[VenueVision] Set VITE_API_BASE_URL in the host (e.g. Vercel env) to your API origin (ngrok https URL), then redeploy. Without it, the UI cannot reach your backend.'
+    )
     return ''
   }
 

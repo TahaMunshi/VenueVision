@@ -5,6 +5,9 @@ import { ViewModeProvider } from './context/ViewModeContext'
 import { AuthProvider } from './context/AuthContext'
 import App from './App'
 import './style.css'
+import { installNgrokFetchBypass } from './patchNgrokFetch'
+
+installNgrokFetchBypass()
 
 ReactDOM.createRoot(document.getElementById('app')!).render(
   <React.StrictMode>
