@@ -1,0 +1,9 @@
+# Deploy the Vite app only. Root requirements.txt + server/ trigger Python (uv pip),
+# which is not needed for the static frontend and breaks the build.
+requirements.txt
+server/
+Dockerfile
+docker-compose.yml
+docker-compose.dev-frontend.yml
+render.yaml
+venuevision-inpaint/
