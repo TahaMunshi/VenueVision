@@ -1,0 +1,12 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    { "source": "/mobile/assets/:path*", "destination": "/assets/:path*" },
+    { "source": "/mobile/vite.svg", "destination": "/vite.svg" },
+    { "source": "/mobile", "destination": "/index.html" },
+    { "source": "/mobile/", "destination": "/index.html" },
+    { "source": "/mobile/:path*", "destination": "/index.html" }
+  ],
+  "redirects": [{ "source": "/", "destination": "/mobile/", "permanent": false }]
+}

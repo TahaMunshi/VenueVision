@@ -1,0 +1,24 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# Vite base is /mobile/ but files live at /assets/* on disk
+[[redirects]]
+  from = "/mobile/assets/*"
+  to = "/assets/:splat"
+  status = 200
+
+[[redirects]]
+  from = "/mobile/vite.svg"
+  to = "/vite.svg"
+  status = 200
+
+[[redirects]]
+  from = "/mobile/*"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/"
+  to = "/mobile/"
+  status = 302
