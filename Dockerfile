@@ -68,5 +68,9 @@ EXPOSE $PORT
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD python -c "import os,requests; requests.get(f'http://localhost:{os.environ.get(\"PORT\",5000)}/api/v1/health', timeout=5)" || exit 1
 
-# Default: start app. Use docker-compose so DB is up and setup_database.py runs first.
-CMD ["python", "server/app.py"]
+# Copy startup script and make executable
+COPY server/start.sh ./server/start.sh
+RUN chmod +x ./server/start.sh
+
+# Start: run DB migrations, seed data, then launch Flask
+CMD ["sh", "server/start.sh"]

@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 # Database connection string
 # Try to get from environment variable first, otherwise use default
-DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://postgres:Tennis123@localhost:5432/fyp_db')
+DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/fyp_db')
 
 def get_db_connection():
     """

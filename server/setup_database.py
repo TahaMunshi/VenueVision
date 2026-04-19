@@ -125,13 +125,15 @@ def create_tables(conn_params):
         if os.path.exists(schema_path):
             with open(schema_path, 'r') as f:
                 schema_sql = f.read()
-            # Only execute if there are actual SQL statements (not just comments)
-            if schema_sql.strip() and not schema_sql.strip().startswith('--'):
+            # Execute if there are actual SQL statements (strip leading comments first)
+            import re
+            has_sql = bool(re.search(r'(?m)^\s*(CREATE|ALTER|INSERT|DROP|UPDATE)\b', schema_sql, re.IGNORECASE))
+            if has_sql:
                 cursor.execute(schema_sql)
                 conn.commit()
                 print("[OK] Database tables created successfully!")
             else:
-                print("[INFO] No tables defined in schema.sql (file-based storage mode)")
+                print("[INFO] No SQL statements found in schema.sql")
         else:
             print("[INFO] schema.sql not found, skipping table creation")
         
@@ -147,6 +149,7 @@ def create_tables(conn_params):
                         conn.commit()
                         print(f"[OK] Migration {f} applied")
                     except psycopg2.Error as e:
+                        conn.rollback()
                         print(f"[WARN] Migration {f} skipped: {e}")
         
         cursor.close()
