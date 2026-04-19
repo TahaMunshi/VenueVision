@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import './Space3DViewer.css'
 import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
+import { resolveTextureUrlForNgrok } from '../../utils/ngrokTextureUrl'
 import { loadThreeBundle } from '../../utils/threeLoader'
 import PageNavBar from '../../components/PageNavBar'
 import { metersToFeet } from '../../constants/roomUnits'
@@ -231,22 +232,29 @@ const getFloorOrCeilingTexture = (
     const path = type.replace('texture:', '')
     const url = `${apiBase}/static/textures/${path}`
     return new Promise((resolve) => {
-      loader.load(
-        url,
-        (tex: any) => {
-          if (tex) {
-            tex.wrapS = THREE.RepeatWrapping
-            tex.wrapT = THREE.RepeatWrapping
-            tex.anisotropy = 4
-          }
-          resolve(tex)
-        },
-        undefined,
-        () => {
+      resolveTextureUrlForNgrok(url)
+        .then((loadUrl) => {
+          loader.load(
+            loadUrl,
+            (tex: any) => {
+              if (tex) {
+                tex.wrapS = THREE.RepeatWrapping
+                tex.wrapT = THREE.RepeatWrapping
+                tex.anisotropy = 4
+              }
+              resolve(tex)
+            },
+            undefined,
+            () => {
+              console.warn(`[3D Viewer] Failed to load floor/ceiling texture: ${url}`)
+              resolve(null)
+            }
+          )
+        })
+        .catch(() => {
           console.warn(`[3D Viewer] Failed to load floor/ceiling texture: ${url}`)
           resolve(null)
-        }
-      )
+        })
     })
   }
   return Promise.resolve(createProceduralTexture(THREE, type, tintHex))
@@ -590,33 +598,48 @@ const Space3DViewer = () => {
 
             totalTextures = data.walls.length
 
-            data.walls.forEach((wall: any) => {
-              const wallId = wall.id || wall.name
-              const imageUrl = wallImageUrls[wallId]
+            await Promise.all(
+              data.walls.map(
+                (wall: any) =>
+                  new Promise<void>((resolveWall) => {
+                    const wallId = wall.id || wall.name
+                    const imageUrl = wallImageUrls[wallId]
 
-              if (imageUrl) {
-                const fullUrl = `${API_BASE_URL}${imageUrl}${cacheBuster}`
+                    if (!imageUrl) {
+                      textures[wallId] = null
+                      onTextureLoad()
+                      resolveWall()
+                      return
+                    }
 
-                loader.load(
-                  fullUrl,
-                  (texture: any) => {
-                    // Optimize texture
-                    texture.magFilter = THREE.LinearFilter
-                    texture.minFilter = THREE.LinearMipmapLinearFilter
-                    textures[wallId] = texture
-                    onTextureLoad()
-                  },
-                  undefined,
-                  () => {
-                    console.warn(`[3D Viewer] ✗ Failed to load texture for ${wallId}`)
-                    onTextureError(wallId)
-                  }
-                )
-              } else {
-                textures[wallId] = null
-                onTextureLoad()
-              }
-            })
+                    const fullUrl = `${API_BASE_URL}${imageUrl}${cacheBuster}`
+                    resolveTextureUrlForNgrok(fullUrl)
+                      .then((loadUrl) => {
+                        loader.load(
+                          loadUrl,
+                          (texture: any) => {
+                            texture.magFilter = THREE.LinearFilter
+                            texture.minFilter = THREE.LinearMipmapLinearFilter
+                            textures[wallId] = texture
+                            onTextureLoad()
+                            resolveWall()
+                          },
+                          undefined,
+                          () => {
+                            console.warn(`[3D Viewer] ✗ Failed to load texture for ${wallId}`)
+                            onTextureError(wallId)
+                            resolveWall()
+                          }
+                        )
+                      })
+                      .catch(() => {
+                        console.warn(`[3D Viewer] ✗ Failed to fetch wall image for ${wallId}`)
+                        onTextureError(wallId)
+                        resolveWall()
+                      })
+                  })
+              )
+            )
           })
           .catch(async (err) => {
             console.error('[3D Viewer] Error loading layout:', err)
