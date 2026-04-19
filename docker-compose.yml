@@ -1,5 +1,6 @@
-version: "3.9"
-
+# VenueVision - One command to run everything.
+# From project root:  docker-compose up --build
+# Then open: http://localhost:5000/mobile
 services:
   # PostgreSQL Database
   db:
@@ -21,6 +22,10 @@ services:
       retries: 5
 
   # Flask + React Application
+  # Frontend is baked into the image at build time (see Dockerfile: npm run build).
+  # After UI changes: either
+  #   docker compose build --no-cache app && docker compose up -d
+  # or build locally and use docker-compose.dev-frontend.yml to mount ./dist (see that file).
   app:
     build: .
     container_name: venuevision-app
@@ -30,13 +35,17 @@ services:
     volumes:
       - ./server/static/uploads:/app/server/static/uploads
       - ./server/static/user_assets:/app/server/static/user_assets
+      - ./server/static/temp_tripo:/app/server/static/temp_tripo
       - ./server/temp:/app/server/temp
+      - ./.ngrok:/app/.ngrok
     environment:
       - FLASK_ENV=production
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/fyp_db
       - JWT_SECRET=${JWT_SECRET:-change-this-secret-in-production}
       - TRIPO_API_KEY=${TRIPO_API_KEY:-}
       - HF_TOKEN=${HF_TOKEN:-}
+      - INPAINT_SPACE_URL=${INPAINT_SPACE_URL:-TahaMunshi03/venuevision-inpaint}
+      - PUBLIC_URL=${PUBLIC_URL:-}
     depends_on:
       db:
         condition: service_healthy
@@ -47,6 +56,8 @@ services:
         echo 'Setting up database...' &&
         cd /app &&
         python server/setup_database.py &&
+        echo 'Seeding demo data...' &&
+        python server/seed_data.py || echo 'Seed skipped (data may already exist)' &&
         echo 'Starting Flask server...' &&
         python server/app.py
       "

@@ -5,6 +5,8 @@ from io import BytesIO
 
 from flask import Blueprint, jsonify, request
 
+from middleware.auth_middleware import token_required
+from utils.venue_auth import require_venue_access
 from services.image_analysis import analyze_quality
 from services.wall_processing import (
     auto_detect_corners,
@@ -12,7 +14,7 @@ from services.wall_processing import (
     process_wall_image,
 )
 from utils.file_manager import save_wall_photo, UPLOAD_ROOT
-from .common import completed_walls_for_venue, next_wall
+from .common import completed_walls_for_venue, next_wall, required_photos_for_wall, captured_segments_for_wall
 from services.floor_plan_service import get_venue_walls
 
 logger = logging.getLogger(__name__)
@@ -21,7 +23,8 @@ capture_bp = Blueprint("capture", __name__)
 
 
 @capture_bp.route("/capture/upload", methods=["POST"])
-def upload_capture():
+@token_required
+def upload_capture(current_user):
     """
     Accepts a photo capture, validates quality, and saves it for reconstruction.
     Expects multipart form-data containing:
@@ -38,6 +41,10 @@ def upload_capture():
 
     if not venue_id or not wall_id:
         return jsonify({"error": "venue_id and wall_id are required."}), 400
+
+    _, err = require_venue_access(venue_id, current_user, require_owner=True)
+    if err:
+        return err[0], err[1]
 
     file_bytes = file.read()
     if not file_bytes:
@@ -60,14 +67,20 @@ def upload_capture():
         return jsonify({"error": "Failed to save capture. Try again."}), 500
 
     walls_metadata = get_venue_walls(venue_id)
-    wall_ids = [wall["id"] for wall in walls_metadata]
-    completed = completed_walls_for_venue(venue_id, wall_ids)
+    completed = completed_walls_for_venue(venue_id, walls_metadata)
     current_target = next_wall(walls_metadata, completed)
+    active_wall_meta = next((w for w in walls_metadata if w["id"] == wall_id), {"id": wall_id})
+    active_required = required_photos_for_wall(active_wall_meta)
+    active_captured = captured_segments_for_wall(venue_id, wall_id)
 
     payload = {
         "message": "Capture stored successfully.",
         "filename": os.path.basename(saved_path),
         "path": saved_path.replace("\\", "/"),
+        "wall_id": wall_id,
+        "captured_segments": active_captured,
+        "required_segments": active_required,
+        "wall_capture_complete": active_captured >= active_required,
     }
 
     if current_target:
@@ -140,7 +153,8 @@ def auto_detect_wall_corners():
 
 
 @capture_bp.route("/wall/process", methods=["POST"])
-def process_wall():
+@token_required
+def process_wall(current_user):
     """
     Process a wall image: warp perspective, stylize, and save.
     Expects multipart form-data containing:
@@ -163,6 +177,10 @@ def process_wall():
     if not corner_points_json:
         return jsonify({"error": "corner_points are required."}), 400
 
+    _, err = require_venue_access(venue_id, current_user, require_owner=True)
+    if err:
+        return err[0], err[1]
+
     file_bytes = file.read()
     if not file_bytes:
         return jsonify({"error": "Empty file uploaded."}), 400
@@ -177,7 +195,25 @@ def process_wall():
         output_filename = f"processed_{wall_id}.jpg"
         output_path = os.path.join(venue_dir, output_filename)
 
-        result = process_wall_image(file_bytes, corner_points, output_path)
+        # Stretch final processed texture to the wall's real aspect ratio (length/height) when available.
+        wall_ratio = None
+        try:
+            walls = get_venue_walls(venue_id)
+            wall_meta = next((w for w in walls if w.get("id") == wall_id), None)
+            if wall_meta:
+                length = float(wall_meta.get("length") or 0)
+                height = float(wall_meta.get("height") or 0)
+                if length > 0 and height > 0:
+                    wall_ratio = length / height
+        except Exception:
+            wall_ratio = None
+
+        result = process_wall_image(
+            file_bytes,
+            corner_points,
+            output_path,
+            target_aspect_ratio=wall_ratio,
+        )
 
         if result["status"] == "error":
             return jsonify(result), 500

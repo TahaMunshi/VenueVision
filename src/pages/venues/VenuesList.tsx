@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import './VenuesList.css'
 import { getApiBaseUrl } from '../../utils/api'
 import CreateVenueModal from './CreateVenueModal'
+import PageNavBar from '../../components/PageNavBar'
 
 interface Venue {
   venue_id: number
@@ -21,6 +22,8 @@ const VenuesList = () => {
   const [loading, setLoading] = useState(true)
   const [user, setUser] = useState<any>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
 
   const API_BASE_URL = getApiBaseUrl()
 
@@ -85,6 +88,34 @@ const VenuesList = () => {
     navigate(`/venue/${venueIdentifier}`)
   }
 
+  const handleDeleteVenue = async (e: React.MouseEvent, venue: Venue) => {
+    e.stopPropagation()
+    if (!window.confirm(`Delete "${venue.venue_name}"? This will remove the venue and all its data (walls, images, layout). This cannot be undone.`)) {
+      return
+    }
+    setDeletingId(venue.venue_identifier)
+    setMessage(null)
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch(`${API_BASE_URL}/api/v1/venues/${venue.venue_identifier}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      const data = await response.json().catch(() => ({}))
+      if (response.ok) {
+        setMessage({ text: 'Venue deleted successfully.', type: 'success' })
+        fetchVenues()
+      } else {
+        setMessage({ text: data.error || 'Failed to delete venue', type: 'error' })
+      }
+    } catch (err) {
+      console.error('Delete venue error:', err)
+      setMessage({ text: 'Failed to delete venue.', type: 'error' })
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   const getUserInitials = () => {
     if (!user) return '?'
     if (user.full_name) {
@@ -97,14 +128,13 @@ const VenuesList = () => {
   if (loading) {
     return (
       <div className="venues-container">
-        <div className="venues-header">
-          <div className="venues-header-left">
-            <h1>VenueVision</h1>
+        <PageNavBar title="VenueVision" backLabel="Back" />
+        <div className="venues-content">
+          <div className="venues-skeleton-grid">
+            <div className="venues-skeleton venue-card-skel" />
+            <div className="venues-skeleton venue-card-skel" />
+            <div className="venues-skeleton venue-card-skel" />
           </div>
-        </div>
-        <div className="loading-state">
-          <div className="loading-spinner"></div>
-          <p>Loading your venues...</p>
         </div>
       </div>
     )
@@ -118,34 +148,52 @@ const VenuesList = () => {
           onSuccess={handleCreateSuccess}
         />
       )}
-      
-      <div className="venues-header">
-        <div className="venues-header-left">
-          <h1>VenueVision</h1>
-          <p>Create and manage your event spaces</p>
-        </div>
-        <div className="venues-header-right">
-          <button onClick={() => navigate('/assets')} className="assets-button">
-            📦 My Assets
-          </button>
-          {user && (
-            <div className="user-info">
-              <div className="user-avatar">{getUserInitials()}</div>
-              <span className="user-name">{user.username}</span>
-            </div>
-          )}
-          <button onClick={handleLogout} className="logout-button">
-            Logout
-          </button>
-        </div>
-      </div>
+
+      <PageNavBar
+        title="VenueVision"
+        backLabel="Back"
+        endSlot={
+          <>
+            <button
+              type="button"
+              onClick={() => navigate('/assets')}
+              className="assets-button"
+              title="Go to my 3D asset library (upload and manage models)"
+            >
+              My 3D assets
+            </button>
+            {user && (
+              <div className="user-info" title="Signed in user">
+                <div className="user-avatar">{getUserInitials()}</div>
+                <span className="user-name">{user.username}</span>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="logout-button"
+              title="Sign out and return to login page"
+            >
+              Log out
+            </button>
+          </>
+        }
+      />
 
       <div className="venues-content">
+        <div className="venues-hero">
+          <p className="venues-hero-tagline">Create and manage your event spaces</p>
+        </div>
         <div className="venues-actions">
-          <h2 className="venues-title">My Venues</h2>
-          <button onClick={handleCreateVenue} className="create-venue-button">
+          <h2 className="venues-title">My venues</h2>
+          <button
+            type="button"
+            onClick={handleCreateVenue}
+            className="create-venue-button"
+            title="Create a new venue and open its dashboard"
+          >
             <span>➕</span>
-            Create New Venue
+            Create new venue
           </button>
         </div>
 
@@ -156,9 +204,14 @@ const VenuesList = () => {
             <p className="empty-subtitle">
               Create your first venue to get started
             </p>
-            <button onClick={handleCreateVenue} className="create-venue-button">
+            <button
+              type="button"
+              onClick={handleCreateVenue}
+              className="create-venue-button"
+              title="Create your first venue and open its dashboard"
+            >
               <span>➕</span>
-              Create Your First Venue
+              Create your first venue
             </button>
           </div>
         ) : (
@@ -176,24 +229,40 @@ const VenuesList = () => {
                       Created {new Date(venue.created_at).toLocaleDateString()}
                     </p>
                   </div>
-                  <div className="venue-icon">🏢</div>
+                  <div className="venue-card-header-actions">
+                    <button
+                      type="button"
+                      className="venue-delete-button"
+                      onClick={(e) => handleDeleteVenue(e, venue)}
+                      disabled={deletingId === venue.venue_identifier}
+                      title="Delete venue"
+                    >
+                      {deletingId === venue.venue_identifier ? '…' : '🗑️'}
+                    </button>
+                    <div className="venue-icon">🏢</div>
+                  </div>
                 </div>
                 <div className="venue-card-stats">
                   <div className="venue-stat">
                     <span className="venue-stat-label">Width</span>
-                    <span className="venue-stat-value">{venue.width}m</span>
+                    <span className="venue-stat-value">{venue.width} ft</span>
                   </div>
                   <div className="venue-stat">
                     <span className="venue-stat-label">Depth</span>
-                    <span className="venue-stat-value">{venue.depth}m</span>
+                    <span className="venue-stat-value">{venue.depth} ft</span>
                   </div>
                   <div className="venue-stat">
                     <span className="venue-stat-label">Height</span>
-                    <span className="venue-stat-value">{venue.height}m</span>
+                    <span className="venue-stat-value">{venue.height} ft</span>
                   </div>
                 </div>
               </div>
             ))}
+          </div>
+        )}
+        {message && (
+          <div className={`venues-message ${message.type}`}>
+            {message.text}
           </div>
         )}
       </div>

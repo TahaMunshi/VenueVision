@@ -258,7 +258,8 @@ def process_wall_image(
     corner_points: List[List[float]],
     output_path: str,
     texture_width: int = 1024,
-    texture_height: int = 768
+    texture_height: int = 768,
+    target_aspect_ratio: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Process a wall image: warp perspective, stylize, and save.
@@ -305,7 +306,9 @@ def process_wall_image(
         avg_height = (left_height + right_height) / 2
         
         # Calculate aspect ratio
-        if avg_height > 0:
+        if target_aspect_ratio is not None and target_aspect_ratio > 0:
+            aspect_ratio = target_aspect_ratio
+        elif avg_height > 0:
             aspect_ratio = avg_width / avg_height
         else:
             aspect_ratio = texture_width / texture_height  # Fallback to default

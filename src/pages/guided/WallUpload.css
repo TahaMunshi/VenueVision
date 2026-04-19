@@ -2,7 +2,14 @@
   min-height: 100vh;
   background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
   color: #fff;
-  padding: 2rem;
+  padding: 0 2rem 2rem;
+}
+
+.wall-upload-meta {
+  text-align: center;
+  margin: 0 0 1.25rem;
+  opacity: 0.85;
+  font-size: 0.95rem;
 }
 
 .wall-upload-header {

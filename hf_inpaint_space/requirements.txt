@@ -1,0 +1,9 @@
+torch>=2.0
+torchvision
+transformers>=4.45
+accelerate
+Pillow
+numpy
+opencv-python-headless
+simple-lama-inpainting
+gradio>=4.0

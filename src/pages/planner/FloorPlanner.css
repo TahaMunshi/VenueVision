@@ -1,16 +1,42 @@
 .floor-planner-container {
   min-height: 100vh;
+  height: 100vh;
+  max-height: 100vh;
+  min-height: 100dvh;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
   background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
   color: #fff;
   display: flex;
   flex-direction: column;
 }
 
+.planner-subheader {
+  text-align: center;
+  padding: 0.75rem 1.5rem 1rem;
+  background: var(--vv-glass-dark-bg);
+  backdrop-filter: blur(var(--vv-glass-blur)) saturate(1.35);
+  -webkit-backdrop-filter: blur(var(--vv-glass-blur)) saturate(1.35);
+  border-bottom: 1px solid var(--vv-glass-dark-border);
+  box-shadow: var(--vv-glass-dark-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.planner-subheader-line {
+  margin: 0 0 10px;
+  opacity: 0.85;
+  font-size: 0.95rem;
+}
+
 .planner-header {
   text-align: center;
   padding: 1rem 2rem;
   position: relative;
-  background: rgba(0, 0, 0, 0.3);
+  background: rgba(15, 23, 42, 0.4);
+  backdrop-filter: blur(var(--vv-glass-blur)) saturate(1.35);
+  -webkit-backdrop-filter: blur(var(--vv-glass-blur)) saturate(1.35);
+  border-bottom: 1px solid var(--vv-glass-dark-border);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 .back-button {
@@ -18,18 +44,22 @@
   left: 2rem;
   top: 50%;
   transform: translateY(-50%);
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: var(--vv-glass-dark-bg);
+  backdrop-filter: blur(14px) saturate(1.35);
+  -webkit-backdrop-filter: blur(14px) saturate(1.35);
+  border: 1px solid var(--vv-glass-dark-border);
   color: #fff;
   padding: 0.5rem 1rem;
   border-radius: 8px;
   cursor: pointer;
   font-size: 1rem;
   transition: all 0.3s;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .back-button:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.28);
 }
 
 .planner-header h1 {
@@ -42,9 +72,36 @@
   font-size: 0.9rem;
 }
 
+.planner-tips {
+  margin: 12px auto 0;
+  max-width: 520px;
+  text-align: left;
+  font-size: 0.85rem;
+  color: #cbd5e0;
+}
+
+.planner-tips summary {
+  cursor: pointer;
+  color: #e2e8f0;
+  font-weight: 600;
+  list-style: none;
+}
+
+.planner-tips summary::-webkit-details-marker {
+  display: none;
+}
+
+.planner-tips ul {
+  margin: 8px 0 0 18px;
+  padding: 0;
+  line-height: 1.45;
+  opacity: 0.9;
+}
+
 .planner-content {
   display: flex;
   flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -52,11 +109,14 @@
   width: 250px;
   min-width: 200px;
   max-width: 600px;
-  background-color: rgba(0, 0, 0, 0.3);
+  background-color: var(--vv-glass-dark-bg);
+  backdrop-filter: blur(var(--vv-glass-blur)) saturate(1.35);
+  -webkit-backdrop-filter: blur(var(--vv-glass-blur)) saturate(1.35);
   padding: 20px;
   display: flex;
   flex-direction: column;
-  box-shadow: 2px 0 5px rgba(0, 0, 0, 0.5);
+  border-right: 1px solid var(--vv-glass-dark-border);
+  box-shadow: var(--vv-glass-dark-shadow), inset -1px 0 0 rgba(255, 255, 255, 0.04);
   position: relative;
   overflow-y: auto;
 }
@@ -291,10 +351,24 @@
 
 .planning-area {
   flex: 1;
-  padding: 20px;
+  min-height: 0;
+  padding: 16px 20px 20px;
   display: flex;
   flex-direction: column;
-  overflow: auto;
+  overflow: hidden;
+}
+
+/* Region used to measure fit; canvas stays inside — no inner scroll so the grid is never clipped. */
+.floor-plan-viewport {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.18);
 }
 
 .controls-bar {
@@ -303,6 +377,42 @@
   margin-bottom: 15px;
   border-radius: 8px;
   font-size: 0.9rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.controls-bar-info {
+  margin-right: 12px;
+}
+
+.view-mode-toggle {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.view-mode-btn {
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.view-mode-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.view-mode-btn.active {
+  background: rgba(76, 175, 80, 0.4);
+  border-color: rgba(76, 175, 80, 0.8);
+  color: #fff;
 }
 
 .floor-plan-canvas {
@@ -316,6 +426,21 @@
   flex-shrink: 0;
   box-sizing: content-box;
   margin: 0 auto;
+}
+
+/* Drag-from-library preview (HTML5 DnD): green = valid drop, red = collision/out of bounds */
+.planner-drop-ghost {
+  border-radius: 2px;
+  border-width: 2px;
+  border-style: dashed;
+}
+.planner-drop-ghost--valid {
+  border-color: rgba(76, 175, 80, 0.95);
+  background: rgba(76, 175, 80, 0.12);
+}
+.planner-drop-ghost--invalid {
+  border-color: rgba(244, 67, 54, 0.95);
+  background: rgba(244, 67, 54, 0.12);
 }
 
 .placed-asset {
@@ -336,6 +461,53 @@
 
 .placed-asset:hover {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+/* Ghosted in Floor Plan / Ceiling Plan view: semi-transparent and non-interactive */
+.placed-asset-ghost {
+  opacity: 0.3;
+  pointer-events: none;
+  cursor: default;
+}
+
+.placed-asset-ghost .delete-asset-btn {
+  display: none;
+}
+
+.placed-asset--selected {
+  outline: 3px solid #ffc107;
+  outline-offset: 1px;
+  box-shadow: 0 0 0 2px rgba(255, 193, 7, 0.35);
+}
+
+.rug-footprint-panel {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.rug-footprint-panel h4 {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+}
+
+.rug-footprint-hint {
+  font-size: 0.8rem;
+  opacity: 0.85;
+  margin: 0 0 8px;
+  line-height: 1.35;
+}
+
+.rug-footprint-panel--selected {
+  background: rgba(255, 193, 7, 0.08);
+  border-radius: 8px;
+  padding: 10px 8px 12px;
+  border: 1px solid rgba(255, 193, 7, 0.35);
+}
+
+.rug-footprint-panel--selected .action-button {
+  margin-top: 8px;
+  width: 100%;
 }
 
 .asset-label {

@@ -1,0 +1,13 @@
+# Optional overlay: serve the React app from your host's ./dist folder.
+# Use this when you change frontend code and want updates without rebuilding the image.
+#
+# 1. npm run build
+# 2. docker compose -f docker-compose.yml -f docker-compose.dev-frontend.yml up -d
+#
+# Ensure ./dist exists (run npm run build at least once). First-time setup can still use
+# docker compose up --build without this file (frontend is baked into the image).
+
+services:
+  app:
+    volumes:
+      - ./dist:/app/dist

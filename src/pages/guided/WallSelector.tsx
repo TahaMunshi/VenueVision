@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import './WallSelector.css'
-import { getApiBaseUrl } from '../../utils/api'
+import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
+import PageNavBar from '../../components/PageNavBar'
 
 type Wall = {
   id: string
@@ -19,7 +20,9 @@ const WallSelector = () => {
   useEffect(() => {
     const fetchWalls = async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/progress`)
+        const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/progress`, {
+          headers: getAuthHeaders()
+        })
         const data = await response.json()
         
         if (data.walls && Array.isArray(data.walls)) {
@@ -53,7 +56,7 @@ const WallSelector = () => {
   }, [venueId, API_BASE_URL])
 
   const handleWallSelect = (wallId: string) => {
-    navigate(`/upload/${venueId}/${wallId}`)
+    navigate(`/edit/${venueId}/${wallId}`)
   }
 
   const handleView3D = () => {
@@ -71,13 +74,8 @@ const WallSelector = () => {
 
   return (
     <div className="wall-selector-container">
-      <div className="wall-selector-header">
-        <button onClick={() => navigate(`/venue/${venueId}`)} className="back-button">
-          ← Back to Venue
-        </button>
-        <h1>Wall Editor</h1>
-        <p>Venue: {venueId}</p>
-      </div>
+      <PageNavBar variant="dark" venueId={venueId} title="Wall editor — choose a wall" backLabel="Back" />
+      <p className="wall-selector-lead">Venue: {venueId} — open a wall to adjust texture corners</p>
 
       <div className="wall-selector-content">
         <div className="walls-grid">
@@ -85,37 +83,61 @@ const WallSelector = () => {
             <div key={wall.id} className="wall-card">
               <h3>{wall.name}</h3>
               <p>Wall ID: {wall.id}</p>
-              <button
-                onClick={() => handleWallSelect(wall.id)}
-                className="wall-button"
-                style={{ marginBottom: '0.5rem' }}
-              >
-                Edit Wall
-              </button>
-              <button
-                onClick={() => navigate(`/edit/${venueId}/${wall.id}`)}
-                className="wall-button"
-                style={{ background: '#FF9800' }}
-              >
-                Adjust Corners
-              </button>
+              <div className="wall-card-actions">
+                <button
+                  type="button"
+                  onClick={() => navigate(`/capture/${venueId}?wall=${encodeURIComponent(wall.id)}`)}
+                  className="wall-button"
+                  title="Open guided capture with this wall selected"
+                >
+                  Capture / camera
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/upload/${venueId}/${wall.id}`)}
+                  className="wall-button"
+                  title="Upload photos from files for this wall"
+                >
+                  Upload images
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/review/${venueId}/${wall.id}`)}
+                  className="wall-button"
+                  title="Stitch captured segments"
+                >
+                  Stitch
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleWallSelect(wall.id)}
+                  className="wall-button"
+                  title={`Open corner & crop editor for ${wall.name}`}
+                >
+                  Edit corners
+                </button>
+              </div>
             </div>
           ))}
         </div>
 
         <div className="actions-section">
           <button
+            type="button"
             onClick={() => navigate(`/planner/${venueId}`)}
             className="action-button primary"
             style={{ marginBottom: '0.5rem' }}
+            title="Go to 2D floor planner for this venue"
           >
-            📐 2D Floor Planner
+            Open 2D floor planner
           </button>
           <button
+            type="button"
             onClick={handleView3D}
             className="action-button primary"
+            title="Open 3D viewer for this venue"
           >
-            Generate & View 3D Space
+            Open 3D space viewer
           </button>
         </div>
       </div>

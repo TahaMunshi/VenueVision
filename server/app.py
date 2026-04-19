@@ -1,7 +1,14 @@
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, jsonify, send_from_directory, request
 from flask_cors import CORS
+from flask_compress import Compress
 import sys
 import os
+
+from dotenv import load_dotenv
+
+# Project root .env (so TRIPO_API_KEY etc. apply when running `python server/app.py` locally)
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(_project_root, ".env"))
 
 # Add the server directory to the path to allow imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -24,8 +31,6 @@ def init_directories():
     
     for directory in directories:
         os.makedirs(directory, exist_ok=True)
-    
-    print(f"[DEBUG] Initialized directories: {len(directories)} directories created/verified")
 
 # Function to create the Flask app instance
 def create_app():
@@ -38,16 +43,24 @@ def create_app():
     # Navigates up from server/ to root fyp/ and then into dist/
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     client_dist_folder = os.path.abspath(os.path.join(BASE_DIR, '..', 'dist'))
-    
-    # Debug: Print the path being used
-    print(f"[DEBUG] Serving React from: {client_dist_folder}")
-    print(f"[DEBUG] Path exists: {os.path.exists(client_dist_folder)}")
-    if os.path.exists(client_dist_folder):
-        print(f"[DEBUG] Contents: {os.listdir(client_dist_folder)}")
-    
-    # Configure Flask to serve static files from the server/static directory
+
     app = Flask(__name__, static_folder='static', static_url_path='/static')
-    CORS(app) 
+    CORS(app)
+
+    # Gzip/deflate compression for responses (including GLB model files)
+    app.config['COMPRESS_MIMETYPES'] = [
+        'text/html', 'text/css', 'text/xml', 'text/javascript',
+        'application/json', 'application/javascript',
+        'application/octet-stream', 'model/gltf-binary',
+    ]
+    app.config['COMPRESS_MIN_SIZE'] = 512
+    Compress(app)
+
+    @app.after_request
+    def add_cache_headers(response):
+        if request.path.startswith('/static/'):
+            response.headers['Cache-Control'] = 'public, max-age=86400'
+        return response
 
     # Register the Blueprint for API routes
     app.register_blueprint(api_bp, url_prefix='/api/v1')
@@ -78,15 +91,6 @@ def create_app():
     return app
 
 if __name__ == '__main__':
-    print("=" * 60)
-    print("Starting Flask server...")
-    print("=" * 60)
     app = create_app()
-    print("=" * 60)
-    print("Flask app created successfully!")
-    print("Access the React app at: http://localhost:5000/mobile")
-    print("API endpoints available at: http://localhost:5000/api/v1")
-    print("=" * 60)
-    # Bind to 0.0.0.0 so the server is reachable by other devices on the same local network
     app.run(host='0.0.0.0', debug=True, port=5000)
 

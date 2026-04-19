@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import './MobileCapture.css'
-import MiniMap, { type WallSegment } from '../../components/MiniMap'
-import ScannerOverlay from '../../components/ScannerOverlay'
-import { getApiBaseUrl } from '../../utils/api'
+import type { WallSegment } from '../../components/MiniMap'
+import GuidedFlowStepper from '../../components/GuidedFlowStepper'
+import PageNavBar from '../../components/PageNavBar'
+import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
 
 // NOTE: To access the backend from your phone on the same Wi‑Fi, set VITE_API_BASE_URL in the project .env to your PC's LAN IP, e.g. http://192.168.1.42:5000
 
@@ -32,6 +33,108 @@ type ProgressState = {
   walls: WallSegment[]
   floor_plan_url?: string | null
   wall_regions?: WallRegion[]
+  capture_requirements?: Record<string, { required_segments: number; captured_segments: number }>
+}
+
+/** Active wall: URL ?wall= wins, then server current_target, then first incomplete. */
+function pickWallForCapture(data: ProgressState, preferredWallId: string | null): WallSegment | null {
+  if (!data.walls?.length) return null
+  if (preferredWallId) {
+    const hit = data.walls.find((w) => w.id === preferredWallId)
+    if (hit) return hit
+  }
+  if (data.current_target) {
+    const next = data.walls.find((wall) => wall.id === data.current_target?.id)
+    if (next) return next
+  }
+  const incompleteWall = data.walls.find((wall) => !data.completed_walls.includes(wall.id))
+  return incompleteWall ?? data.walls[0] ?? null
+}
+
+/** Encode quality for uploads (was 0.92; higher = closer to native camera JPEGs). */
+const CAPTURE_JPEG_QUALITY = 0.97
+
+/**
+ * Request the best resolution the browser will honor (mobile often defaulted to ~VGA before).
+ * Tries a chain of constraints from full HD down to minimal.
+ */
+async function getVideoStreamWithFallback(): Promise<MediaStream> {
+  const steps: MediaStreamConstraints[] = [
+    {
+      video: {
+        facingMode: 'environment',
+        width: { ideal: 1920, min: 720 },
+        height: { ideal: 1080, min: 480 },
+        frameRate: { ideal: 30, max: 60 },
+      },
+      audio: false,
+    },
+    {
+      video: {
+        facingMode: 'environment',
+        width: { ideal: 1280, min: 640 },
+        height: { ideal: 720, min: 480 },
+      },
+      audio: false,
+    },
+    {
+      video: {
+        facingMode: 'environment',
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+      },
+      audio: false,
+    },
+    {
+      video: { facingMode: 'environment' },
+      audio: false,
+    },
+    { video: true, audio: false },
+  ]
+
+  let lastErr: unknown
+  for (const c of steps) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(c)
+    } catch (e) {
+      lastErr = e
+      console.warn('[MobileCapture] getUserMedia attempt failed, trying fallback:', e)
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
+}
+
+/** After stream starts, nudge the track toward the device max (often higher than default pick). */
+async function applyBestVideoSize(track: MediaStreamTrack): Promise<void> {
+  if (typeof track.getCapabilities !== 'function') return
+  const caps = track.getCapabilities() as {
+    width?: { min?: number; max?: number }
+    height?: { min?: number; max?: number }
+  }
+  const wMax = caps.width?.max
+  const hMax = caps.height?.max
+  if (wMax == null || hMax == null) return
+
+  // Prefer native max up to 4K; browsers scale preview but capture uses videoWidth/Height.
+  const targetW = Math.min(wMax, 3840)
+  const targetH = Math.min(hMax, 2160)
+
+  try {
+    await track.applyConstraints({
+      width: { ideal: targetW },
+      height: { ideal: targetH },
+    })
+  } catch (e) {
+    console.warn('[MobileCapture] applyConstraints max res failed:', e)
+    try {
+      await track.applyConstraints({
+        width: { ideal: Math.min(wMax, 1920) },
+        height: { ideal: Math.min(hMax, 1080) },
+      })
+    } catch (e2) {
+      console.warn('[MobileCapture] applyConstraints 1080p failed:', e2)
+    }
+  }
 }
 
 const MobileCapture = () => {
@@ -39,8 +142,15 @@ const MobileCapture = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const wallQueryId = searchParams.get('wall')
 
   const { venueId } = useParams<{ venueId: string }>()
+
+  const preferredWallIdRef = useRef<string | null>(wallQueryId)
+  useEffect(() => {
+    preferredWallIdRef.current = wallQueryId
+  }, [wallQueryId])
 
   const [isUploading, setIsUploading] = useState(false)
   const [toast, setToast] = useState<Toast | null>(null)
@@ -53,27 +163,71 @@ const MobileCapture = () => {
   const [videoReady, setVideoReady] = useState(false)
   const [loadingTimeout, setLoadingTimeout] = useState(false)
   const [retakingWallId, setRetakingWallId] = useState<string | null>(null) // Track which wall is being retaken
+  const [publicBaseUrl, setPublicBaseUrl] = useState<string | null>(null) // ngrok / PUBLIC_URL from server
 
   // All refs must be declared at the top level
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const wallSetRef = useRef<string | null>(null)
+  const galleryInputRef = useRef<HTMLInputElement>(null)
 
   const targetVenue = useMemo(() => venueId ?? 'venue-unknown', [venueId])
 
-  const determineCurrentWall = useCallback((data: ProgressState): WallSegment | null => {
-    if (!data.walls || data.walls.length === 0) {
-      console.warn('No walls found in progress data')
-      return null
+  /** Same endpoint as live camera capture; order of uploads = seq_01, seq_02, … (left → right). */
+  const uploadWallPhotoBlob = useCallback(
+    async (blob: Blob, filename: string, wallId: string) => {
+      const formData = new FormData()
+      formData.append('file', blob, filename)
+      formData.append('venue_id', targetVenue)
+      formData.append('wall_id', wallId)
+      const currentApiUrl = getApiBaseUrl()
+      const uploadUrl = `${currentApiUrl}/api/v1/capture/upload`
+      const response = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: formData,
+      })
+      let payload: any = {}
+      try {
+        const responseText = await response.text()
+        if (responseText) payload = JSON.parse(responseText)
+      } catch {
+        payload = { error: 'Invalid server response' }
+      }
+      return { ok: response.ok, payload }
+    },
+    [targetVenue]
+  )
+
+  /** QR + “open on phone” is for desktop; hide on phones/small tablets to reduce clutter. */
+  const [showDesktopHandoff, setShowDesktopHandoff] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(min-width: 900px)').matches : false
+  )
+
+  /** Collapsed by default on small screens so the camera view stays usable (esp. landscape). */
+  const [reviewExpanded, setReviewExpanded] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 768 : true
+  )
+
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 900px)')
+    const onHandoff = () => setShowDesktopHandoff(mq.matches)
+    onHandoff()
+    mq.addEventListener('change', onHandoff)
+    return () => mq.removeEventListener('change', onHandoff)
+  }, [])
+
+  useEffect(() => {
+    const collapseInLandscapePhone = () => {
+      if (!window.matchMedia('(orientation: landscape)').matches) return
+      if (window.matchMedia('(min-width: 900px)').matches) return
+      setReviewExpanded(false)
     }
-    
-    if (data.current_target) {
-      const next = data.walls.find((wall) => wall.id === data.current_target?.id)
-      if (next) return next
+    window.addEventListener('orientationchange', collapseInLandscapePhone)
+    window.addEventListener('resize', collapseInLandscapePhone)
+    return () => {
+      window.removeEventListener('orientationchange', collapseInLandscapePhone)
+      window.removeEventListener('resize', collapseInLandscapePhone)
     }
-    
-    // Find first incomplete wall
-    const incompleteWall = data.walls.find((wall) => !data.completed_walls.includes(wall.id))
-    return incompleteWall ?? null
   }, [])
 
   const fetchProgress = useCallback(async () => {
@@ -86,21 +240,12 @@ const MobileCapture = () => {
     const currentApiUrl = getApiBaseUrl()
     
     try {
-      console.log(`[MobileCapture] Fetching progress for venue: ${venueId}`)
-      console.log(`[MobileCapture] API_BASE_URL: ${currentApiUrl}`)
       const url = `${currentApiUrl}/api/v1/venue/${venueId}/progress`
-      console.log(`[MobileCapture] Full URL: ${url}`)
-      
       const response = await fetch(url, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: getAuthHeaders(),
       })
-      
-      console.log(`[MobileCapture] Response status: ${response.status}`)
-      console.log(`[MobileCapture] Response ok: ${response.ok}`)
-      
+
       if (!response.ok) {
         const errorText = await response.text()
         console.error('[MobileCapture] Failed to load capture progress:', response.status, errorText)
@@ -123,7 +268,7 @@ const MobileCapture = () => {
             wall_regions: []
           }
           setProgress(defaultProgress)
-          setCurrentWall(defaultProgress.walls[0])
+          setCurrentWall(pickWallForCapture(defaultProgress, preferredWallIdRef.current))
           return
         }
         
@@ -131,8 +276,7 @@ const MobileCapture = () => {
       }
       
       const data = (await response.json()) as ProgressState
-      console.log('[MobileCapture] Progress data received:', JSON.stringify(data, null, 2))
-      
+
       if (!data || !data.walls) {
         console.error('[MobileCapture] Invalid progress data structure:', data)
         throw new Error('Invalid progress data structure')
@@ -143,14 +287,16 @@ const MobileCapture = () => {
         if ('coordinates' in wall && Array.isArray((wall as any).coordinates)) {
           return wall as WallSegment
         }
-        // Default coordinates for 4 walls (North, East, South, West)
+        // Default coordinates for 4 walls (North, East, South, West); keep length/height from API
         const defaultCoords: [number, number, number, number][] = [
           [10, 10, 90, 10], // North
           [90, 10, 90, 90], // East
           [90, 90, 10, 90], // South
           [10, 90, 10, 10], // West
         ]
+        const w = wall as WallSegment & { height?: number }
         return {
+          ...w,
           id: wall.id,
           name: wall.name,
           coordinates: defaultCoords[index % 4] || [10, 10, 90, 10]
@@ -164,17 +310,18 @@ const MobileCapture = () => {
         is_complete: data.is_complete,
         walls: wallsWithCoords,
         floor_plan_url: data.floor_plan_url || null,
-        wall_regions: data.wall_regions || []
+        wall_regions: data.wall_regions || [],
+        capture_requirements: data.capture_requirements || {}
       }
       
       setProgress(dataWithCoords)
-      const wall = determineCurrentWall(dataWithCoords)
-      console.log('[MobileCapture] Determined current wall:', wall)
-      setCurrentWall(wall)
+      setCurrentWall(pickWallForCapture(dataWithCoords, preferredWallIdRef.current))
 
       // Preload wall images for review
       try {
-        const imagesRes = await fetch(`${currentApiUrl}/api/v1/venue/${venueId}/wall-images`)
+        const imagesRes = await fetch(`${currentApiUrl}/api/v1/venue/${venueId}/wall-images`, {
+          headers: getAuthHeaders()
+        })
         const imagesData = await imagesRes.json()
         if (imagesData.status === 'success' && imagesData.wall_images) {
           setWallImages(imagesData.wall_images)
@@ -203,7 +350,7 @@ const MobileCapture = () => {
           wall_regions: []
         }
         setProgress(defaultProgress)
-        setCurrentWall(defaultProgress.walls[0])
+        setCurrentWall(pickWallForCapture(defaultProgress, preferredWallIdRef.current))
         // Don't show alert for network errors - just use defaults silently
         // The app will work with default values
       } else {
@@ -226,10 +373,10 @@ const MobileCapture = () => {
           wall_regions: []
         }
         setProgress(defaultProgress)
-        setCurrentWall(defaultProgress.walls[0])
+        setCurrentWall(pickWallForCapture(defaultProgress, preferredWallIdRef.current))
       }
     }
-  }, [determineCurrentWall, venueId])
+  }, [venueId])
 
   useEffect(() => {
     let cancelled = false
@@ -242,11 +389,7 @@ const MobileCapture = () => {
 
       // First, stop any existing stream to release the camera
       if (streamRef.current) {
-        console.log('[MobileCapture] Stopping existing stream before requesting new one')
-        streamRef.current.getTracks().forEach((track) => {
-          track.stop()
-          console.log('[MobileCapture] Stopped track:', track.kind, track.label)
-        })
+        streamRef.current.getTracks().forEach((track) => track.stop())
         streamRef.current = null
       }
 
@@ -259,55 +402,32 @@ const MobileCapture = () => {
       await new Promise(resolve => setTimeout(resolve, 100))
 
       try {
-        // More flexible camera constraints to avoid OverconstrainedError
-        // On mobile, be even more flexible
-        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
-        
-        const constraints: MediaStreamConstraints = isMobile
-          ? {
-              // Very flexible constraints for mobile
-              video: {
-                facingMode: 'environment',
-                // Let mobile choose the best resolution
-              },
-              audio: false
-            }
-          : {
-              // Desktop can handle more specific constraints
-              video: {
-                facingMode: 'environment',
-                width: { ideal: 1920, min: 640 },
-                height: { ideal: 1080, min: 480 }
-              },
-              audio: false
-            }
-
-        const stream = await navigator.mediaDevices.getUserMedia(constraints)
+        const stream = await getVideoStreamWithFallback()
+        const vTrack = stream.getVideoTracks()[0]
+        if (vTrack) {
+          try {
+            await applyBestVideoSize(vTrack)
+          } catch (e) {
+            console.warn('[MobileCapture] applyBestVideoSize:', e)
+          }
+        }
         if (cancelled) {
           stream.getTracks().forEach((track) => track.stop())
           return
         }
 
         streamRef.current = stream
-        console.log('[MobileCapture] Stream obtained, active tracks:', stream.getVideoTracks().length)
-        
-        // Use setTimeout to ensure video element is mounted
+
         setTimeout(() => {
           if (videoRef.current) {
-            console.log('[MobileCapture] Setting video stream to element')
             videoRef.current.srcObject = stream
-            
+
             videoRef.current.onloadedmetadata = () => {
-              console.log('[MobileCapture] Video metadata loaded, dimensions:', videoRef.current?.videoWidth, 'x', videoRef.current?.videoHeight)
               setVideoReady(true)
-              // Force play after metadata loads
               const playPromise = videoRef.current?.play()
               if (playPromise) {
                 playPromise
-                  .then(() => {
-                    console.log('[MobileCapture] Video is playing successfully')
-                    setVideoReady(true)
-                  })
+                  .then(() => setVideoReady(true))
                   .catch(err => {
                     console.warn('[MobileCapture] Play failed:', err)
                     // Try again after a short delay
@@ -320,15 +440,8 @@ const MobileCapture = () => {
               }
             }
             
-            videoRef.current.onplay = () => {
-              console.log('[MobileCapture] Video play event fired')
-              setVideoReady(true)
-            }
-            
-            videoRef.current.onplaying = () => {
-              console.log('[MobileCapture] Video is actually playing')
-              setVideoReady(true)
-            }
+            videoRef.current.onplay = () => setVideoReady(true)
+            videoRef.current.onplaying = () => setVideoReady(true)
             
             videoRef.current.onerror = (e) => {
               console.error('[MobileCapture] Video element error:', e, videoRef.current?.error)
@@ -347,7 +460,6 @@ const MobileCapture = () => {
             // Retry setting stream after another delay
             setTimeout(() => {
               if (videoRef.current && streamRef.current) {
-                console.log('[MobileCapture] Retry: Setting video stream')
                 videoRef.current.srcObject = streamRef.current
                 videoRef.current.play().catch(e => console.warn('[MobileCapture] Retry play:', e))
               }
@@ -414,7 +526,6 @@ const MobileCapture = () => {
     const intervalId = setInterval(() => {
       retryCount++
       if (retryCount <= maxRetries) {
-        console.log(`[MobileCapture] Retrying progress fetch (attempt ${retryCount}/${maxRetries})...`)
         fetchProgress()
       } else {
         console.warn('[MobileCapture] Max retries reached, stopping polling')
@@ -425,11 +536,35 @@ const MobileCapture = () => {
     return () => clearInterval(intervalId)
   }, [fetchProgress]) // Removed progress dependency
 
+  // Public URL (ngrok) from server so share/QR link works for phone capture
+  useEffect(() => {
+    const base = getApiBaseUrl()
+    fetch(`${base}/api/v1/public-url`)
+      .then((r) => r.json())
+      .then((data: { url?: string }) => {
+        const u = (data?.url || '').trim()
+        if (u) setPublicBaseUrl(u.replace(/\/$/, ''))
+      })
+      .catch(() => {})
+  }, [])
+
   useEffect(() => {
     if (!toast) return
     const timeout = setTimeout(() => setToast(null), 2500)
     return () => clearTimeout(timeout)
   }, [toast])
+
+  /** Center “Looking for …” popup; hides after a few seconds (re-shows when target wall changes). */
+  const [wallHintVisible, setWallHintVisible] = useState(false)
+  useEffect(() => {
+    if (!currentWall || progress?.is_complete || cameraError) {
+      setWallHintVisible(false)
+      return
+    }
+    setWallHintVisible(true)
+    const t = setTimeout(() => setWallHintVisible(false), 3600)
+    return () => clearTimeout(t)
+  }, [currentWall?.id, progress?.is_complete, cameraError])
 
   const handleCapture = async () => {
     if (!videoRef.current || !canvasRef.current) return
@@ -445,67 +580,44 @@ const MobileCapture = () => {
     setAlertMessage(null)
 
     try {
-      console.log('[MobileCapture] Starting capture...')
       const blob = await snapshotToBlob(videoRef.current, canvasRef.current)
       if (!blob) {
         throw new Error('Unable to capture photo. Please try again.')
       }
-      
-      console.log('[MobileCapture] Photo captured, size:', blob.size, 'bytes')
 
-      const formData = new FormData()
-      const filename = `capture-${Date.now()}.jpg`
-      formData.append('file', blob, filename)
-      formData.append('venue_id', targetVenue)
-      formData.append('wall_id', activeWallId)
+      const { ok, payload } = await uploadWallPhotoBlob(blob, `capture-${Date.now()}.jpg`, activeWallId)
 
-      // Re-detect API URL at runtime
-      const currentApiUrl = getApiBaseUrl()
-      const uploadUrl = `${currentApiUrl}/api/v1/capture/upload`
-      console.log('[MobileCapture] Uploading to:', uploadUrl)
-      console.log('[MobileCapture] Venue:', targetVenue, 'Wall:', activeWallId)
-
-      const response = await fetch(uploadUrl, {
-        method: 'POST',
-        body: formData
-        // Don't set Content-Type header - browser will set it with boundary for FormData
-      })
-
-      console.log('[MobileCapture] Upload response status:', response.status)
-      console.log('[MobileCapture] Upload response ok:', response.ok)
-
-      let payload: any = {}
-      try {
-        const responseText = await response.text()
-        console.log('[MobileCapture] Response text:', responseText)
-        if (responseText) {
-          payload = JSON.parse(responseText)
-        }
-      } catch (parseError) {
-        console.error('[MobileCapture] Failed to parse response:', parseError)
-        payload = { error: 'Invalid server response' }
-      }
-
-      if (!response.ok) {
-        const errorMsg = (payload && typeof payload === 'object' && 'error' in payload) 
-          ? payload.error 
-          : `Server error: ${response.status}`
+      if (!ok) {
+        const errorMsg =
+          payload && typeof payload === 'object' && 'error' in payload
+            ? String((payload as { error: unknown }).error)
+            : 'Upload failed'
         console.error('[MobileCapture] Upload failed:', errorMsg)
         setAlertMessage(errorMsg)
         return
       }
 
-      console.log('[MobileCapture] Upload successful:', payload)
-      setToast({ message: 'Great! Now turn right ->', type: 'success' })
+      const capturedSegments = Number(payload?.captured_segments ?? 0)
+      const requiredSegments = Number(payload?.required_segments ?? 1)
+      const wallComplete = Boolean(payload?.wall_capture_complete)
+      if (!wallComplete && requiredSegments > 1) {
+        setToast({
+          message: `Captured ${capturedSegments}/${requiredSegments} for this wall. Take another photo of the same wall.`,
+          type: 'success',
+        })
+      } else if (wallComplete && activeWallId) {
+        setToast({
+          message: 'This wall has all required photos. Open Stitch or Corners from the list below when you want.',
+          type: 'success',
+        })
+      } else {
+        setToast({ message: 'Great capture! Move to the next wall.', type: 'success' })
+      }
       setShowCheck(true)
       setTimeout(() => setShowCheck(false), 1200)
 
-      // Clear retaking flag since new capture was made
       setRetakingWallId(null)
-
-      // Refresh progress to update completed walls list
       await fetchProgress()
-      // DO NOT refetch wall images - the image will be loaded naturally when progress updates
     } catch (error) {
       console.error('[MobileCapture] Capture error:', error)
       if (error instanceof TypeError && error.message.includes('fetch')) {
@@ -513,6 +625,103 @@ const MobileCapture = () => {
       } else {
         setAlertMessage(`Unexpected error: ${error instanceof Error ? error.message : 'Unknown error'}. Please retry.`)
       }
+    } finally {
+      setIsUploading(false)
+    }
+  }
+
+  const handleGalleryFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Snapshot files BEFORE clearing the input. FileList is live — clearing `value` empties it in
+    // Chrome/Safari, so Array.from(files) after reset would be empty and uploads would silently no-op.
+    const rawFiles = e.target.files ? Array.from(e.target.files) : []
+    e.target.value = ''
+    if (rawFiles.length === 0) return
+
+    const activeWallId = currentWall?.id
+    if (!activeWallId) {
+      setAlertMessage('No target wall assigned yet. Please wait for guidance to load.')
+      return
+    }
+
+    const req = progress?.capture_requirements?.[activeWallId]
+    const required = req?.required_segments ?? 1
+    const captured = req?.captured_segments ?? 0
+    const remaining = Math.max(0, required - captured)
+
+    if (remaining === 0) {
+      setToast({ message: 'This wall already has enough photos.', type: 'success' })
+      return
+    }
+
+    const picked = rawFiles.filter((f) => {
+      const okType = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(f.type)
+      const extOk = f.type === '' && /\.(jpe?g|png|webp)$/i.test(f.name)
+      return (okType || extOk) && f.size > 0 && f.size <= 10 * 1024 * 1024
+    })
+
+    if (picked.length === 0) {
+      setAlertMessage('Please choose JPG, PNG, or WebP images under 10MB each.')
+      return
+    }
+
+    const toUpload = picked.slice(0, remaining)
+    if (picked.length > remaining) {
+      setToast({
+        message: `Using the first ${remaining} photo(s) in file order (left → right along the wall).`,
+        type: 'success',
+      })
+    }
+
+    setIsUploading(true)
+    setAlertMessage(null)
+
+    try {
+      let lastPayload: Record<string, unknown> | null = null
+      for (const file of toUpload) {
+        const { ok, payload } = await uploadWallPhotoBlob(file, file.name || `upload-${Date.now()}.jpg`, activeWallId)
+        if (!ok) {
+          const errorMsg =
+            payload && typeof payload === 'object' && 'error' in payload
+              ? String((payload as { error: unknown }).error)
+              : 'Upload failed'
+          setAlertMessage(errorMsg)
+          break
+        }
+
+        lastPayload = payload as Record<string, unknown>
+        const wallComplete = Boolean(payload?.wall_capture_complete)
+        await fetchProgress()
+
+        if (wallComplete && activeWallId) {
+          setToast({
+            message: 'This wall has all required photos. Open Stitch or Corners from the list below when you want.',
+            type: 'success',
+          })
+          setShowCheck(true)
+          setTimeout(() => setShowCheck(false), 1200)
+          setRetakingWallId(null)
+          return
+        }
+      }
+
+      if (lastPayload) {
+        const cap = Number(lastPayload.captured_segments ?? 0)
+        const reqN = Number(lastPayload.required_segments ?? 1)
+        if (reqN > 1 && cap < reqN) {
+          setToast({
+            message: `Uploaded ${cap}/${reqN} for this wall. Add more (left→right order) or use the camera.`,
+            type: 'success',
+          })
+        } else {
+          setToast({ message: 'Photos uploaded. Continue when ready.', type: 'success' })
+        }
+        setShowCheck(true)
+        setTimeout(() => setShowCheck(false), 1200)
+      }
+      setRetakingWallId(null)
+    } catch (err) {
+      console.error('[MobileCapture] Gallery upload error:', err)
+      setAlertMessage('Upload failed. Please try again.')
     } finally {
       setIsUploading(false)
     }
@@ -547,7 +756,7 @@ const MobileCapture = () => {
           wall_regions: []
         }
         setProgress(defaultProgress)
-        setCurrentWall(defaultProgress.walls[0])
+        setCurrentWall(pickWallForCapture(defaultProgress, preferredWallIdRef.current))
       }, 10000) // 10 second timeout
     } else {
       // Progress loaded, clear timeout
@@ -568,16 +777,23 @@ const MobileCapture = () => {
   // IMPORTANT: This must be before any conditional returns
   useEffect(() => {
     if (!currentWall && !progress?.is_complete && progress?.walls && progress.walls.length > 0) {
-      // Use the first incomplete wall or first wall if all are incomplete
-      const firstIncomplete = progress.walls.find(w => !progress.completed_walls.includes(w.id))
-      const wallToUse = firstIncomplete || progress.walls[0]
+      const wallToUse = pickWallForCapture(progress, preferredWallIdRef.current)
       if (wallToUse && wallSetRef.current !== wallToUse.id) {
-        console.log('[MobileCapture] Setting current wall:', wallToUse)
         wallSetRef.current = wallToUse.id
         setCurrentWall(wallToUse)
       }
     }
   }, [progress, currentWall]) // Keep currentWall to reset ref when it changes
+
+  /** If ?wall= changes (e.g. deep link), switch the active capture target without waiting for the next poll. */
+  useEffect(() => {
+    if (!progress?.walls?.length || !wallQueryId) return
+    const hit = progress.walls.find((w) => w.id === wallQueryId)
+    if (hit) {
+      wallSetRef.current = hit.id
+      setCurrentWall(hit)
+    }
+  }, [wallQueryId, progress])
 
   // NOW we can do conditional returns - all hooks are above
   if (!progress) {
@@ -613,68 +829,114 @@ const MobileCapture = () => {
     ? Math.min(completedCount + 1, totalWalls)
     : completedCount + 1
   const bannerTargetName = currentWall?.name ?? 'the next wall'
-
-  // Debug: Log render state
-  console.log('[MobileCapture] Rendering with:', {
-    hasProgress: !!progress,
-    hasCurrentWall: !!currentWall,
-    hasVideoRef: !!videoRef.current,
-    hasStream: !!streamRef.current,
-    cameraError
-  })
+  const currentReq = currentWall?.id ? progress?.capture_requirements?.[currentWall.id] : undefined
+  const currentRequiredSegments = currentReq?.required_segments ?? 1
+  const currentCapturedSegments = currentReq?.captured_segments ?? 0
 
   const captureUrl = `${API_BASE_URL}/mobile/${venueId ?? ''}`
-  const shareUrl = (import.meta.env as any).VITE_NGROK_URL || captureUrl
+  const shareUrl =
+    (publicBaseUrl ? `${publicBaseUrl}/mobile/${venueId ?? ''}` : null) ||
+    (import.meta.env as any).VITE_NGROK_URL ||
+    captureUrl
+
+  const reviewDone = progress?.completed_walls.length ?? 0
+  const reviewTotal = progress?.total_walls ?? progress?.walls?.length ?? 0
+
+  const segmentsRemaining = Math.max(0, currentRequiredSegments - currentCapturedSegments)
+  const wallLengthFt =
+    currentWall && typeof currentWall.length === 'number' && currentWall.length > 0
+      ? currentWall.length
+      : null
 
   return (
     <div className="capture-container" style={{ width: '100vw', height: '100vh', position: 'fixed', top: 0, left: 0 }}>
-      <div
-        className="share-banner"
-        style={{
-          position: 'absolute',
-          top: '10px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          zIndex: 1200,
-          background: 'rgba(0,0,0,0.7)',
-          color: '#fff',
-          padding: '8px 12px',
-          borderRadius: '12px',
-          display: 'flex',
-          gap: '10px',
-          alignItems: 'center',
-          fontSize: '0.85rem',
-          boxShadow: '0 6px 20px rgba(0,0,0,0.3)'
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <img
-            src={`https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(shareUrl)}`}
-            alt="Open on phone QR"
-            style={{ width: 48, height: 48, borderRadius: 6, background: '#fff' }}
+      {venueId && (
+        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 1300 }}>
+          <PageNavBar
+            className="page-nav-bar--capture-overlay"
+            variant="dark"
+            venueId={venueId}
+            title="Guided capture"
+            backLabel="Back"
+            showLayoutMenu={false}
           />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontWeight: 600 }}>Open guided capture on your phone</span>
-            <code style={{ background: 'rgba(255,255,255,0.08)', padding: '3px 5px', borderRadius: '6px' }}>
-              {shareUrl}
-            </code>
-          </div>
         </div>
-        <button
-          onClick={() => navigator.clipboard?.writeText(shareUrl).catch(() => {})}
+      )}
+      {venueId && (
+        <div style={{ position: 'absolute', top: 52, left: 0, right: 0, zIndex: 1290 }}>
+          <GuidedFlowStepper
+            venueId={venueId}
+            wallId={currentWall?.id}
+            active="capture"
+            compact={!showDesktopHandoff}
+            linkCaptureToWall
+          />
+        </div>
+      )}
+      {showDesktopHandoff && (
+        <div
+          className="share-banner"
           style={{
-            background: '#4CAF50',
+            position: 'absolute',
+            top: 104,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 1200,
+            background: 'rgba(0,0,0,0.7)',
             color: '#fff',
-            border: 'none',
-            padding: '6px 10px',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontWeight: 600,
-            whiteSpace: 'nowrap'
+            padding: '8px 12px',
+            borderRadius: '12px',
+            display: 'flex',
+            gap: '10px',
+            alignItems: 'center',
+            fontSize: '0.85rem',
+            boxShadow: '0 6px 20px rgba(0,0,0,0.3)'
           }}
         >
-          Copy link
-        </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <img
+              src={`https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(shareUrl)}`}
+              alt="Open on phone QR"
+              style={{ width: 48, height: 48, borderRadius: 6, background: '#fff' }}
+            />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ fontWeight: 600 }}>Open guided capture on your phone</span>
+              <code style={{ background: 'rgba(255,255,255,0.08)', padding: '3px 5px', borderRadius: '6px' }}>
+                {shareUrl}
+              </code>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => navigator.clipboard?.writeText(shareUrl).catch(() => {})}
+            style={{
+              background: '#4CAF50',
+              color: '#fff',
+              border: 'none',
+              padding: '6px 10px',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontWeight: 600,
+              whiteSpace: 'nowrap'
+            }}
+          >
+            Copy link
+          </button>
+        </div>
+      )}
+
+      {/* Center of screen — above nav (1300); avoids stepper overlap. Toasts + wall hint auto-dismiss. */}
+      <div className="capture-center-popup" aria-live="polite">
+        {toast ? (
+          <div className={`capture-center-popup__card capture-center-popup__card--toast capture-center-popup__card--${toast.type}`}>
+            {toast.message}
+          </div>
+        ) : null}
+        {!toast && wallHintVisible && currentWall && !progress?.is_complete ? (
+          <div className="capture-center-popup__card capture-center-popup__card--hint" key={currentWall.id}>
+            Looking for {currentWall.name}…
+          </div>
+        ) : null}
       </div>
 
       <div className="video-wrapper" style={{ position: 'relative', width: '100%', height: '100%' }}>
@@ -719,10 +981,7 @@ const MobileCapture = () => {
                 onClick={async () => {
                   // Properly release camera before retrying
                   if (streamRef.current) {
-                    streamRef.current.getTracks().forEach((track) => {
-                      track.stop()
-                      console.log('[MobileCapture] Stopped track on retry:', track.kind)
-                    })
+                    streamRef.current.getTracks().forEach((track) => track.stop())
                     streamRef.current = null
                   }
                   if (videoRef.current) {
@@ -734,14 +993,17 @@ const MobileCapture = () => {
                   // Wait a bit for camera to be released
                   await new Promise(resolve => setTimeout(resolve, 300))
                   
-                  // Retry camera access
+                  // Retry camera access (same quality path as initial load)
                   try {
-                    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
-                    const constraints: MediaStreamConstraints = isMobile
-                      ? { video: { facingMode: 'environment' }, audio: false }
-                      : { video: { facingMode: 'environment' }, audio: false }
-                    
-                    const stream = await navigator.mediaDevices.getUserMedia(constraints)
+                    const stream = await getVideoStreamWithFallback()
+                    const vTrack = stream.getVideoTracks()[0]
+                    if (vTrack) {
+                      try {
+                        await applyBestVideoSize(vTrack)
+                      } catch (e) {
+                        console.warn('[MobileCapture] applyBestVideoSize (retry):', e)
+                      }
+                    }
                     streamRef.current = stream
                     if (videoRef.current) {
                       videoRef.current.srcObject = stream
@@ -840,44 +1102,37 @@ const MobileCapture = () => {
         )}
 
         {/* Scanner Overlay with corner brackets and scanning animation */}
-        <ScannerOverlay />
-
-        {/* Floor Plan Viewer Overlay - Removed for now, using minimap instead */}
-
-        {progress?.walls?.length ? (
-          <div className="minimap-overlay">
-            <MiniMap walls={progress.walls} currentWallId={currentWall?.id ?? null} />
-          </div>
-        ) : null}
-
-        <div className="overlay">
+        <div
+          className={`overlay ${!showDesktopHandoff ? 'capture-overlay capture-overlay--compact' : 'capture-overlay'}`}
+        >
           <div className="overlay-header" style={{ position: 'relative' }}>
-            <button
-              onClick={() => navigate(`/venue/${venueId}`)}
-              style={{
-                position: 'absolute',
-                top: '0',
-                left: '0',
-                background: 'rgba(255, 255, 255, 0.15)',
-                border: '1px solid rgba(255, 255, 255, 0.3)',
-                color: '#fff',
-                padding: '0.5rem 1rem',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                fontSize: '0.9rem',
-                zIndex: 1000,
-                pointerEvents: 'auto',
-                fontWeight: '600'
-              }}
-            >
-              ← Back
-            </button>
-            <p className="mode-label">Smart Guided Capture</p>
+            {showDesktopHandoff ? <p className="mode-label">Smart guided capture</p> : null}
             <div className="capture-banner">
               {progress?.is_complete ? (
                 <div style={{ textAlign: 'center' }}>
                   <p className="capture-banner-text">✓ All walls captured! Perfect job!</p>
                   <button
+                    type="button"
+                    title="Open wall list — edit corners per wall"
+                    onClick={() => navigate(`/editor/${targetVenue}`)}
+                    style={{
+                      marginTop: '10px',
+                      marginRight: '8px',
+                      padding: '0.75rem 1.2rem',
+                      background: '#FF9800',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      fontWeight: 'bold',
+                      fontSize: '0.9rem',
+                    }}
+                  >
+                    Open wall editor
+                  </button>
+                  <button
+                    type="button"
+                    title="Open 3D viewer for this venue"
                     onClick={() => {
                       navigate(`/view/${targetVenue}`)
                     }}
@@ -894,7 +1149,7 @@ const MobileCapture = () => {
                       boxShadow: '0 4px 12px rgba(76, 175, 80, 0.3)'
                     }}
                   >
-                    View 3D Space →
+                    Open 3D viewer
                   </button>
                 </div>
               ) : (
@@ -903,14 +1158,46 @@ const MobileCapture = () => {
                     Step {stepNumber}/{totalWalls || '—'}:{' '}
                     <strong>Photograph {bannerTargetName}</strong>
                   </p>
-                  <div style={{ fontSize: '0.85rem', marginTop: '6px', opacity: 0.8 }}>
-                    {completedCount ? `${completedCount} captured, ${(progress?.total_walls || 0) - completedCount} remaining` : 'No walls captured yet'}
-                  </div>
+                  {currentRequiredSegments > 1 && (
+                    <div style={{ fontSize: '0.85rem', marginTop: '6px', opacity: 0.9 }}>
+                      {`Photo ${Math.min(currentCapturedSegments + 1, currentRequiredSegments)}/${currentRequiredSegments} for this wall`}
+                    </div>
+                  )}
+                  {showDesktopHandoff ? (
+                    <div style={{ fontSize: '0.85rem', marginTop: '6px', opacity: 0.8 }}>
+                      {completedCount
+                        ? `${completedCount} captured, ${(progress?.total_walls || 0) - completedCount} remaining`
+                        : 'No walls captured yet'}
+                    </div>
+                  ) : null}
+                  {showDesktopHandoff ? (
+                    <div style={{ marginTop: '8px' }}>
+                      <button
+                        type="button"
+                        title="Open wall list — edit corners for walls you already captured"
+                        onClick={() => navigate(`/editor/${targetVenue}`)}
+                        style={{
+                          padding: '0.55rem 0.9rem',
+                          background: 'rgba(255, 152, 0, 0.9)',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          fontWeight: 700,
+                          fontSize: '0.82rem'
+                        }}
+                      >
+                        Open wall editor
+                      </button>
+                    </div>
+                  ) : null}
                 </>
               )}
-              <p className="wall-label">
-                Venue <strong>{targetVenue}</strong>
-              </p>
+              {showDesktopHandoff ? (
+                <p className="wall-label">
+                  Venue <strong>{targetVenue}</strong>
+                </p>
+              ) : null}
             </div>
           </div>
         </div>
@@ -938,25 +1225,6 @@ const MobileCapture = () => {
           </div>
         )}
 
-        {/* Dynamic toast message when looking for a wall */}
-        {!progress?.is_complete && currentWall && !toast && (
-          <div className="feedback-toast">
-            Looking for {currentWall.name}...
-          </div>
-        )}
-
-        {toast && (
-          <div className={`feedback-toast ${toast.type}`}>
-            {toast.message}
-          </div>
-        )}
-
-        {cameraError && (
-          <div className="feedback-toast error">
-            {cameraError}
-          </div>
-        )}
-
         {alertMessage && (
           <div className="alert-modal" role="alertdialog" aria-live="assertive">
             <div className="alert-card">
@@ -967,14 +1235,24 @@ const MobileCapture = () => {
           </div>
         )}
 
-        {/* Review captures panel */}
-        <div className="review-panel">
-          <div className="review-panel-header">
-            <div className="review-panel-title">Captured Walls</div>
+        {/* Review captures — collapsible on phones to free camera space */}
+        <div className={`review-panel ${reviewExpanded ? 'review-panel--expanded' : 'review-panel--collapsed'}`}>
+          <button
+            type="button"
+            className="review-panel-header review-panel-toggle"
+            onClick={() => setReviewExpanded((e) => !e)}
+            aria-expanded={reviewExpanded}
+            title={reviewExpanded ? 'Hide wall list' : 'Show captured walls'}
+          >
+            <div className="review-panel-title">Captured walls</div>
             <div className="review-panel-progress">
-              {progress?.completed_walls.length ?? 0}/{progress?.total_walls ?? progress?.walls?.length ?? 0}
+              {reviewDone}/{reviewTotal}
             </div>
-          </div>
+            <span className="review-panel-chevron" aria-hidden>
+              {reviewExpanded ? '▼' : '▶'}
+            </span>
+          </button>
+          {reviewExpanded ? (
           <div className="review-panel-grid">
             {progress?.walls?.map((wall) => {
               const url = wallImages[wall.id]
@@ -995,6 +1273,35 @@ const MobileCapture = () => {
                     <div className="review-wall-empty">{retakingWallId === wall.id ? 'Retaking...' : 'No image'}</div>
                   )}
                   <div className="review-wall-actions">
+                    <button
+                      type="button"
+                      className="review-wall-btn"
+                      title="Use this wall for camera / gallery on this screen"
+                      onClick={() => {
+                        wallSetRef.current = wall.id
+                        setCurrentWall(wall as WallSegment)
+                        setToast({ message: `Active wall: ${wall.name}`, type: 'success' })
+                      }}
+                      disabled={isUploading}
+                    >
+                      Use for capture
+                    </button>
+                    <button
+                      type="button"
+                      className="review-wall-btn"
+                      title="Upload images from files"
+                      onClick={() => navigate(`/upload/${venueId}/${wall.id}`)}
+                    >
+                      Upload files
+                    </button>
+                    <button
+                      type="button"
+                      className="review-wall-btn"
+                      title="Stitch segments"
+                      onClick={() => navigate(`/review/${venueId}/${wall.id}`)}
+                    >
+                      Stitch
+                    </button>
                     <button
                       className="review-wall-btn retake"
                       onClick={async () => {
@@ -1021,10 +1328,12 @@ const MobileCapture = () => {
                       Retake
                     </button>
                     <button
+                      type="button"
                       className="review-wall-btn adjust"
+                      title="Open crop & corner editor for this wall"
                       onClick={() => navigate(`/edit/${venueId}/${wall.id}?from=capture`)}
                     >
-                      Adjust
+                      Edit wall
                     </button>
                   </div>
                 </div>
@@ -1034,18 +1343,50 @@ const MobileCapture = () => {
               <div style={{ fontSize: '0.9rem', opacity: 0.8, gridColumn: '1 / -1' }}>No walls loaded yet.</div>
             )}
           </div>
+          ) : null}
         </div>
       </div>
 
-      {/* Floating Shutter Button */}
+      {/* Shutter + optional gallery upload (same API as camera; order = left→right → seq_01, seq_02, …) */}
       <div className="shutter-button-container">
         <button
           className="shutter-button"
           onClick={handleCapture}
           disabled={isUploading || !!cameraError || !currentWall}
+          aria-label="Capture photo"
         >
           {isUploading ? <span className="loader" /> : ''}
         </button>
+        <input
+          ref={galleryInputRef}
+          type="file"
+          accept="image/jpeg,image/jpg,image/png,image/webp"
+          multiple
+          style={{ display: 'none' }}
+          onChange={handleGalleryFiles}
+        />
+        <button
+          type="button"
+          className="gallery-upload-button"
+          onClick={() => galleryInputRef.current?.click()}
+          disabled={isUploading || !currentWall || !!progress?.is_complete}
+        >
+          Upload photos
+        </button>
+        {!progress?.is_complete && currentWall && segmentsRemaining > 0 ? (
+          <p className="capture-gallery-hint">
+            {currentRequiredSegments > 1 ? (
+              <>
+                This wall needs <strong>{currentRequiredSegments}</strong> segment photo
+                {currentRequiredSegments !== 1 ? 's' : ''} (walls under 25 ft need 1; longer walls ~1 per 10 ft
+                {wallLengthFt != null ? `; this wall ≈ ${wallLengthFt} ft` : ''}). Select up to{' '}
+                <strong>{segmentsRemaining}</strong> image(s) in order: <strong>left → right</strong>.
+              </>
+            ) : (
+              <>Select <strong>1</strong> image for this wall, or use the shutter.</>
+            )}
+          </p>
+        ) : null}
       </div>
 
       <canvas ref={canvasRef} className="hidden-canvas" />
@@ -1062,13 +1403,15 @@ const snapshotToBlob = async (
   canvas.width = width
   canvas.height = height
 
-  const ctx = canvas.getContext('2d')
+  const ctx = canvas.getContext('2d', { alpha: false })
   if (!ctx) return null
 
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(video, 0, 0, width, height)
 
   return await new Promise((resolve) =>
-    canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.92)
+    canvas.toBlob((blob) => resolve(blob), 'image/jpeg', CAPTURE_JPEG_QUALITY)
   )
 }
 

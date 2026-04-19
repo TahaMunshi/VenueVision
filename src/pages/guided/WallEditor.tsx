@@ -1,28 +1,56 @@
 import { useState, useRef, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import './WallEditor.css'
-import { getApiBaseUrl } from '../../utils/api'
+import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
+import GuidedFlowStepper from '../../components/GuidedFlowStepper'
+import PageNavBar from '../../components/PageNavBar'
 
 type CornerPoint = [number, number]
 
-const rectFromDrag = (index: number, x: number, y: number, points: CornerPoint[]): CornerPoint[] => {
-  if (points.length !== 4) return points
-  const anchor = points[(index + 2) % 4] // opposite corner
-  const minX = Math.min(x, anchor[0])
-  const maxX = Math.max(x, anchor[0])
-  const minY = Math.min(y, anchor[1])
-  const maxY = Math.max(y, anchor[1])
+const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v))
+
+const getDefaultCropPoints = (imgWidth: number, imgHeight: number): CornerPoint[] => {
+  const pad = Math.max(20, Math.round(Math.min(imgWidth, imgHeight) * 0.06))
   return [
-    [minX, minY],
-    [maxX, minY],
-    [maxX, maxY],
-    [minX, maxY]
+    [pad, pad],
+    [imgWidth - pad, pad],
+    [imgWidth - pad, imgHeight - pad],
+    [pad, imgHeight - pad]
   ]
+}
+
+const fitCanvasToViewport = (
+  canvas: HTMLCanvasElement,
+  imgWidth: number,
+  imgHeight: number,
+  reserveBottomPx = 280
+) => {
+  const maxDisplayWidth = Math.max(320, window.innerWidth - 120)
+  const maxDisplayHeight = Math.max(260, window.innerHeight - reserveBottomPx)
+  const scale = Math.min(maxDisplayWidth / imgWidth, maxDisplayHeight / imgHeight)
+  canvas.style.width = `${Math.round(imgWidth * scale)}px`
+  canvas.style.height = `${Math.round(imgHeight * scale)}px`
+}
+
+const moveCorner = (
+  index: number,
+  x: number,
+  y: number,
+  points: CornerPoint[],
+  imgWidth: number,
+  imgHeight: number
+): CornerPoint[] => {
+  if (points.length !== 4) return points
+  const next = [...points] as CornerPoint[]
+  next[index] = [clamp(x, 0, imgWidth), clamp(y, 0, imgHeight)]
+  return next
 }
 
 const WallEditor = () => {
   const { venueId, wallId } = useParams<{ venueId: string; wallId: string }>()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const stepCorners = searchParams.get('step') === 'corners'
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const imageRef = useRef<HTMLImageElement | null>(null)
   
@@ -33,7 +61,12 @@ const WallEditor = () => {
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null)
   const [isDragging, setIsDragging] = useState(false)
-  const [cropMode, setCropMode] = useState(true)
+  const [cropMode, setCropMode] = useState(!stepCorners)
+  const [cornerAdjustMode, setCornerAdjustMode] = useState(stepCorners)
+  /** Dragging works in either crop or corner-adjust mode (both show 4 handles). */
+  const canDragCorners = cropMode || cornerAdjustMode
+  const draggingIndexRef = useRef<number | null>(null)
+  const cornerPointsRef = useRef<CornerPoint[]>([])
 
   const API_BASE_URL = getApiBaseUrl()
 
@@ -43,8 +76,11 @@ const WallEditor = () => {
       if (!venueId || !wallId) return
 
       try {
-        // Request original captured image (not processed) for corner detection
-        const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/wall-images?original=true`)
+        // In corner adjust mode (or step=corners), load stitched/processed; otherwise original
+        const useOriginal = !cornerAdjustMode && !stepCorners
+        const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/wall-images?original=${useOriginal}`, {
+          headers: getAuthHeaders()
+        })
         const data = await response.json()
         
         if (data.status === 'success' && data.wall_images && data.wall_images[wallId]) {
@@ -59,52 +95,16 @@ const WallEditor = () => {
           img.crossOrigin = 'anonymous'
           img.onload = () => {
             imageRef.current = img
-            const canvas = canvasRef.current
-            if (canvas) {
-              // Set canvas internal size to match image (for drawing at full resolution)
-              canvas.width = img.width
-              canvas.height = img.height
-              
-              // Calculate display size to fit viewport while maintaining aspect ratio
-              // Make it bigger - use 85vh for height and allow up to 90% of screen width
-              const maxDisplayWidth = Math.min(window.innerWidth * 0.9, 1400)
-              const maxDisplayHeight = window.innerHeight * 0.85
-              
-              const scaleX = maxDisplayWidth / img.width
-              const scaleY = maxDisplayHeight / img.height
-              const scale = Math.min(scaleX, scaleY) // Use the smaller scale to fit both dimensions
-              
-              // Set explicit display size to ensure full image is visible from the start
-              canvas.style.width = `${img.width * scale}px`
-              canvas.style.height = `${img.height * scale}px`
-              
-              const ctx = canvas.getContext('2d')
-              if (ctx) {
-            // Clear and draw the full image at full resolution
-                ctx.clearRect(0, 0, canvas.width, canvas.height)
-                ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-
-            // Initialize a full-image rectangle so the user immediately sees a crop box
-            const defaultPoints: CornerPoint[] = [
-              [0, 0],
-              [img.width, 0],
-              [img.width, img.height],
-              [0, img.height]
-            ]
+            // Important: initialize crop points even if canvas isn't mounted yet
+            // (loading screen is shown until setIsLoading(false)).
+            const defaultPoints: CornerPoint[] = getDefaultCropPoints(img.width, img.height)
             setCornerPoints(defaultPoints)
-            drawCornersOnCanvas(defaultPoints)
-            setCropMode(true)
-              }
-              
-              console.log('Image loaded:', {
-                imageWidth: img.width,
-                imageHeight: img.height,
-                canvasWidth: canvas.width,
-                canvasHeight: canvas.height,
-                displayWidth: canvas.style.width,
-                displayHeight: canvas.style.height,
-                scale: scale
-              })
+            if (stepCorners) {
+              setCornerAdjustMode(true)
+              setCropMode(false)
+            } else {
+              setCropMode(true)
+              setCornerAdjustMode(false)
             }
             setIsLoading(false)
           }
@@ -125,7 +125,7 @@ const WallEditor = () => {
     }
 
     loadWallImage()
-  }, [venueId, wallId, API_BASE_URL])
+  }, [venueId, wallId, API_BASE_URL, cornerAdjustMode, stepCorners])
 
 
   const drawCornersOnCanvas = (points: CornerPoint[]) => {
@@ -139,16 +139,12 @@ const WallEditor = () => {
     if (canvas.width !== imageRef.current.width || canvas.height !== imageRef.current.height) {
       canvas.width = imageRef.current.width
       canvas.height = imageRef.current.height
-      
-      // Recalculate and set display size if needed
-      const maxDisplayWidth = Math.min(window.innerWidth * 0.9, 1400)
-      const maxDisplayHeight = window.innerHeight * 0.85
-      const scaleX = maxDisplayWidth / imageRef.current.width
-      const scaleY = maxDisplayHeight / imageRef.current.height
-      const scale = Math.min(scaleX, scaleY)
-      
-      canvas.style.width = `${imageRef.current.width * scale}px`
-      canvas.style.height = `${imageRef.current.height * scale}px`
+      fitCanvasToViewport(
+        canvas,
+        imageRef.current.width,
+        imageRef.current.height,
+        stepCorners ? 220 : 280
+      )
     }
 
     // Redraw the full image at full resolution
@@ -163,8 +159,13 @@ const WallEditor = () => {
     points.forEach((point, index) => {
       const [x, y] = point
       ctx.beginPath()
-      ctx.arc(x, y, 8, 0, 2 * Math.PI)
+      ctx.arc(x, y, 11, 0, 2 * Math.PI)
       ctx.fill()
+      ctx.strokeStyle = '#ffffff'
+      ctx.lineWidth = 2
+      ctx.stroke()
+      ctx.strokeStyle = '#ff0000'
+      ctx.lineWidth = 3
 
       // Draw lines connecting corners
       if (index > 0) {
@@ -186,10 +187,43 @@ const WallEditor = () => {
 
   // Ensure canvas redraws when points or image change to avoid black/blank view
   useEffect(() => {
-    if (imageRef.current && canvasRef.current && cornerPoints.length === 4) {
-      drawCornersOnCanvas(cornerPoints)
+    if (imageRef.current && canvasRef.current) {
+      fitCanvasToViewport(
+        canvasRef.current,
+        imageRef.current.width,
+        imageRef.current.height,
+        stepCorners ? 220 : 280
+      )
+      if (cornerPoints.length === 4) {
+        drawCornersOnCanvas(cornerPoints)
+      } else {
+        const canvas = canvasRef.current
+        const ctx = canvas.getContext('2d')
+        if (ctx) {
+          ctx.clearRect(0, 0, canvas.width, canvas.height)
+          ctx.drawImage(imageRef.current, 0, 0, canvas.width, canvas.height)
+        }
+      }
     }
-  }, [cornerPoints, imageUrl])
+  }, [cornerPoints, imageUrl, stepCorners])
+
+  useEffect(() => {
+    cornerPointsRef.current = cornerPoints
+  }, [cornerPoints])
+
+  useEffect(() => {
+    const onResize = () => {
+      const canvas = canvasRef.current
+      const img = imageRef.current
+      if (!canvas || !img) return
+      fitCanvasToViewport(canvas, img.width, img.height, stepCorners ? 220 : 280)
+      if (cornerPoints.length === 4) {
+        drawCornersOnCanvas(cornerPoints)
+      }
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [cornerPoints, stepCorners])
 
   const getScaledCoordinates = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current
@@ -207,61 +241,191 @@ const WallEditor = () => {
     return { x: scaledX, y: scaledY, scaleX, scaleY }
   }
 
-  const getPointAtPosition = (x: number, y: number, scaleX: number, scaleY: number) => {
-    const threshold = 15 / Math.min(scaleX, scaleY)
-    for (let i = 0; i < cornerPoints.length; i++) {
-      const [px, py] = cornerPoints[i]
+  const getNearestPointIndex = (x: number, y: number) => {
+    if (cornerPointsRef.current.length === 0) return null
+    let nearestIndex = 0
+    let nearestDistance = Number.POSITIVE_INFINITY
+    for (let i = 0; i < cornerPointsRef.current.length; i++) {
+      const [px, py] = cornerPointsRef.current[i]
       const dx = x - px
       const dy = y - py
       const distance = Math.sqrt(dx * dx + dy * dy)
-      if (distance < threshold) {
-        return i
+      if (distance < nearestDistance) {
+        nearestDistance = distance
+        nearestIndex = i
       }
     }
-    return null
+    return nearestIndex
   }
 
-  const handleCanvasMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!cropMode || cornerPoints.length !== 4) return
+  const startDrag = (clientX: number, clientY: number) => {
+    if (!canDragCorners || cornerPointsRef.current.length !== 4) return
 
-    const coords = getScaledCoordinates(e.clientX, e.clientY)
+    const coords = getScaledCoordinates(clientX, clientY)
     if (!coords) return
 
-    const pointIndex = getPointAtPosition(coords.x, coords.y, coords.scaleX, coords.scaleY)
+    const pointIndex = getNearestPointIndex(coords.x, coords.y)
     if (pointIndex !== null) {
+      draggingIndexRef.current = pointIndex
       setDraggingIndex(pointIndex)
       setIsDragging(true)
     }
   }
 
-  const handleCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDragging || draggingIndex === null || !cropMode) return
+  const moveDrag = (clientX: number, clientY: number) => {
+    if (!canDragCorners) return
+    const activeDraggingIndex = draggingIndexRef.current
+    if (activeDraggingIndex === null || !imageRef.current) return
 
-    const coords = getScaledCoordinates(e.clientX, e.clientY)
+    const coords = getScaledCoordinates(clientX, clientY)
     if (!coords) return
 
-    const newPoints = rectFromDrag(draggingIndex, coords.x, coords.y, cornerPoints)
-    setCornerPoints(newPoints)
-    drawCornersOnCanvas(newPoints)
+    setCornerPoints((prev) => {
+      const next = moveCorner(
+        activeDraggingIndex,
+        coords.x,
+        coords.y,
+        prev,
+        imageRef.current!.width,
+        imageRef.current!.height
+      )
+      drawCornersOnCanvas(next)
+      return next
+    })
   }
 
-  const handleCanvasMouseUp = () => {
-    setIsDragging(false)
+  const stopDrag = () => {
+    draggingIndexRef.current = null
     setDraggingIndex(null)
+    setIsDragging(false)
   }
+
+  const handleCanvasMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    e.preventDefault()
+    startDrag(e.clientX, e.clientY)
+  }
+
+  const handleCanvasTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (e.touches.length === 0) return
+    e.preventDefault()
+    const touch = e.touches[0]
+    startDrag(touch.clientX, touch.clientY)
+  }
+
+  useEffect(() => {
+    const onWindowMouseMove = (e: MouseEvent) => moveDrag(e.clientX, e.clientY)
+    const onWindowMouseUp = () => stopDrag()
+    const onWindowTouchMove = (e: TouchEvent) => {
+      if (draggingIndexRef.current === null || e.touches.length === 0) return
+      e.preventDefault()
+      const touch = e.touches[0]
+      moveDrag(touch.clientX, touch.clientY)
+    }
+    const onWindowTouchEnd = () => stopDrag()
+
+    window.addEventListener('mousemove', onWindowMouseMove)
+    window.addEventListener('mouseup', onWindowMouseUp)
+    window.addEventListener('touchmove', onWindowTouchMove, { passive: false })
+    window.addEventListener('touchend', onWindowTouchEnd)
+
+    return () => {
+      window.removeEventListener('mousemove', onWindowMouseMove)
+      window.removeEventListener('mouseup', onWindowMouseUp)
+      window.removeEventListener('touchmove', onWindowTouchMove)
+      window.removeEventListener('touchend', onWindowTouchEnd)
+    }
+  }, [canDragCorners])
 
   const handleReset = () => {
     if (!imageRef.current || !canvasRef.current) return
     const img = imageRef.current
-    const defaultPoints: CornerPoint[] = [
-      [0, 0],
-      [img.width, 0],
-      [img.width, img.height],
-      [0, img.height]
-    ]
+    const defaultPoints: CornerPoint[] = getDefaultCropPoints(img.width, img.height)
     setCornerPoints(defaultPoints)
     drawCornersOnCanvas(defaultPoints)
-    setCropMode(true)
+    if (stepCorners) {
+      setCornerAdjustMode(true)
+      setCropMode(false)
+    } else {
+      setCropMode(true)
+      setCornerAdjustMode(false)
+    }
+  }
+
+  const handleReStitch = async () => {
+    if (!venueId || !wallId) return
+    setIsProcessing(true)
+    setMessage(null)
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/wall/${wallId}/stitch`, {
+        method: 'POST',
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      })
+      const data = await res.json()
+      if (data.status === 'success') {
+        setMessage({ text: 'Re-stitched successfully! Reloading...', type: 'success' })
+        setCornerAdjustMode(true)
+        window.location.reload()
+      } else {
+        setMessage({ text: data.message || 'Re-stitch failed', type: 'error' })
+      }
+    } catch (e) {
+      setMessage({ text: 'Re-stitch failed. Please try again.', type: 'error' })
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const handleApplyCorners = async () => {
+    if (!venueId || !wallId || cornerPoints.length !== 4) return
+    setIsProcessing(true)
+    setMessage(null)
+    try {
+      const formData = new FormData()
+      formData.append('corner_points', JSON.stringify(cornerPoints))
+      const res = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/wall/${wallId}/apply-corners`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: formData
+      })
+      const data = await res.json()
+      if (data.status === 'success') {
+        setMessage({ text: 'Wall complete! Proceeding to next wall.', type: 'success' })
+        setTimeout(() => navigate(`/capture/${venueId}`), 1200)
+      } else {
+        setMessage({ text: data.message || data.error || 'Apply corners failed', type: 'error' })
+      }
+    } catch (e) {
+      setMessage({ text: 'Apply corners failed. Please try again.', type: 'error' })
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const handleReStitchWithCorners = async () => {
+    if (!venueId || !wallId || cornerPoints.length !== 4) return
+    setIsProcessing(true)
+    setMessage(null)
+    try {
+      const formData = new FormData()
+      formData.append('corner_points', JSON.stringify(cornerPoints))
+      const res = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/wall/${wallId}/restitch-with-corners`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: formData
+      })
+      const data = await res.json()
+      if (data.status === 'success') {
+        setMessage({ text: 'Re-stitched with perspective correction!', type: 'success' })
+        setTimeout(() => navigate(`/view/${venueId}`), 1500)
+      } else {
+        setMessage({ text: data.message || data.error || 'Re-stitch failed', type: 'error' })
+      }
+    } catch (e) {
+      setMessage({ text: 'Re-stitch failed. Please try again.', type: 'error' })
+    } finally {
+      setIsProcessing(false)
+    }
   }
 
   const handleProcess = async () => {
@@ -279,40 +443,53 @@ const WallEditor = () => {
     setMessage(null)
 
     try {
-      // Convert canvas to blob
-      const canvas = canvasRef.current
-      if (!canvas) return
-
-      canvas.toBlob(async (blob) => {
-        if (!blob) {
-          setMessage({ text: 'Failed to convert image', type: 'error' })
-          setIsProcessing(false)
-          return
+      // Upload original image bytes (without red overlay).
+      let sourceBlob: Blob | null = null
+      if (imageUrl) {
+        const sourceResp = await fetch(imageUrl)
+        if (sourceResp.ok) sourceBlob = await sourceResp.blob()
+      }
+      if (!sourceBlob && imageRef.current) {
+        const off = document.createElement('canvas')
+        off.width = imageRef.current.width
+        off.height = imageRef.current.height
+        const offCtx = off.getContext('2d')
+        if (offCtx) {
+          offCtx.drawImage(imageRef.current, 0, 0, off.width, off.height)
+          sourceBlob = await new Promise<Blob | null>((resolve) =>
+            off.toBlob((b) => resolve(b), 'image/jpeg', 0.95)
+          )
         }
+      }
+      if (!sourceBlob) {
+        setMessage({ text: 'Failed to prepare source image', type: 'error' })
+        setIsProcessing(false)
+        return
+      }
 
-        const formData = new FormData()
-        formData.append('file', blob, 'wall.jpg')
-        formData.append('venue_id', venueId)
-        formData.append('wall_id', wallId)
-        formData.append('corner_points', JSON.stringify(cornerPoints))
+      const formData = new FormData()
+      formData.append('file', sourceBlob, 'wall.jpg')
+      formData.append('venue_id', venueId)
+      formData.append('wall_id', wallId)
+      formData.append('corner_points', JSON.stringify(cornerPoints))
 
-        const response = await fetch(`${API_BASE_URL}/api/v1/wall/process`, {
-          method: 'POST',
-          body: formData
-        })
+      const response = await fetch(`${API_BASE_URL}/api/v1/wall/process`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: formData
+      })
 
-        const data = await response.json()
+      const data = await response.json()
 
-        if (data.status === 'success') {
-          setMessage({ text: 'Wall processed successfully!', type: 'success' })
-          setTimeout(() => {
-            navigate(`/view/${venueId}`)
-          }, 2000)
-        } else {
-          setMessage({ text: data.message || 'Processing failed', type: 'error' })
-          setIsProcessing(false)
-        }
-      }, 'image/jpeg', 0.95)
+      if (data.status === 'success') {
+        setMessage({ text: 'Wall processed successfully!', type: 'success' })
+        setTimeout(() => {
+          navigate(`/view/${venueId}`)
+        }, 2000)
+      } else {
+        setMessage({ text: data.message || 'Processing failed', type: 'error' })
+        setIsProcessing(false)
+      }
     } catch (error) {
       setMessage({ text: 'Failed to process wall. Please try again.', type: 'error' })
       setIsProcessing(false)
@@ -322,6 +499,7 @@ const WallEditor = () => {
   if (isLoading) {
     return (
       <div className="wall-editor-container">
+        {venueId && <PageNavBar variant="dark" venueId={venueId} title="Edit wall" backLabel="Back" />}
         <div className="loading">Loading wall image...</div>
       </div>
     )
@@ -330,18 +508,22 @@ const WallEditor = () => {
   if (!imageUrl) {
     return (
       <div className="wall-editor-container">
-        <div className="wall-editor-header">
-          <button onClick={() => navigate(`/editor/${venueId}`)} className="back-button">
-            ← Back to Editor
-          </button>
-          <h1>Edit Wall</h1>
-          <p>Venue: {venueId} | Wall: {wallId}</p>
+        {venueId && <PageNavBar venueId={venueId} title="Edit wall" backLabel="Back" />}
+        <div className="wall-editor-meta">
+          <p>
+            Wall: {wallId}
+          </p>
         </div>
         <div className="error-message">
           {message?.text || 'No image found for this wall. Please capture an image first.'}
         </div>
-        <button onClick={() => navigate(`/capture/${venueId}`)} className="action-button primary">
-          Go to Capture
+        <button
+          type="button"
+          onClick={() => navigate(`/capture/${venueId}`)}
+          className="action-button primary"
+          title="Open guided wall capture for this venue"
+        >
+          Go to guided capture
         </button>
       </div>
     )
@@ -349,12 +531,12 @@ const WallEditor = () => {
 
   return (
     <div className="wall-editor-container">
+      {venueId && <PageNavBar variant="dark" venueId={venueId} title="Edit wall" backLabel="Back" />}
+      {venueId && wallId && (
+        <GuidedFlowStepper venueId={venueId} wallId={wallId} active="corners" linkCaptureToWall />
+      )}
       <div className="wall-editor-header">
-        <button onClick={() => navigate(`/capture/${venueId}`)} className="back-button">
-          ← Back
-        </button>
-        <h1>Edit Wall</h1>
-        <p>Venue: {venueId} | Wall: {wallId}</p>
+        <p className="wall-editor-wall-id">Wall: {wallId}</p>
       </div>
 
       <div className="wall-editor-content">
@@ -362,53 +544,105 @@ const WallEditor = () => {
           <canvas
             ref={canvasRef}
             onMouseDown={handleCanvasMouseDown}
-            onMouseMove={handleCanvasMouseMove}
-            onMouseUp={handleCanvasMouseUp}
-            onMouseLeave={handleCanvasMouseUp}
+            onMouseUp={stopDrag}
+            onMouseLeave={stopDrag}
+            onTouchStart={handleCanvasTouchStart}
+            onTouchEnd={stopDrag}
             className="preview-canvas"
             style={{ 
-              cursor: isDragging ? 'grabbing' : (cornerPoints.length === 4 ? 'grab' : 'crosshair')
+              cursor: isDragging || draggingIndex !== null ? 'grabbing' : 'crosshair'
             }}
           />
           
-          {cornerPoints.length === 4 && cropMode && (
+          {cornerPoints.length === 4 && (
             <p className="instruction-text">
-              Drag to resize the crop box. It stays rectangular.
+              {stepCorners
+                ? 'Drag the red handles to match the wall edges. Then apply to finish this wall.'
+                : 'Drag the red handles to outline the wall. Then process to save the texture.'}
             </p>
           )}
         </div>
 
-        <div className="controls-section">
-          <button
-            onClick={() => setCropMode(true)}
-            className="action-button primary"
-            style={{ marginBottom: '0.5rem' }}
-          >
-            {cropMode ? 'Crop Mode: On' : 'Start Crop / Resize'}
-          </button>
-
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <button
-              onClick={handleReset}
-              className="action-button secondary"
-            >
-              Reset to Full Image
-            </button>
-            <button
-              onClick={handleProcess}
-              disabled={isProcessing || cornerPoints.length !== 4}
-              className="action-button primary"
-            >
-              {isProcessing ? 'Processing...' : 'Save / Process'}
-            </button>
-          </div>
-
-          <button
-            onClick={() => navigate(`/view/${venueId}`)}
-            className="action-button secondary"
-          >
-            View 3D Space
-          </button>
+        <div className="controls-section wall-editor-controls">
+          {stepCorners ? (
+            <>
+              <p className="long-op-hint wall-editor-hint">
+                {isProcessing
+                  ? 'Saving perspective correction…'
+                  : 'Runs on the server — keep this tab open until it finishes.'}
+              </p>
+              <div className="wall-editor-action-row">
+                <button type="button" onClick={handleReset} className="action-button secondary">
+                  Reset corners
+                </button>
+                <button
+                  type="button"
+                  onClick={handleApplyCorners}
+                  disabled={isProcessing || cornerPoints.length !== 4}
+                  className="action-button primary"
+                >
+                  {isProcessing ? 'Working…' : 'Apply & continue'}
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => navigate(`/view/${venueId}`)}
+                className="wall-editor-link-btn"
+                title="Open 3D viewer for this venue"
+              >
+                Open 3D viewer
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="wall-editor-action-row">
+                <button type="button" onClick={handleReset} className="action-button secondary">
+                  Reset corners
+                </button>
+                <button
+                  type="button"
+                  onClick={handleProcess}
+                  disabled={isProcessing || cornerPoints.length !== 4}
+                  className="action-button primary"
+                >
+                  {isProcessing ? 'Processing…' : 'Process wall'}
+                </button>
+              </div>
+              <details className="wall-editor-advanced">
+                <summary>Advanced — only if stitching looks wrong</summary>
+                <p className="wall-editor-advanced-hint">
+                  Re-run segment alignment, then optionally apply corners. Usually not needed if you already
+                  stitched on the review screen.
+                </p>
+                <div className="wall-editor-action-row wall-editor-action-row--stack">
+                  <button
+                    type="button"
+                    onClick={handleReStitch}
+                    disabled={isProcessing}
+                    className="action-button secondary"
+                  >
+                    {isProcessing ? '…' : 'Re-stitch segments only'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleReStitchWithCorners}
+                    disabled={isProcessing || cornerPoints.length !== 4}
+                    className="action-button secondary"
+                  >
+                    {isProcessing ? '…' : 'Re-stitch + apply corners'}
+                  </button>
+                </div>
+              </details>
+              <button
+                type="button"
+                onClick={() => navigate(`/view/${venueId}`)}
+                className="wall-editor-link-btn"
+                title="Open 3D viewer for this venue"
+              >
+                Open 3D viewer
+              </button>
+            </>
+          )}
         </div>
 
         {message && (

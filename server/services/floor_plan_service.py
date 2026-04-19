@@ -6,11 +6,17 @@ BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 UPLOADS_DIR = os.path.join(BASE_DIR, 'static', 'uploads')
 
 DEFAULT_WALLS = [
-    {"id": "wall_north", "name": "North Wall", "direction": "North"},
-    {"id": "wall_east", "name": "East Wall", "direction": "East"},
-    {"id": "wall_south", "name": "South Wall", "direction": "South"},
-    {"id": "wall_west", "name": "West Wall", "direction": "West"}
+    {"id": "wall_north", "name": "North Wall", "direction": "North", "length": 20, "height": 8, "type": "straight"},
+    {"id": "wall_east", "name": "East Wall", "direction": "East", "length": 20, "height": 8, "type": "straight"},
+    {"id": "wall_south", "name": "South Wall", "direction": "South", "length": 20, "height": 8, "type": "straight"},
+    {"id": "wall_west", "name": "West Wall", "direction": "West", "length": 20, "height": 8, "type": "straight"}
 ]
+WALL_ORDER = {
+    "wall_north": 0,
+    "wall_east": 1,
+    "wall_south": 2,
+    "wall_west": 3,
+}
 
 
 def _load_layout(venue_id: str) -> Optional[Dict]:
@@ -43,9 +49,12 @@ def _get_walls_metadata(venue_id: str) -> List[Dict]:
                 "id": wid,
                 "name": name,
                 "direction": wall.get("direction", name),
-                "coordinates": coords
+                "coordinates": coords,
+                "length": wall.get("length"),
+                "height": wall.get("height"),
+                "type": wall.get("type"),
             })
-        return walls
+        return sorted(walls, key=lambda w: WALL_ORDER.get(w.get("id"), 999))
     return DEFAULT_WALLS
 
 

@@ -1,5 +1,9 @@
 """
 Venues management endpoints.
+
+Venue ``width``, ``height``, and ``depth`` are stored and interpreted as **feet** everywhere
+in the app (2D planner, layout JSON, 3D viewer). Existing rows created before this convention
+may have been entered as meters — migrate by multiplying by ~3.28084 if needed, or reset demo data.
 """
 
 from flask import Blueprint, request, jsonify
@@ -7,6 +11,7 @@ import logging
 
 from database import execute_query, execute_insert
 from middleware.auth_middleware import token_required
+from utils.file_manager import reset_uploads
 
 logger = logging.getLogger(__name__)
 
@@ -71,12 +76,25 @@ def get_venue(current_user, venue_identifier: str):
             (venue_identifier,),
             fetch_one=True
         )
-        
+        if not venue and venue_identifier and str(venue_identifier).isdigit():
+            venue = execute_query(
+                """
+                SELECT v.*, 
+                       (SELECT COUNT(*) FROM venue_walls WHERE venue_id = v.venue_id) as wall_count,
+                       (SELECT COUNT(*) FROM venue_assets WHERE venue_id = v.venue_id) as asset_count
+                FROM venues v
+                WHERE v.venue_id = %s
+                """,
+                (int(venue_identifier),),
+                fetch_one=True,
+            )
+
         if not venue:
             return jsonify({'error': 'Venue not found'}), 404
         
-        # Check if user owns this venue or if it's public
-        if venue['user_id'] != current_user['user_id'] and not venue.get('is_public'):
+        # Owner, legacy public, or marketplace-published
+        is_owner = venue['user_id'] == current_user['user_id']
+        if not is_owner and not venue.get('is_public') and not venue.get('is_published'):
             return jsonify({'error': 'Not authorized to access this venue'}), 403
         
         return jsonify({
@@ -95,13 +113,13 @@ def create_venue(current_user):
     """
     Create a new venue for the authenticated user.
     
-    Expected JSON body:
+    Expected JSON body (dimensions in feet):
         {
             "venue_identifier": "my-venue-2024",
             "venue_name": "My Conference Hall",
-            "width": 20,
-            "height": 8,
-            "depth": 20
+            "width": 40,
+            "height": 9,
+            "depth": 40
         }
     
     Returns:
@@ -117,12 +135,26 @@ def create_venue(current_user):
         
         venue_identifier = data.get('venue_identifier', '').strip()
         venue_name = data.get('venue_name', '').strip()
-        width = data.get('width', 20)
-        height = data.get('height', 8)
-        depth = data.get('depth', 20)
+        width = data.get('width', 40)
+        height = data.get('height', 9)
+        depth = data.get('depth', 40)
         
         if not venue_identifier or not venue_name:
             return jsonify({'error': 'venue_identifier and venue_name are required'}), 400
+        
+        try:
+            width = float(width)
+            height = float(height)
+            depth = float(depth)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'width, height, and depth must be numbers'}), 400
+        
+        if not (5 <= width <= 330):
+            return jsonify({'error': 'width must be between 5 and 330 feet'}), 400
+        if not (6 <= height <= 40):
+            return jsonify({'error': 'height must be between 6 and 40 feet'}), 400
+        if not (5 <= depth <= 330):
+            return jsonify({'error': 'depth must be between 5 and 330 feet'}), 400
         
         # Check if venue identifier already exists for this user
         existing = execute_query(
@@ -146,7 +178,7 @@ def create_venue(current_user):
         
         logger.info(f"Venue created: {venue_identifier} (ID: {venue_id}) by user {current_user['username']}")
         
-        # Create default 4 walls (north, south, east, west)
+        # Create default 4 walls (clockwise: north, east, south, west)
         default_walls = [
             {
                 'id': 'wall_north',
@@ -156,17 +188,17 @@ def create_venue(current_user):
                 'height': height
             },
             {
-                'id': 'wall_south',
-                'name': 'South Wall',
-                'coordinates': [0, 100, 100, 100],  # Bottom of floor plan
-                'length': width,
-                'height': height
-            },
-            {
                 'id': 'wall_east',
                 'name': 'East Wall',
                 'coordinates': [100, 10, 100, 100],  # Right side
                 'length': depth,
+                'height': height
+            },
+            {
+                'id': 'wall_south',
+                'name': 'South Wall',
+                'coordinates': [0, 100, 100, 100],  # Bottom of floor plan
+                'length': width,
                 'height': height
             },
             {
@@ -251,11 +283,18 @@ def delete_venue(current_user, venue_identifier: str):
         if venue['user_id'] != current_user['user_id']:
             return jsonify({'error': 'Not authorized to delete this venue'}), 403
         
-        # Delete venue (cascade will handle walls, assets, etc.)
+        # Delete venue from DB (cascade will handle walls, assets, floor plans, etc.)
         execute_query(
             "DELETE FROM venues WHERE venue_id = %s",
             (venue['venue_id'],)
         )
+        
+        # Delete all uploads for this venue (wall images, layout, floor plan, generated GLB)
+        try:
+            reset_uploads(venue_identifier)
+            logger.info(f"Deleted uploads folder for venue: {venue_identifier}")
+        except Exception as e:
+            logger.warning(f"Could not delete uploads for venue {venue_identifier}: {e}")
         
         logger.info(f"Venue deleted: {venue_identifier} by user {current_user['username']}")
         

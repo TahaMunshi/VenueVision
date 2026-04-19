@@ -20,16 +20,19 @@ A multi-user 3D event space visualization tool that allows you to capture venue 
 **Prerequisites**: Docker Desktop installed and running
 
 ```bash
-# One command to start everything!
+# One command to start everything
 docker-compose up --build
 
-# Or use the startup script
-# Windows: double-click start-docker.bat
-# Linux/Mac: ./start-docker.sh
+# Or use the startup script (Windows: start-docker.bat | Linux/Mac: ./start-docker.sh)
 ```
 
 Then open: **http://localhost:5000/mobile**  
-Login: **demo** / **demo123**
+Login: **demo** / **demo123**  
+(On an old Postgres volume, the demo password may not match until you re-run setup or reset the user — see [`SESSION_TODAY.md`](SESSION_TODAY.md) under **Decisions & blockers**.)
+
+**If you get "failed to copy" or EOF when pulling images:**  
+Docker Hub’s CDN can drop connections on some networks. Add a registry mirror:  
+**Docker Desktop** → **Settings** → **Docker Engine** → add `"registry-mirrors": ["https://mirror.gcr.io"]` to the JSON → **Apply & restart**, then run `docker-compose up --build` again.
 
 📚 See [DOCKER_GUIDE.md](DOCKER_GUIDE.md) for more Docker commands
 
@@ -169,20 +172,64 @@ VenueVision/
 
 ## 🎯 API Endpoints
 
+All JSON APIs are under **`/api/v1`**. The canonical, per-route list (auth flags, files) lives in [`SESSION_TODAY.md`](SESSION_TODAY.md) in the repo root.
+
+### Health
+- `GET /api/v1/health` - Health check
+- `GET /api/v1/public-url` - Public base URL (ngrok/share links)
+
 ### Authentication
 - `POST /api/v1/signup` - Register new user
 - `POST /api/v1/login` - Login and get token
 - `GET /api/v1/me` - Get current user (protected)
+- `GET /api/v1/verify` - Verify token (protected)
 
 ### Venues
 - `GET /api/v1/venues` - List user's venues (protected)
+- `GET /api/v1/venues/:venue_identifier` - Venue detail (protected)
 - `POST /api/v1/venues` - Create venue (protected)
-- `DELETE /api/v1/venues/:id` - Delete venue (protected)
+- `DELETE /api/v1/venues/:venue_identifier` - Delete venue (protected)
 
-### Walls & Layout
-- `GET /api/v1/venue/:id/progress` - Get capture progress
-- `POST /api/v1/venue/:id/upload/:wallId` - Upload wall photo
-- `POST /api/v1/venue/:id/layout` - Save venue layout
+### Layout & GLB
+- `GET /api/v1/venue/:venue_id/layout` - Load layout (protected)
+- `POST /api/v1/venue/:venue_id/layout` - Save layout (protected)
+- `POST /api/v1/venue/:venue_id/generate-glb` - Generate GLB (protected)
+
+### Walls & processing
+- `GET /api/v1/venue/:venue_id/progress` - Capture progress (protected)
+- `GET /api/v1/venue/:venue_id/wall-images` - List wall captures (protected)
+- `DELETE /api/v1/venue/:venue_id/wall-images` - Clear wall images (protected)
+- `POST /api/v1/venue/:venue_id/wall/:wall_id/reset` - Reset one wall (protected)
+- `GET /api/v1/venue/:venue_id/wall/:wall_id/segments` - Segments (protected)
+- `POST /api/v1/venue/:venue_id/wall/:wall_id/stitch` - Stitch (protected)
+- `POST /api/v1/venue/:venue_id/wall/:wall_id/restitch-with-corners` - Restitch (protected)
+- `POST /api/v1/venue/:venue_id/wall/:wall_id/remove-object` - Object removal (protected)
+- `POST /api/v1/venue/:venue_id/wall/:wall_id/apply-corners` - Apply corners (protected)
+- `POST /api/v1/venue/:venue_id/reset` - Reset venue walls (protected)
+
+### Capture (uploads)
+- `POST /api/v1/capture/upload` - Upload capture segment (protected)
+- `POST /api/v1/wall/auto-detect` - Auto-detect corners (public)
+- `POST /api/v1/wall/process` - Process / warp wall image (protected)
+
+### Assets (library / generation)
+- `POST /api/v1/assets/generate` - Trigger generation (protected)
+- `GET /api/v1/assets` - List assets (protected)
+- `GET /api/v1/assets/user/:user_id` - User assets (protected)
+- `GET /api/v1/assets/detail/:asset_id` - Detail (protected)
+- `PATCH /api/v1/assets/detail/:asset_id` - Update (protected)
+- `DELETE /api/v1/assets/detail/:asset_id` - Delete (protected)
+- `GET /api/v1/assets/count` - Count (protected)
+- `GET /api/v1/assets/status/:asset_id` - Generation status (protected)
+
+### Maintenance (protected)
+- `POST /api/v1/reset` - Maintenance reset
+- `POST /api/v1/cleanup/temp` - Temp cleanup
+- `POST /api/v1/cleanup/stale-assets` - Stale assets
+- `GET /api/v1/cleanup/orphans` - List orphan files
+- `DELETE /api/v1/cleanup/orphans` - Delete orphans
+- `POST /api/v1/cleanup/full` - Full cleanup
+- `GET /api/v1/storage/stats` - Storage stats
 
 ## 🤝 Contributing
 

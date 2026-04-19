@@ -1,11 +1,30 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import './FloorPlanner.css'
-import { getApiBaseUrl } from '../../utils/api'
-import FloorPlanUpload from '../../components/FloorPlanUpload'
+import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
+import PageNavBar from '../../components/PageNavBar'
+import {
+  PIXELS_PER_FOOT,
+  GRID_STEP_FT,
+  metersToFeet,
+  ROOM_LENGTH_UNIT,
+} from '../../constants/roomUnits'
+import {
+  wantsTableTopDecor,
+  findTableUnderDecorCenter,
+  tableAttachOffsets,
+} from '../../utils/tableSurfaceAttach'
 
-const METER_TO_PIXEL_SCALE = 30 // 1 meter = 30 pixels for a larger canvas
-const GRID_SIZE = METER_TO_PIXEL_SCALE
+/** Room footprint must fit inside the viewport (padding + border); keep below 1 to avoid sub-pixel overflow. */
+const PLANNER_FIT_FILL = 0.94
+const PLANNER_VIEWPORT_PAD_PX = 16
+/** If the “fit” scale is tinier than this, keep this minimum (viewport will scroll — rare for huge rooms). */
+const PLANNER_MIN_PPF = 6
+/** Must match `.floor-plan-canvas` border width; border is outside content-box width/height. */
+const PLANNER_CANVAS_BORDER_PX = 3
+
+/** Three vertical layers: floor (rugs/carpets), surface (middle: furniture + tabletop), ceiling (lights). */
+export type AssetLayer = 'floor' | 'surface' | 'ceiling'
 
 type Asset = {
   id: string
@@ -16,6 +35,22 @@ type Asset = {
   x: number
   y: number
   rotation: number
+  /** Offsets from parent center in feet (2D plane). */
+  parentAssetId?: string
+  offsetX?: number
+  offsetY?: number
+  /** Vertical layer for 2D overlap and view modes. */
+  layer?: AssetLayer
+  /** Reference elevation in feet (e.g. table top). */
+  elevation?: number
+  /** Real-world height in feet (Y axis) for 3D scaling. */
+  height?: number
+  /** Brightness multiplier (0.3–2.5, 1 = default). */
+  brightness?: number
+  /** When true, 3D viewer places on table top if center is over a table (see ASSET_CATALOG). */
+  placeOnTable?: boolean
+  /** From Asset Library: this footprint is a table surface for snapping smaller props on top. */
+  is_table?: boolean
 }
 
 type UserAsset = {
@@ -25,6 +60,151 @@ type UserAsset = {
   file_path: string
   thumbnail_url: string | null
   generation_status: string
+  asset_layer?: 'floor' | 'surface' | 'ceiling'
+  width_m?: number
+  depth_m?: number
+  height_m?: number
+  brightness?: number
+  is_table?: boolean
+}
+
+/**
+ * Map pointer (clientX, clientY) to asset **top-left** in feet.
+ * Uses the canvas element’s rendered rect so flex/CSS scaling does not skew coords.
+ * Treats the pointer as the asset **center** (expected drop/drag UX).
+ */
+function pointerToTopLeftFeet(
+  clientX: number,
+  clientY: number,
+  canvasEl: HTMLElement,
+  roomWidthFt: number,
+  roomDepthFt: number,
+  assetWidthFt: number,
+  assetDepthFt: number
+): { x: number; y: number } {
+  const rect = canvasEl.getBoundingClientRect()
+  const rw = rect.width
+  const rh = rect.height
+  if (rw <= 0 || rh <= 0) return { x: 0, y: 0 }
+  const u = (clientX - rect.left) / rw
+  const v = (clientY - rect.top) / rh
+  const cxFt = u * roomWidthFt
+  const cyFt = v * roomDepthFt
+  const topLeftX = cxFt - assetWidthFt / 2
+  const topLeftY = cyFt - assetDepthFt / 2
+  const snap = (val: number) => Math.round(val / GRID_STEP_FT) * GRID_STEP_FT
+  return { x: snap(topLeftX), y: snap(topLeftY) }
+}
+
+/** Clamp loaded layout assets so bad saved width/depth cannot block placement (server JSON unchanged). */
+function normalizePlacedAsset(asset: Asset, roomW: number, roomD: number): Asset {
+  const w0 = Number(asset.width)
+  const d0 = Number(asset.depth)
+  const x0 = Number(asset.x)
+  const y0 = Number(asset.y)
+  const w = Math.max(GRID_STEP_FT, Math.min(Number.isFinite(w0) && w0 > 0 ? w0 : 1, roomW))
+  const d = Math.max(GRID_STEP_FT, Math.min(Number.isFinite(d0) && d0 > 0 ? d0 : 1, roomD))
+  const x = Math.max(0, Math.min(Number.isFinite(x0) ? x0 : 0, Math.max(0, roomW - w)))
+  const y = Math.max(0, Math.min(Number.isFinite(y0) ? y0 : 0, Math.max(0, roomD - d)))
+  return { ...asset, width: w, depth: d, x, y }
+}
+
+/**
+ * Single source of truth for default draggable assets.
+ * Layers: floor = rugs/carpets; surface = furniture + items on tables; ceiling = lights.
+ */
+const ASSET_CATALOG: Array<{
+  type: string
+  file: string
+  width: number
+  depth: number
+  height: number
+  label: string
+  layer: AssetLayer
+  elevation: number
+  placeOnTable?: boolean
+}> = [
+  { type: 'rug', file: 'rug.glb', width: 13, depth: 13, height: 0.07, label: 'Rug (13×13 ft)', layer: 'floor', elevation: 0 },
+  { type: 'table', file: 'asset_table.glb', width: 13, depth: 6.5, height: 2.5, label: 'Table (13×6.5 ft)', layer: 'surface', elevation: 2.5 },
+  { type: 'vase', file: 'blue_vase.glb', width: 1.3, depth: 1.3, height: 1.3, label: 'Blue Vase (on table)', layer: 'surface', elevation: 2.6, placeOnTable: true },
+  { type: 'chandelier', file: 'chandelier.glb', width: 4, depth: 4, height: 2, label: 'Chandelier (ceiling)', layer: 'ceiling', elevation: 0 },
+]
+
+/** Tabletop decor: catalog flag, explicit placeOnTable, or small surface footprint (e.g. candle). */
+function wantsTableSurface(asset: Asset): boolean {
+  return wantsTableTopDecor(asset)
+}
+
+function attachDecorToTable(asset: Asset, table: Asset): Asset {
+  const o = tableAttachOffsets(asset, table)
+  return {
+    ...asset,
+    parentAssetId: table.id,
+    offsetX: o.offsetX,
+    offsetY: o.offsetY,
+    x: o.x,
+    y: o.y,
+  }
+}
+
+function detachDecorFromTable(asset: Asset): Asset {
+  const next = { ...asset }
+  delete next.parentAssetId
+  delete next.offsetX
+  delete next.offsetY
+  return next
+}
+
+type CatalogItem = (typeof ASSET_CATALOG)[number]
+type BuiltInAssetOverride = {
+  /** Vertical size for scaling built-ins, in feet (legacy key name `height_m` still supported). */
+  height_m?: number
+  height_ft?: number
+  /** Floor footprint for built-in rug only (feet). */
+  width_ft?: number
+  depth_ft?: number
+  asset_layer?: AssetLayer
+  brightness?: number
+}
+const BUILTIN_OVERRIDES_KEY = 'builtin_asset_overrides_v1'
+
+const getBuiltInOverrides = (): Record<string, BuiltInAssetOverride> => {
+  try {
+    return JSON.parse(localStorage.getItem(BUILTIN_OVERRIDES_KEY) || '{}')
+  } catch {
+    return {}
+  }
+}
+
+const withCatalogOverrides = (item: CatalogItem): CatalogItem & { brightness: number } => {
+  const override = getBuiltInOverrides()[item.file]
+  if (!override) return { ...item, brightness: 1 }
+  const isBuiltinRug = item.layer === 'floor' && item.file === 'rug.glb'
+  let width = item.width
+  let depth = item.depth
+  if (isBuiltinRug) {
+    const wf = override.width_ft
+    const df = override.depth_ft
+    if (typeof wf === 'number' && wf > 0) width = wf
+    if (typeof df === 'number' && df > 0) depth = df
+  }
+  const targetHeightRaw = override.height_ft ?? override.height_m
+  const targetHeight =
+    typeof targetHeightRaw === 'number' && targetHeightRaw > 0 ? targetHeightRaw : item.height
+  /** Scale reference elevation with height only; do not inflate footprint (avoids huge rugs when height is edited). */
+  const ratio = item.height > 0 ? targetHeight / item.height : 1
+  const layer = (override.asset_layer as AssetLayer) || item.layer
+  return {
+    ...item,
+    height: targetHeight,
+    width,
+    depth,
+    layer,
+    elevation:
+      layer === 'ceiling' ? 0 : layer === 'floor' ? 0 : item.elevation * ratio,
+    label: `${item.label.split(' (')[0]} (${width.toFixed(2)}×${depth.toFixed(2)} ${ROOM_LENGTH_UNIT})`,
+    brightness: override.brightness ?? 1
+  }
 }
 
 type WallSpec = {
@@ -38,31 +218,136 @@ type WallSpec = {
   coordinates?: [number, number, number, number] // normalized 0-100 in planner space
 }
 
+/** Resolve layer for an asset (saved layout or catalog by file). */
+function getAssetLayer(asset: Asset): AssetLayer {
+  if (asset.layer) return asset.layer
+  const catalog = ASSET_CATALOG.find((c) => c.file === asset.file)
+  return catalog?.layer ?? 'surface'
+}
+
+/** Resolve reference elevation in feet (for 2D ordering / hints). */
+function getAssetElevation(asset: Asset, roomHeightFt: number): number {
+  if (asset.elevation != null) return asset.elevation
+  const catalog = ASSET_CATALOG.find((c) => c.file === asset.file)
+  if (catalog?.layer === 'ceiling') return Math.max(0, roomHeightFt - 0.5)
+  return catalog?.elevation ?? 2.5
+}
+
+/** Rugs/mats/carpets on the floor layer: size by width×depth in the planner/viewer, not by model height. */
+function usesFootprintScaling(asset: Asset): boolean {
+  if (getAssetLayer(asset) !== 'floor') return false
+  const t = String(asset.type ?? '').toLowerCase()
+  const f = String(asset.file ?? '').toLowerCase()
+  if (f === 'rug.glb') return true
+  return /(rug|mat|carpet)/.test(t) || /(rug|mat|carpet)/.test(f)
+}
+
+const LAYER_ORDER: AssetLayer[] = ['floor', 'surface', 'ceiling']
+type LightingPreset = 'dim' | 'warm' | 'neutral' | 'bright' | 'cool'
+const WALL_ID_ORDER: Record<string, number> = {
+  wall_north: 0,
+  wall_east: 1,
+  wall_south: 2,
+  wall_west: 3
+}
+
+const orderWallsClockwise = (walls: WallSpec[]): WallSpec[] => {
+  return [...walls].sort((a, b) => {
+    const ai = WALL_ID_ORDER[a.id] ?? 999
+    const bi = WALL_ID_ORDER[b.id] ?? 999
+    return ai - bi
+  })
+}
+
+/** Fallback only when venue/layout omit values (feet; keep in sync with server layout defaults). */
+const FALLBACK_ROOM = { width: 40, height: 9, depth: 40 }
+
+type VenueDimsSource = {
+  width?: unknown
+  depth?: unknown
+  height?: unknown
+  venue_name?: string
+}
+
+/** Width/depth = floor plan; height = room height (matches venue home + DB). */
+function roomDimsFromVenue(venue: VenueDimsSource | null | undefined) {
+  const w = Number(venue?.width)
+  const d = Number(venue?.depth)
+  const h = Number(venue?.height)
+  return {
+    width: Number.isFinite(w) && w > 0 ? w : FALLBACK_ROOM.width,
+    depth: Number.isFinite(d) && d > 0 ? d : FALLBACK_ROOM.depth,
+    height: Number.isFinite(h) && h > 0 ? h : FALLBACK_ROOM.height,
+  }
+}
+
+function roomDimsFromSavedLayout(
+  layoutDims: { width?: unknown; depth?: unknown; height?: unknown } | undefined,
+  venueFallback: { width: number; depth: number; height: number }
+) {
+  if (!layoutDims) return venueFallback
+  const w = Number(layoutDims.width)
+  const d = Number(layoutDims.depth)
+  const h = Number(layoutDims.height)
+  return {
+    width: Number.isFinite(w) && w > 0 ? w : venueFallback.width,
+    depth: Number.isFinite(d) && d > 0 ? d : venueFallback.depth,
+    height: Number.isFinite(h) && h > 0 ? h : venueFallback.height,
+  }
+}
+
 const FloorPlanner = () => {
   const { venueId } = useParams<{ venueId: string }>()
   const navigate = useNavigate()
   const canvasRef = useRef<HTMLDivElement>(null)
   const [venueName, setVenueName] = useState<string>('')
-  const [roomDimensions, setRoomDimensions] = useState({ width: 20, height: 8, depth: 20 })
+  const [roomDimensions, setRoomDimensions] = useState(FALLBACK_ROOM)
   const [materials, setMaterials] = useState<{ floor: { type: string; color: string }; ceiling: { type: string; color?: string } }>({
-    floor: { type: 'carpet', color: '#c6b39e' },
-    ceiling: { type: 'plain', color: '#f5f5f5' }
+    floor: { type: 'oak_wood', color: '#c6b39e' },
+    ceiling: { type: 'flat_white', color: '#f5f5f5' }
   })
+  const [lightingPreset, setLightingPreset] = useState<LightingPreset>('neutral')
   // Start with no walls by default; user draws or adds rectangle manually
   const defaultWalls: WallSpec[] = []
   const [walls, setWalls] = useState<WallSpec[]>(defaultWalls)
-  const [floorPlanUrl, setFloorPlanUrl] = useState<string | null>(null)
-  const [planMode, setPlanMode] = useState<'upload' | 'manual'>('manual')
   const [placedAssets, setPlacedAssets] = useState<Asset[]>([])
-  const [draggedAsset, setDraggedAsset] = useState<{ type: string; width: number; depth: number; file: string } | null>(null)
+  const [viewMode, setViewMode] = useState<'all' | 'floor' | 'middle' | 'ceiling'>('all')
+  const [draggedAsset, setDraggedAsset] = useState<{
+    type: string
+    width: number
+    depth: number
+    height?: number
+    file: string
+    layer: AssetLayer
+    elevation: number
+    placeOnTable?: boolean
+    brightness?: number
+    /** User-marked table in Asset Library (or built-in table). */
+    isTable?: boolean
+  } | null>(null)
   const [draggingAssetId, setDraggingAssetId] = useState<string | null>(null)
+  /** Live footprint preview while dragging from the library (HTML5 DnD). */
+  const [dropPreview, setDropPreview] = useState<{
+    x: number
+    y: number
+    width: number
+    depth: number
+    valid: boolean
+  } | null>(null)
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [userAssets, setUserAssets] = useState<UserAsset[]>([])
   const [loadingUserAssets, setLoadingUserAssets] = useState(false)
+  /** Bumps when built-in rug footprint overrides change in localStorage (re-read labels). */
+  const [builtinOverridesRev, setBuiltinOverridesRev] = useState(0)
+  const [selectedPlacedAssetId, setSelectedPlacedAssetId] = useState<string | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(250)
   const [isResizing, setIsResizing] = useState(false)
   const sidebarRef = useRef<HTMLDivElement>(null)
+  const planningViewportRef = useRef<HTMLDivElement>(null)
+  const [viewportSize, setViewportSize] = useState({ w: 0, h: 0 })
   const previewContainerRef = useRef<HTMLDivElement>(null)
+  const previewLoadTokenRef = useRef(0)
+  const previewScriptsPromiseRef = useRef<Promise<void> | null>(null)
   const previewStateRef = useRef<{
     initialized: boolean
     scene: any
@@ -86,6 +371,7 @@ const FloorPlanner = () => {
   })
 
   const API_BASE_URL = getApiBaseUrl()
+
   const [isDrawingWall, setIsDrawingWall] = useState(false)
   const [draftWall, setDraftWall] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
   const [selectedWallId, setSelectedWallId] = useState<string | null>(null)
@@ -94,42 +380,61 @@ const FloorPlanner = () => {
   const [draggingEndpoint, setDraggingEndpoint] = useState<{ wallId: string; handle: 'start' | 'end' } | null>(null)
 
   useEffect(() => {
-    // Load room dimensions and layout from server
+    // Load venue (DB dimensions) + layout.json. If layout.json is missing, use venue dims — not API defaults (20×20×8).
     const loadLayout = async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/layout`)
-        if (response.ok) {
-          const data = await response.json()
-          console.log(`[FloorPlanner] Loaded layout for venue ${venueId}:`, {
-            hasWalls: !!data.walls,
-            wallsCount: data.walls?.length || 0,
-            walls: data.walls
-          })
-          if (data.dimensions) {
-            setRoomDimensions(data.dimensions)
+        const [venueRes, layoutRes] = await Promise.all([
+          fetch(`${API_BASE_URL}/api/v1/venues/${venueId}`, { headers: getAuthHeaders() }),
+          fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/layout`, { headers: getAuthHeaders() }),
+        ])
+
+        let venueData: VenueDimsSource | null = null
+        if (venueRes.ok) {
+          const vj = await venueRes.json()
+          venueData = vj.venue ?? null
+        }
+
+        if (!layoutRes.ok) {
+          console.error(`[FloorPlanner] Failed to load layout: ${layoutRes.status} ${layoutRes.statusText}`)
+          if (venueData) {
+            setRoomDimensions(roomDimsFromVenue(venueData))
+            if (venueData.venue_name) setVenueName(venueData.venue_name)
           }
-          if (data.name) {
-            setVenueName(data.name)
-          }
-          if (data.materials) {
-            setMaterials(data.materials)
-          }
-          if (data.walls && Array.isArray(data.walls) && data.walls.length > 0) {
-            console.log(`[FloorPlanner] Setting ${data.walls.length} walls`)
-            setWalls(data.walls as WallSpec[])
-          } else {
-            console.log(`[FloorPlanner] No walls found, using empty array`)
-            setWalls(defaultWalls)
-          }
-          if (data.assets && Array.isArray(data.assets)) {
-            setPlacedAssets(data.assets)
-          }
-          if (data.floor_plan_url) {
-            setFloorPlanUrl(data.floor_plan_url)
-            setPlanMode('upload')
-          }
+          return
+        }
+
+        const data = await layoutRes.json()
+        const baseFromVenue = roomDimsFromVenue(venueData)
+        const dims =
+          data.layout_file_exists === true
+            ? roomDimsFromSavedLayout(data.dimensions, baseFromVenue)
+            : baseFromVenue
+        setRoomDimensions(dims)
+
+        if (data.name) {
+          setVenueName(data.name)
+        } else if (venueData?.venue_name) {
+          setVenueName(venueData.venue_name)
+        }
+
+        if (data.materials) {
+          setMaterials(data.materials)
+        }
+        if (data.lighting?.preset) {
+          setLightingPreset(data.lighting.preset as LightingPreset)
+        }
+        if (data.walls && Array.isArray(data.walls) && data.walls.length > 0) {
+          setWalls(orderWallsClockwise(data.walls as WallSpec[]))
         } else {
-          console.error(`[FloorPlanner] Failed to load layout: ${response.status} ${response.statusText}`)
+          setWalls(defaultWalls)
+        }
+        if (data.assets && Array.isArray(data.assets)) {
+          setPlacedAssets(
+            (data.assets as Asset[]).map((a) => {
+              const n = normalizePlacedAsset(a, dims.width, dims.depth)
+              return wantsTableTopDecor(n) ? { ...n, placeOnTable: true } : n
+            })
+          )
         }
       } catch (error) {
         console.error('Error loading layout:', error)
@@ -141,8 +446,10 @@ const FloorPlanner = () => {
       setLoadingUserAssets(true)
       try {
         const token = localStorage.getItem('token')
-        if (!token) return
-        
+        if (!token) {
+          setLoadingUserAssets(false)
+          return
+        }
         const response = await fetch(`${API_BASE_URL}/api/v1/assets`, {
           headers: {
             'Authorization': `Bearer ${token}`
@@ -156,7 +463,6 @@ const FloorPlanner = () => {
             (a: UserAsset) => a.generation_status === 'completed'
           )
           setUserAssets(completedAssets)
-          console.log(`[FloorPlanner] Loaded ${completedAssets.length} user assets`)
         }
       } catch (error) {
         console.error('Error fetching user assets:', error)
@@ -183,15 +489,6 @@ const FloorPlanner = () => {
       }
     }
   }, [venueId, API_BASE_URL])
-
-  // Debug: Log when walls change
-  useEffect(() => {
-    console.log(`[FloorPlanner] Walls state changed:`, {
-      wallsCount: walls.length,
-      planMode,
-      walls: walls.map(w => ({ id: w.id, name: w.name, hasCoords: !!w.coordinates }))
-    })
-  }, [walls, planMode])
 
   // Sidebar resize functionality - throttled for performance
   useEffect(() => {
@@ -234,6 +531,19 @@ const FloorPlanner = () => {
     }
   }, [isResizing, sidebarWidth])
 
+  useEffect(() => {
+    const el = planningViewportRef.current
+    if (!el) return
+    const ro = new ResizeObserver((entries) => {
+      const target = entries[0]?.target as HTMLElement | undefined
+      if (!target) return
+      // clientWidth/clientHeight match the box we fit into (includes padding, excludes scrollbar).
+      setViewportSize({ w: Math.round(target.clientWidth), h: Math.round(target.clientHeight) })
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
   // Keyboard shortcuts: Delete selected wall, Escape to deselect, etc.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -255,6 +565,7 @@ const FloorPlanner = () => {
       if (e.key === 'Escape') {
         e.preventDefault()
         setSelectedWallId(null)
+        setSelectedPlacedAssetId(null)
         setDraggingEndpoint(null)
         setDraggingWallId(null)
         setIsDrawingWall(false)
@@ -287,34 +598,58 @@ const FloorPlanner = () => {
 
   useEffect(() => {
     const handleGlobalMouseMove = (e: MouseEvent) => {
-      if (draggingAssetId && canvasRef.current) {
-        const rect = canvasRef.current.getBoundingClientRect()
-        const x = e.clientX - rect.left
-        const y = e.clientY - rect.top
+      if (!draggingAssetId || !canvasRef.current) return
+      const el = canvasRef.current
 
-        const snappedX = Math.round(x / GRID_SIZE) * GRID_SIZE
-        const snappedY = Math.round(y / GRID_SIZE) * GRID_SIZE
+      setPlacedAssets((prevAssets) => {
+        const asset = prevAssets.find((a) => a.id === draggingAssetId)
+        if (!asset) return prevAssets
 
-        const xM = snappedX / METER_TO_PIXEL_SCALE
-        const yM = snappedY / METER_TO_PIXEL_SCALE
+        const { x: topX, y: topY } = pointerToTopLeftFeet(
+          e.clientX,
+          e.clientY,
+          el,
+          roomDimensions.width,
+          roomDimensions.depth,
+          asset.width,
+          asset.depth
+        )
 
-        // Use functional update to avoid dependency on placedAssets
-        setPlacedAssets(prevAssets => {
-          const asset = prevAssets.find(a => a.id === draggingAssetId)
-          if (!asset) return prevAssets
-
-          if (checkCollision(draggingAssetId, xM, yM, asset.width, asset.depth)) {
-            return prevAssets
-          }
-
-          return prevAssets.map(a => 
-            a.id === draggingAssetId ? { ...a, x: xM, y: yM } : a
+        if (
+          checkCollision(
+            draggingAssetId,
+            topX,
+            topY,
+            asset.width,
+            asset.depth,
+            getAssetLayer(asset),
+            prevAssets
           )
-        })
-      }
+        ) {
+          return prevAssets
+        }
+
+        return prevAssets.map((a) => (a.id === draggingAssetId ? { ...a, x: topX, y: topY } : a))
+      })
     }
 
     const handleGlobalMouseUp = () => {
+      const id = draggingAssetId
+      if (id) {
+        setPlacedAssets((prev) => {
+          const asset = prev.find((a) => a.id === id)
+          if (!asset || !wantsTableSurface(asset)) return prev
+          const others = prev.filter((a) => a.id !== id)
+          const table = findTableUnderDecorCenter(asset, others)
+          if (table) {
+            return prev.map((a) => (a.id === id ? attachDecorToTable(asset, table) : a))
+          }
+          if (asset.parentAssetId) {
+            return prev.map((a) => (a.id === id ? detachDecorFromTable(asset) : a))
+          }
+          return prev
+        })
+      }
       setDraggingAssetId(null)
     }
 
@@ -326,46 +661,287 @@ const FloorPlanner = () => {
         window.removeEventListener('mouseup', handleGlobalMouseUp)
       }
     }
-  }, [draggingAssetId]) // Removed placedAssets from dependencies
+  }, [draggingAssetId, roomDimensions.width, roomDimensions.depth])
 
-  const handleDragStart = (e: React.DragEvent, assetType: string, width: number, depth: number, file: string) => {
-    setDraggedAsset({ type: assetType, width, depth, file })
+  /** Tolerance on room / wall bounds (feet) so float/grid snap does not false-reject. */
+  const PLACEMENT_EPS = 1e-3
+
+  const checkAssetWithinWalls = (
+    assetX: number,
+    assetY: number,
+    assetWidth: number,
+    assetDepth: number
+  ): boolean => {
+    if (walls.length === 0) return false
+
+    const assetRight = assetX + assetWidth
+    const assetBottom = assetY + assetDepth
+
+    let minX = Infinity,
+      maxX = -Infinity
+    let minY = Infinity,
+      maxY = -Infinity
+
+    walls.forEach((wall) => {
+      if (!wall.coordinates) return
+      const [x1, y1, x2, y2] = wall.coordinates
+      const pctX = (val: number) => (val / 100) * roomDimensions.width
+      const pctY = (val: number) => (val / 100) * roomDimensions.depth
+
+      const x1M = pctX(x1)
+      const x2M = pctX(x2)
+      const y1M = pctY(y1)
+      const y2M = pctY(y2)
+
+      minX = Math.min(minX, x1M, x2M)
+      maxX = Math.max(maxX, x1M, x2M)
+      minY = Math.min(minY, y1M, y2M)
+      maxY = Math.max(maxY, y1M, y2M)
+    })
+
+    return (
+      assetX >= minX - PLACEMENT_EPS &&
+      assetRight <= maxX + PLACEMENT_EPS &&
+      assetY >= minY - PLACEMENT_EPS &&
+      assetBottom <= maxY + PLACEMENT_EPS
+    )
+  }
+
+  const getPlacementFailureReason = (
+    excludeId: string | null,
+    x: number,
+    y: number,
+    width: number,
+    depth: number,
+    layer?: AssetLayer,
+    assetList?: Asset[]
+  ): 'room' | 'walls' | 'overlap' | null => {
+    const others = assetList ?? placedAssets
+    const spacing = 0.05
+
+    if (
+      x < -PLACEMENT_EPS ||
+      y < -PLACEMENT_EPS ||
+      x + width > roomDimensions.width + PLACEMENT_EPS ||
+      y + depth > roomDimensions.depth + PLACEMENT_EPS
+    ) {
+      return 'room'
+    }
+
+    if (walls.length > 0 && !checkAssetWithinWalls(x, y, width, depth)) {
+      return 'walls'
+    }
+
+    const newLeft = x - spacing / 2
+    const newRight = x + width + spacing / 2
+    const newTop = y - spacing / 2
+    const newBottom = y + depth + spacing / 2
+
+    for (const asset of others) {
+      if (excludeId && asset.id === excludeId) continue
+      const assetLayer = getAssetLayer(asset)
+      if (layer != null && assetLayer !== layer) continue
+      // Middle/surface layer: same 2D footprint may overlap (e.g. several items on one table).
+      if (layer === 'surface') continue
+
+      const otherLeft = asset.x - spacing / 2
+      const otherRight = asset.x + asset.width + spacing / 2
+      const otherTop = asset.y - spacing / 2
+      const otherBottom = asset.y + asset.depth + spacing / 2
+
+      if (
+        !(
+          newRight <= otherLeft ||
+          newLeft >= otherRight ||
+          newBottom <= otherTop ||
+          newTop >= otherBottom
+        )
+      ) {
+        return 'overlap'
+      }
+    }
+    return null
+  }
+
+  const checkCollision = (
+    excludeId: string | null,
+    x: number,
+    y: number,
+    width: number,
+    depth: number,
+    layer?: AssetLayer,
+    assetList?: Asset[]
+  ): boolean => getPlacementFailureReason(excludeId, x, y, width, depth, layer, assetList) !== null
+
+  const handleDragStart = (
+    e: React.DragEvent,
+    catalogItem: CatalogItem
+  ) => {
+    const item = withCatalogOverrides(catalogItem)
+    setDraggedAsset({
+      type: item.type,
+      width: item.width,
+      depth: item.depth,
+      height: item.height,
+      file: item.file,
+      layer: item.layer,
+      elevation: item.elevation,
+      placeOnTable: catalogItem.placeOnTable,
+      brightness: item.brightness,
+      isTable: catalogItem.file === 'asset_table.glb',
+    })
+    // Required on many browsers or drop never fires (Firefox; some Chromium builds).
+    e.dataTransfer.setData('text/plain', item.file)
     e.dataTransfer.effectAllowed = 'copy'
+  }
+
+  const handleDragStartUserAsset = (e: React.DragEvent, asset: UserAsset) => {
+    const layer = asset.asset_layer || 'surface'
+    const elevation = layer === 'ceiling' ? 0 : layer === 'floor' ? 0 : 2.5
+    const wM = asset.width_m ?? 1
+    const dM = asset.depth_m ?? 1
+    const hM = asset.height_m ?? 1
+    setDraggedAsset({
+      type: asset.asset_name.toLowerCase().replace(/\s+/g, '_'),
+      width: metersToFeet(wM),
+      depth: metersToFeet(dM),
+      height: metersToFeet(hM),
+      file: asset.file_path || (asset.file_url?.replace(/^\/static\//, '') ?? ''),
+      layer: layer as AssetLayer,
+      elevation,
+      brightness: asset.brightness ?? 1,
+      isTable: Boolean(asset.is_table),
+    })
+    e.dataTransfer.setData(
+      'text/plain',
+      asset.file_path || asset.file_url || `user-${asset.asset_id}`
+    )
+    e.dataTransfer.effectAllowed = 'copy'
+  }
+
+  const clearLibraryDragUi = () => {
+    setDropPreview(null)
+    setDraggedAsset(null)
   }
 
   const handleCanvasDrop = (e: React.DragEvent) => {
     e.preventDefault()
+    setDropPreview(null)
     if (!draggedAsset || !canvasRef.current) return
 
-    const rect = canvasRef.current.getBoundingClientRect()
-    const x = e.clientX - rect.left
-    const y = e.clientY - rect.top
+    const { x: xM, y: yM } = pointerToTopLeftFeet(
+      e.clientX,
+      e.clientY,
+      canvasRef.current,
+      roomDimensions.width,
+      roomDimensions.depth,
+      draggedAsset.width,
+      draggedAsset.depth
+    )
+    const cxM = xM + draggedAsset.width / 2
+    const cyM = yM + draggedAsset.depth / 2
 
-    // Snap to grid
-    const snappedX = Math.round(x / GRID_SIZE) * GRID_SIZE
-    const snappedY = Math.round(y / GRID_SIZE) * GRID_SIZE
+    // Tabletop decor: center over table → parent link (catalog flag or small surface footprint, e.g. candle)
+    let placedOnTable: Asset | null = null
+    if (
+      wantsTableTopDecor({
+        type: draggedAsset.type,
+        file: draggedAsset.file,
+        layer: draggedAsset.layer,
+        width: draggedAsset.width,
+        depth: draggedAsset.depth,
+        placeOnTable: draggedAsset.placeOnTable,
+        is_table: draggedAsset.isTable,
+      })
+    ) {
+      const probe: Asset = {
+        id: '__drop__',
+        type: draggedAsset.type,
+        file: draggedAsset.file,
+        width: draggedAsset.width,
+        depth: draggedAsset.depth,
+        x: xM,
+        y: yM,
+        rotation: 0,
+        is_table: draggedAsset.isTable,
+      }
+      placedOnTable = findTableUnderDecorCenter(probe, placedAssets)
+    }
 
-    // Convert to meters
-    const xM = snappedX / METER_TO_PIXEL_SCALE
-    const yM = snappedY / METER_TO_PIXEL_SCALE
-
-    // Check for collisions
-    if (checkCollision(null, xM, yM, draggedAsset.width, draggedAsset.depth)) {
-      setMessage({ text: 'Cannot place asset here! Assets must maintain spacing.', type: 'error' })
-      setTimeout(() => setMessage(null), 3000)
+    if (placedOnTable) {
+      const tableCenterX = placedOnTable.x + placedOnTable.width / 2
+      const tableCenterY = placedOnTable.y + placedOnTable.depth / 2
+      const offsetX = cxM - tableCenterX
+      const offsetY = cyM - tableCenterY
+      const newAsset: Asset = {
+        id: `placed-${Date.now()}`,
+        type: draggedAsset.type,
+        file: draggedAsset.file,
+        width: draggedAsset.width,
+        depth: draggedAsset.depth,
+        height: draggedAsset.height,
+        x: tableCenterX + offsetX - draggedAsset.width / 2,
+        y: tableCenterY + offsetY - draggedAsset.depth / 2,
+        rotation: 0,
+        parentAssetId: placedOnTable.id,
+        offsetX,
+        offsetY,
+        layer: draggedAsset.layer,
+        elevation: draggedAsset.elevation,
+        brightness: draggedAsset.brightness ?? 1,
+        placeOnTable: true,
+        is_table: false,
+      }
+      setPlacedAssets([...placedAssets, newAsset])
+      setDraggedAsset(null)
       return
     }
 
-    // Create new asset
+    const blockReason = getPlacementFailureReason(
+      null,
+      xM,
+      yM,
+      draggedAsset.width,
+      draggedAsset.depth,
+      draggedAsset.layer
+    )
+    if (blockReason) {
+      const hint =
+        blockReason === 'room'
+          ? 'extends outside the room — drag closer to the center.'
+          : blockReason === 'walls'
+            ? 'is outside your green wall outline. Use "Add rectangle" for a full room, drag walls to the edges, or use a smaller asset.'
+            : 'overlaps another asset on this layer.'
+      setMessage({ text: `Cannot place here: ${hint}`, type: 'error' })
+      setTimeout(() => setMessage(null), 5000)
+      return
+    }
+
     const newAsset: Asset = {
       id: `placed-${Date.now()}`,
       type: draggedAsset.type,
       file: draggedAsset.file,
       width: draggedAsset.width,
       depth: draggedAsset.depth,
+      height: draggedAsset.height,
       x: xM,
       y: yM,
-      rotation: 0
+      rotation: 0,
+      layer: draggedAsset.layer,
+      elevation: draggedAsset.elevation,
+      brightness: draggedAsset.brightness ?? 1,
+      ...(draggedAsset.isTable ? { is_table: true as const } : {}),
+      ...(wantsTableTopDecor({
+        type: draggedAsset.type,
+        file: draggedAsset.file,
+        layer: draggedAsset.layer,
+        width: draggedAsset.width,
+        depth: draggedAsset.depth,
+        placeOnTable: draggedAsset.placeOnTable,
+        is_table: draggedAsset.isTable,
+      })
+        ? { placeOnTable: true as const }
+        : {})
     }
 
     setPlacedAssets([...placedAssets, newAsset])
@@ -375,10 +951,55 @@ const FloorPlanner = () => {
   const handleCanvasDragOver = (e: React.DragEvent) => {
     e.preventDefault()
     e.dataTransfer.dropEffect = 'copy'
+    if (!draggedAsset || !canvasRef.current) {
+      setDropPreview(null)
+      return
+    }
+    const { x, y } = pointerToTopLeftFeet(
+      e.clientX,
+      e.clientY,
+      canvasRef.current,
+      roomDimensions.width,
+      roomDimensions.depth,
+      draggedAsset.width,
+      draggedAsset.depth
+    )
+    const blocked = getPlacementFailureReason(
+      null,
+      x,
+      y,
+      draggedAsset.width,
+      draggedAsset.depth,
+      draggedAsset.layer
+    )
+    setDropPreview({
+      x,
+      y,
+      width: draggedAsset.width,
+      depth: draggedAsset.depth,
+      valid: blocked === null
+    })
   }
 
-  const handleAssetDragStart = (assetId: string) => {
-    setDraggingAssetId(assetId)
+  const handlePlacedAssetMouseDown = (e: React.MouseEvent, asset: Asset) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    const sx = e.clientX
+    const sy = e.clientY
+    let dragged = false
+    const move = (ev: MouseEvent) => {
+      if (!dragged && Math.hypot(ev.clientX - sx, ev.clientY - sy) > 8) {
+        dragged = true
+        setDraggingAssetId(asset.id)
+      }
+    }
+    const up = () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+      if (!dragged) setSelectedPlacedAssetId(asset.id)
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
   }
 
   const handleAssetRightClick = (e: React.MouseEvent, assetId: string) => {
@@ -389,7 +1010,35 @@ const FloorPlanner = () => {
   }
 
   const handleDeleteAsset = (assetId: string) => {
-    setPlacedAssets(placedAssets.filter(a => a.id !== assetId))
+    setPlacedAssets(placedAssets.filter((a) => a.id !== assetId))
+    setSelectedPlacedAssetId((id) => (id === assetId ? null : id))
+  }
+
+  const persistBuiltinOverride = (file: string, patch: Partial<BuiltInAssetOverride>) => {
+    try {
+      const all = getBuiltInOverrides()
+      all[file] = { ...all[file], ...patch }
+      localStorage.setItem(BUILTIN_OVERRIDES_KEY, JSON.stringify(all))
+      setBuiltinOverridesRev((n) => n + 1)
+    } catch {
+      setMessage({ text: 'Could not save rug size preferences.', type: 'error' })
+      setTimeout(() => setMessage(null), 3000)
+    }
+  }
+
+  const updatePlacedFootprint = (id: string, width: number, depth: number) => {
+    setPlacedAssets((prev) =>
+      prev.map((a) => {
+        if (a.id !== id || !usesFootprintScaling(a)) return a
+        const w = Math.max(GRID_STEP_FT, Math.min(width, roomDimensions.width))
+        const d = Math.max(GRID_STEP_FT, Math.min(depth, roomDimensions.depth))
+        let x = a.x
+        let y = a.y
+        if (x + w > roomDimensions.width) x = Math.max(0, roomDimensions.width - w)
+        if (y + d > roomDimensions.depth) y = Math.max(0, roomDimensions.depth - d)
+        return { ...a, width: w, depth: d, x, y }
+      })
+    )
   }
 
   const hitTestWall = (xPx: number, yPx: number, tolerancePx = 10): WallSpec | null => {
@@ -421,89 +1070,6 @@ const FloorPlanner = () => {
     return null
   }
 
-  const checkCollision = (excludeId: string | null, x: number, y: number, width: number, depth: number): boolean => {
-    const spacing = 1 // 1 meter spacing requirement
-
-    // First, enforce room bounds so assets cannot be placed outside the grid
-    if (
-      x < 0 ||
-      y < 0 ||
-      x + width > roomDimensions.width ||
-      y + depth > roomDimensions.depth
-    ) {
-      return true
-    }
-
-    // Check if asset is within wall boundaries (if walls exist)
-    if (walls.length > 0) {
-      const assetInWalls = checkAssetWithinWalls(x, y, width, depth)
-      if (!assetInWalls) {
-        return true
-      }
-    }
-
-    const newLeft = x - spacing / 2
-    const newRight = x + width + spacing / 2
-    const newTop = y - spacing / 2
-    const newBottom = y + depth + spacing / 2
-
-    for (const asset of placedAssets) {
-      if (excludeId && asset.id === excludeId) continue
-
-      const otherLeft = asset.x - spacing / 2
-      const otherRight = asset.x + asset.width + spacing / 2
-      const otherTop = asset.y - spacing / 2
-      const otherBottom = asset.y + asset.depth + spacing / 2
-
-      if (!(newRight <= otherLeft || newLeft >= otherRight || 
-            newBottom <= otherTop || newTop >= otherBottom)) {
-        return true
-      }
-    }
-    return false
-  }
-
-  // Check if asset bounding box is within the walls
-  const checkAssetWithinWalls = (assetX: number, assetY: number, assetWidth: number, assetDepth: number): boolean => {
-    // If no walls defined, prevent placement (must have bounding walls)
-    if (walls.length === 0) return false
-    
-    const MIN_WALL_DISTANCE = 0.1 // 10cm minimum distance from walls
-    const assetRight = assetX + assetWidth
-    const assetBottom = assetY + assetDepth
-    
-    // Check if asset is within the bounding box formed by walls
-    let minX = Infinity, maxX = -Infinity
-    let minY = Infinity, maxY = -Infinity
-    
-    // Find bounding box of all walls
-    walls.forEach(wall => {
-      if (!wall.coordinates) return
-      const [x1, y1, x2, y2] = wall.coordinates
-      const pctX = (val: number) => (val / 100) * roomDimensions.width
-      const pctY = (val: number) => (val / 100) * roomDimensions.depth
-      
-      const x1M = pctX(x1)
-      const x2M = pctX(x2)
-      const y1M = pctY(y1)
-      const y2M = pctY(y2)
-      
-      minX = Math.min(minX, x1M, x2M)
-      maxX = Math.max(maxX, x1M, x2M)
-      minY = Math.min(minY, y1M, y2M)
-      maxY = Math.max(maxY, y1M, y2M)
-    })
-    
-    // Asset must be within wall bounds with minimum clearance
-    const isWithinBounds = 
-      assetX >= minX + MIN_WALL_DISTANCE &&
-      assetRight <= maxX - MIN_WALL_DISTANCE &&
-      assetY >= minY + MIN_WALL_DISTANCE &&
-      assetBottom <= maxY - MIN_WALL_DISTANCE
-    
-    return isWithinBounds
-  }
-
   const handleSave = async () => {
     if (placedAssets.length === 0) {
       setMessage({ text: 'Please place at least one asset before saving.', type: 'error' })
@@ -515,6 +1081,7 @@ const FloorPlanner = () => {
       const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/layout`, {
         method: 'POST',
         headers: {
+          ...getAuthHeaders(),
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
@@ -522,17 +1089,38 @@ const FloorPlanner = () => {
           dimensions: roomDimensions,
           assets: placedAssets,
           materials,
+          lighting: { preset: lightingPreset },
           walls,
-          floor_plan_url: floorPlanUrl
+          floor_plan_url: null
         })
       })
 
       if (response.ok) {
-        setMessage({ text: 'Layout saved! Opening guided tour to capture wall photos...', type: 'success' })
-        setTimeout(() => {
-          // Redirect to guided tour after saving
-          navigate(`/mobile/capture/${venueId}`)
-        }, 1500)
+        let hasWallPhotos = false
+        try {
+          const wiRes = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/wall-images`, {
+            headers: getAuthHeaders()
+          })
+          if (wiRes.ok) {
+            const wiJson = await wiRes.json()
+            const imgs = wiJson.wall_images as Record<string, string> | undefined
+            if (imgs && typeof imgs === 'object') {
+              hasWallPhotos = Object.keys(imgs).some((k) => Boolean(imgs[k]))
+            }
+          }
+        } catch {
+          /* treat as no photos if check fails */
+        }
+
+        if (hasWallPhotos) {
+          setMessage({ text: 'Layout saved.', type: 'success' })
+          setTimeout(() => setMessage(null), 3000)
+        } else {
+          setMessage({ text: 'Layout saved! Opening guided tour to capture wall photos...', type: 'success' })
+          setTimeout(() => {
+            navigate(`/capture/${venueId}`)
+          }, 1500)
+        }
       } else {
         setMessage({ text: 'Failed to save layout.', type: 'error' })
         setTimeout(() => setMessage(null), 3000)
@@ -549,29 +1137,34 @@ const FloorPlanner = () => {
     }
 
     try {
-      console.log(`[FloorPlanner] Resetting venue ${venueId}...`)
       const resetUrl = `${API_BASE_URL}/api/v1/venue/${venueId}/reset`
-      console.log(`[FloorPlanner] Calling reset endpoint: ${resetUrl}`)
-      
       const response = await fetch(resetUrl, {
         method: 'POST',
         headers: {
+          ...getAuthHeaders(),
           'Content-Type': 'application/json'
         }
       })
-
-      console.log(`[FloorPlanner] Reset response status: ${response.status}`)
       const responseData = await response.json()
-      console.log(`[FloorPlanner] Reset response data:`, responseData)
 
       if (response.ok) {
         setMessage({ text: 'Venue reset successfully! Starting fresh...', type: 'success' })
         // Reset local state
         setWalls([])
         setPlacedAssets([])
-        setFloorPlanUrl(null)
         setVenueName('')
-        setRoomDimensions({ width: 20, height: 8, depth: 20 })
+        setLightingPreset('neutral')
+        try {
+          const vr = await fetch(`${API_BASE_URL}/api/v1/venues/${venueId}`, { headers: getAuthHeaders() })
+          if (vr.ok) {
+            const vj = await vr.json()
+            setRoomDimensions(roomDimsFromVenue(vj.venue))
+          } else {
+            setRoomDimensions(FALLBACK_ROOM)
+          }
+        } catch {
+          setRoomDimensions(FALLBACK_ROOM)
+        }
         setTimeout(() => setMessage(null), 2000)
       } else {
         console.error(`[FloorPlanner] Reset failed: ${responseData.message}`)
@@ -592,7 +1185,8 @@ const FloorPlanner = () => {
   const handleGenerateGlb = async () => {
     try {
       const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/generate-glb`, {
-        method: 'POST'
+        method: 'POST',
+        headers: getAuthHeaders()
       })
       if (response.ok) {
         setMessage({ text: 'Server GLB generated.', type: 'success' })
@@ -678,42 +1272,82 @@ const FloorPlanner = () => {
     }
   }
 
-  const handleAssetHover = (assetFile: string, label: string) => {
+  const getPreviewElements = () => {
     const statusEl = previewContainerRef.current?.parentElement?.querySelector('.asset-preview-status') as HTMLElement
     const titleEl = previewContainerRef.current?.parentElement?.querySelector('.asset-preview-title') as HTMLElement
+    return { statusEl, titleEl }
+  }
+
+  const loadScriptOnce = (src: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null
+      if (existing) {
+        if (existing.getAttribute('data-loaded') === 'true') {
+          resolve()
+          return
+        }
+        existing.addEventListener('load', () => resolve(), { once: true })
+        existing.addEventListener('error', () => reject(new Error(`Failed to load script: ${src}`)), { once: true })
+        return
+      }
+      const script = document.createElement('script')
+      script.src = src
+      script.async = true
+      script.onload = () => {
+        script.setAttribute('data-loaded', 'true')
+        resolve()
+      }
+      script.onerror = () => reject(new Error(`Failed to load script: ${src}`))
+      document.head.appendChild(script)
+    })
+  }
+
+  const ensurePreviewDependencies = async () => {
+    if ((window as any).THREE?.GLTFLoader && (window as any).THREE?.OrbitControls) return
+    if (!previewScriptsPromiseRef.current) {
+      previewScriptsPromiseRef.current = (async () => {
+        await loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js')
+        await loadScriptOnce('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js')
+        await loadScriptOnce('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js')
+      })()
+    }
+    await previewScriptsPromiseRef.current
+  }
+
+  const handleAssetHover = async (assetFile: string, label: string) => {
+    const { statusEl, titleEl } = getPreviewElements()
 
     if (!assetFile || !statusEl || !titleEl) return
 
-    // Load Three.js if not loaded
-    if (!(window as any).THREE) {
-      const script1 = document.createElement('script')
-      script1.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'
-      script1.onload = () => {
-        const script2 = document.createElement('script')
-        script2.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js'
-        script2.onload = () => {
-          const script3 = document.createElement('script')
-          script3.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js'
-          script3.onload = () => {
-            initAssetPreview()
-            loadAssetPreview(assetFile, label)
-          }
-          document.head.appendChild(script3)
-        }
-        document.head.appendChild(script2)
-      }
-      document.head.appendChild(script1)
-      return
-    }
+    const hoverToken = ++previewLoadTokenRef.current
+    statusEl.textContent = 'Loading preview...'
 
-    initAssetPreview()
-    loadAssetPreview(assetFile, label)
+    try {
+      await ensurePreviewDependencies()
+      if (previewLoadTokenRef.current !== hoverToken) return
+      initAssetPreview()
+      loadAssetPreview(assetFile, label, hoverToken)
+    } catch (error) {
+      if (previewLoadTokenRef.current !== hoverToken) return
+      console.error('Failed to initialize asset preview', error)
+      statusEl.textContent = 'Preview unavailable.'
+    }
   }
 
-  const loadAssetPreview = (assetFile: string, label: string) => {
+  const handleAssetHoverLeave = () => {
+    // Invalidate any in-flight hover load so stale models never replace current hover.
+    previewLoadTokenRef.current += 1
     const previewState = previewStateRef.current
-    const statusEl = previewContainerRef.current?.parentElement?.querySelector('.asset-preview-status') as HTMLElement
-    const titleEl = previewContainerRef.current?.parentElement?.querySelector('.asset-preview-title') as HTMLElement
+    previewState.currentFile = null
+    clearPreviewModel()
+    const { statusEl, titleEl } = getPreviewElements()
+    if (titleEl) titleEl.textContent = 'Asset Preview'
+    if (statusEl) statusEl.textContent = 'Hover an asset to load its 3D preview.'
+  }
+
+  const loadAssetPreview = (assetFile: string, label: string, hoverToken: number) => {
+    const previewState = previewStateRef.current
+    const { statusEl, titleEl } = getPreviewElements()
 
     if (!assetFile || !statusEl || !titleEl) return
 
@@ -743,12 +1377,14 @@ const FloorPlanner = () => {
     previewState.loader.load(
       modelPath,
       (gltf: any) => {
+        if (previewLoadTokenRef.current !== hoverToken || previewState.currentFile !== assetFile) return
         previewState.modelGroup = normalizeAndScaleModel(gltf.scene, 1.5, 1.5)
         previewState.scene.add(previewState.modelGroup)
         statusEl.textContent = 'Drag inside preview to rotate.'
       },
       undefined,
       (error: any) => {
+        if (previewLoadTokenRef.current !== hoverToken || previewState.currentFile !== assetFile) return
         console.error('Failed to load preview', error)
         statusEl.textContent = 'Preview unavailable.'
         previewState.currentFile = null
@@ -803,17 +1439,45 @@ const FloorPlanner = () => {
     return wrapper
   }
 
-  const canvasWidthPx = roomDimensions.width * METER_TO_PIXEL_SCALE
-  const canvasHeightPx = roomDimensions.depth * METER_TO_PIXEL_SCALE
+  const rwFt = roomDimensions.width
+  const rdFt = roomDimensions.depth
+  let displayPixelsPerFoot = PIXELS_PER_FOOT
+  let canvasWidthPx = Math.max(1, Math.floor(rwFt * PIXELS_PER_FOOT))
+  let canvasHeightPx = Math.max(1, Math.floor(rdFt * PIXELS_PER_FOOT))
+
+  if (Number.isFinite(rwFt) && Number.isFinite(rdFt) && rwFt > 0 && rdFt > 0) {
+    const borderOut = PLANNER_CANVAS_BORDER_PX * 2
+    const vw = Math.max(0, viewportSize.w - PLANNER_VIEWPORT_PAD_PX * 2 - borderOut)
+    const vh = Math.max(0, viewportSize.h - PLANNER_VIEWPORT_PAD_PX * 2 - borderOut)
+    if (vw >= 64 && vh >= 64) {
+      const fitPpf = Math.min(vw / rwFt, vh / rdFt) * PLANNER_FIT_FILL
+      if (Number.isFinite(fitPpf) && fitPpf > 0) {
+        const ppf = Math.max(PLANNER_MIN_PPF, fitPpf)
+        // Floor — rounding up made the canvas slightly larger than the panel (border + sub-pixel).
+        canvasWidthPx = Math.max(1, Math.floor(rwFt * ppf))
+        canvasHeightPx = Math.max(1, Math.floor(rdFt * ppf))
+        displayPixelsPerFoot = Math.min(canvasWidthPx / rwFt, canvasHeightPx / rdFt)
+      }
+    }
+  }
+  const pxPerFootX = rwFt > 0 ? canvasWidthPx / rwFt : displayPixelsPerFoot
+  const pxPerFootY = rdFt > 0 ? canvasHeightPx / rdFt : displayPixelsPerFoot
 
   return (
     <div className="floor-planner-container">
-      <div className="planner-header">
-        <button onClick={() => navigate(`/venue/${venueId}`)} className="back-button">
-          ← Back to Venue
-        </button>
-        <h1>2D Floor Planner</h1>
-        <p>Venue: {venueName || venueId} | Room: {roomDimensions.width}m x {roomDimensions.depth}m</p>
+      <PageNavBar variant="dark" venueId={venueId} title="2D floor planner" backLabel="Back" />
+      <div className="planner-subheader">
+        <p className="planner-subheader-line">
+          Venue: {venueName || venueId} — room {roomDimensions.width}×{roomDimensions.depth} {ROOM_LENGTH_UNIT} (scaled to panel: ~{displayPixelsPerFoot.toFixed(1)} px/{ROOM_LENGTH_UNIT})
+        </p>
+        <details className="planner-tips">
+          <summary>Quick tips</summary>
+          <ul>
+            <li>Define your floor outline first, then drag assets from the library onto the canvas.</li>
+            <li>Hover an asset to load a 3D preview (first load may take a moment).</li>
+            <li>Save your layout before opening the 3D viewer from the venue hub.</li>
+          </ul>
+        </details>
       </div>
 
       <div className="planner-content">
@@ -832,18 +1496,26 @@ const FloorPlanner = () => {
           <h2>Asset Library</h2>
           <div className="asset-list">
             <div className="asset-section-title">Default Assets</div>
-            <div
-              className="asset-item"
-              draggable
-              onDragStart={(e) => handleDragStart(e, 'table', 4, 2, 'asset_table.glb')}
-              onMouseEnter={() => handleAssetHover('asset_table.glb', 'Table (4x2m)')}
-            >
-              Table (4x2m)
-            </div>
-            
+            {ASSET_CATALOG.map((baseItem) => {
+              const item = withCatalogOverrides(baseItem)
+              return (
+              <div
+                key={`${baseItem.file}-${builtinOverridesRev}`}
+                className="asset-item"
+                draggable
+                onDragStart={(e) => handleDragStart(e, baseItem)}
+                onDragEnd={clearLibraryDragUi}
+                onMouseEnter={() => { void handleAssetHover(item.file, item.label) }}
+                onMouseLeave={handleAssetHoverLeave}
+                data-layer={item.layer}
+                data-elevation={item.elevation}
+              >
+                {item.label}
+              </div>
+            )})}
             <div className="asset-section-title" style={{ marginTop: '16px' }}>
               My Custom Assets
-              <button 
+              <button
                 className="refresh-assets-btn"
                 onClick={() => {
                   const token = localStorage.getItem('token')
@@ -864,13 +1536,12 @@ const FloorPlanner = () => {
                 🔄
               </button>
             </div>
-            
             {loadingUserAssets ? (
               <div className="asset-loading">Loading assets...</div>
             ) : userAssets.length === 0 ? (
               <div className="asset-empty">
                 <span>No custom assets yet</span>
-                <button 
+                <button
                   className="create-asset-link"
                   onClick={() => navigate('/assets')}
                 >
@@ -878,37 +1549,35 @@ const FloorPlanner = () => {
                 </button>
               </div>
             ) : (
-              userAssets.map(asset => (
+              userAssets.map(asset => {
+                const filePathForPreview = asset.file_path || (asset.file_url?.replace(/^\/static\//, '') ?? '')
+                return (
                 <div
                   key={asset.asset_id}
                   className="asset-item user-asset"
                   draggable
-                  onDragStart={(e) => handleDragStart(
-                    e, 
-                    asset.asset_name.toLowerCase().replace(/\s+/g, '_'),
-                    1, // Default width 1m
-                    1, // Default depth 1m
-                    asset.file_path // Use file_path for the GLB
-                  )}
+                  onDragStart={(e) => handleDragStartUserAsset(e, asset)}
+                  onDragEnd={clearLibraryDragUi}
                   onMouseEnter={() => {
-                    // For user assets, try to load preview from their path
-                    const statusEl = previewContainerRef.current?.parentElement?.querySelector('.asset-preview-status') as HTMLElement
-                    const titleEl = previewContainerRef.current?.parentElement?.querySelector('.asset-preview-title') as HTMLElement
-                    if (statusEl) statusEl.textContent = 'Custom asset preview'
-                    if (titleEl) titleEl.textContent = `Preview: ${asset.asset_name}`
+                    if (filePathForPreview) {
+                      void handleAssetHover(filePathForPreview, asset.asset_name)
+                    }
                   }}
+                  onMouseLeave={handleAssetHoverLeave}
                 >
                   {asset.thumbnail_url && (
-                    <img 
-                      src={`${API_BASE_URL}${asset.thumbnail_url}`} 
+                    <img
+                      src={`${API_BASE_URL}${asset.thumbnail_url}`}
                       alt={asset.asset_name}
                       className="asset-thumbnail"
                     />
                   )}
                   <span className="asset-name">{asset.asset_name}</span>
-                  <span className="asset-size">1×1m</span>
+                  <span className="asset-size">
+                    {metersToFeet(asset.height_m ?? 0.3048).toFixed(1)} {ROOM_LENGTH_UNIT} tall (model metadata)
+                  </span>
                 </div>
-              ))
+              )})
             )}
           </div>
           <div className="asset-preview-panel">
@@ -918,48 +1587,6 @@ const FloorPlanner = () => {
           </div>
           <div className="material-panel">
             <h3>Room & Materials</h3>
-          <div className="plan-mode-toggle">
-            <label>
-              <input
-                type="radio"
-                name="planMode"
-                value="manual"
-                checked={planMode === 'manual'}
-                onChange={() => setPlanMode('manual')}
-              />
-              Create floor plan here
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="planMode"
-                value="upload"
-                checked={planMode === 'upload'}
-                onChange={() => setPlanMode('upload')}
-              />
-              Upload floor plan image
-            </label>
-          </div>
-
-          {planMode === 'upload' && (
-            <div className="upload-wrapper">
-              <FloorPlanUpload
-                venueId={venueId || 'demo-venue'}
-                onUploadComplete={(url) => {
-                  setFloorPlanUrl(url.startsWith('http') ? url : `${API_BASE_URL}${url}`)
-                  setMessage({ text: 'Floor plan uploaded.', type: 'success' })
-                  setTimeout(() => setMessage(null), 2000)
-                }}
-              />
-              {floorPlanUrl && (
-                <div className="upload-preview">
-                  <p>Current floor plan:</p>
-                  <img src={floorPlanUrl.startsWith('http') ? floorPlanUrl : `${API_BASE_URL}${floorPlanUrl}`} alt="Floor plan" />
-                </div>
-              )}
-            </div>
-          )}
-
             <label className="form-row">
               <span>Venue Name</span>
               <input
@@ -1002,9 +1629,16 @@ const FloorPlanner = () => {
                 value={materials.floor.type}
                 onChange={(e) => setMaterials({ ...materials, floor: { ...materials.floor, type: e.target.value } })}
               >
-                <option value="carpet">Carpet</option>
-                <option value="wood">Wood</option>
-                <option value="tile">Tile</option>
+                <optgroup label="Procedural">
+                  <option value="oak_wood">Oak Wood</option>
+                  <option value="light_marble">Light Marble</option>
+                  <option value="concrete">Concrete</option>
+                </optgroup>
+                <optgroup label="Custom (place files in server/static/textures/floor/)">
+                  <option value="texture:floor/interior_tiles_diff_4k.jpg">Interior Tiles</option>
+                  <option value="texture:floor/rubber_tiles_diff_4k.jpg">Rubber Tiles</option>
+                  <option value="texture:floor/wood_floor_worn_diff_4k.jpg">Wood Floor Worn</option>
+                </optgroup>
               </select>
             </label>
             <label className="form-row">
@@ -1021,10 +1655,117 @@ const FloorPlanner = () => {
                 value={materials.ceiling.type}
                 onChange={(e) => setMaterials({ ...materials, ceiling: { ...materials.ceiling, type: e.target.value } })}
               >
-                <option value="plain">Plain</option>
-                <option value="acoustic">Acoustic</option>
+                <optgroup label="Procedural">
+                  <option value="flat_white">Flat White</option>
+                  <option value="wood_slats">Wood Slats</option>
+                  <option value="coffered">Coffered Panels</option>
+                </optgroup>
+                <optgroup label="Custom (place files in server/static/textures/ceiling/)">
+                  <option value="texture:ceiling/plank_flooring_04_diff_4k.jpg">Plank Flooring</option>
+                  <option value="texture:ceiling/plastered_wall_02_diff_4k.jpg">Plastered Wall</option>
+                </optgroup>
               </select>
             </label>
+            <label className="form-row">
+              <span>Lighting</span>
+              <select
+                value={lightingPreset}
+                onChange={(e) => setLightingPreset(e.target.value as LightingPreset)}
+              >
+                <option value="dim">Dim</option>
+                <option value="warm">Warm</option>
+                <option value="neutral">Neutral</option>
+                <option value="bright">Bright</option>
+                <option value="cool">Cool</option>
+              </select>
+            </label>
+            {(() => {
+              const rugBase = ASSET_CATALOG.find((c) => c.file === 'rug.glb')
+              if (!rugBase) return null
+              void builtinOverridesRev
+              const disp = withCatalogOverrides(rugBase)
+              return (
+                <div className="rug-footprint-panel">
+                  <h4>Default rug (library)</h4>
+                  <p className="rug-footprint-hint">
+                    Width and depth in {ROOM_LENGTH_UNIT} set the floor footprint for new rugs (2D and 3D). Thin model height is not used for scaling.
+                  </p>
+                  <label className="form-row compact">
+                    <span>Width</span>
+                    <input
+                      type="number"
+                      min={GRID_STEP_FT}
+                      step={0.5}
+                      value={disp.width}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        persistBuiltinOverride('rug.glb', { width_ft: Math.max(GRID_STEP_FT, v) })
+                      }}
+                    />
+                  </label>
+                  <label className="form-row compact">
+                    <span>Depth</span>
+                    <input
+                      type="number"
+                      min={GRID_STEP_FT}
+                      step={0.5}
+                      value={disp.depth}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        persistBuiltinOverride('rug.glb', { depth_ft: Math.max(GRID_STEP_FT, v) })
+                      }}
+                    />
+                  </label>
+                </div>
+              )
+            })()}
+            {(() => {
+              const sel = placedAssets.find((a) => a.id === selectedPlacedAssetId)
+              if (!sel || !usesFootprintScaling(sel)) return null
+              return (
+                <div className="rug-footprint-panel rug-footprint-panel--selected">
+                  <h4>Selected rug / mat</h4>
+                  <p className="rug-footprint-hint">Click empty floor to deselect. Drag the piece to move.</p>
+                  <label className="form-row compact">
+                    <span>Width</span>
+                    <input
+                      type="number"
+                      min={GRID_STEP_FT}
+                      step={0.5}
+                      value={sel.width}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        updatePlacedFootprint(sel.id, v, sel.depth)
+                      }}
+                    />
+                  </label>
+                  <label className="form-row compact">
+                    <span>Depth</span>
+                    <input
+                      type="number"
+                      min={GRID_STEP_FT}
+                      step={0.5}
+                      value={sel.depth}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        updatePlacedFootprint(sel.id, sel.width, v)
+                      }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="action-button secondary"
+                    onClick={() => setSelectedPlacedAssetId(null)}
+                  >
+                    Deselect
+                  </button>
+                </div>
+              )
+            })()}
             <div className="walls-editor">
               <div className="walls-editor-header">
                 <h4>Walls</h4>
@@ -1041,20 +1782,20 @@ const FloorPlanner = () => {
                         coordinates: [0, 0, 100, 0],
                       },
                       {
-                        id: 'wall_south',
-                        name: 'South Wall',
-                        type: 'straight',
-                        length: roomDimensions.width,
-                        height: roomDimensions.height,
-                        coordinates: [0, 100, 100, 100],
-                      },
-                      {
                         id: 'wall_east',
                         name: 'East Wall',
                         type: 'straight',
                         length: roomDimensions.depth,
                         height: roomDimensions.height,
                         coordinates: [100, 0, 100, 100],
+                      },
+                      {
+                        id: 'wall_south',
+                        name: 'South Wall',
+                        type: 'straight',
+                        length: roomDimensions.width,
+                        height: roomDimensions.height,
+                        coordinates: [0, 100, 100, 100],
                       },
                       {
                         id: 'wall_west',
@@ -1174,11 +1915,22 @@ const FloorPlanner = () => {
           <button onClick={handleSave} className="action-button primary">
             💾 Save Layout
           </button>
-          <button onClick={() => navigate(`/mobile/capture/${venueId}`)} className="action-button" style={{ backgroundColor: '#3498db', color: 'white' }}>
-            📸 Proceed to Guided Image Tour
+          <button
+            type="button"
+            onClick={() => navigate(`/capture/${venueId}`)}
+            className="action-button"
+            style={{ backgroundColor: '#3498db', color: 'white' }}
+            title="Open guided wall capture (camera) for this venue"
+          >
+            Open guided capture
           </button>
-          <button onClick={handleView3D} className="action-button secondary">
-            👁️ View 3D Space
+          <button
+            type="button"
+            onClick={handleView3D}
+            className="action-button secondary"
+            title="Open 3D viewer for this venue"
+          >
+            Open 3D viewer
           </button>
           <button onClick={handleGenerateGlb} className="action-button secondary">
             🧊 Generate Server GLB
@@ -1191,8 +1943,45 @@ const FloorPlanner = () => {
 
         <div className="planning-area">
           <div className="controls-bar">
-            Room: {roomDimensions.width}m x {roomDimensions.depth}m x {roomDimensions.height}m (Scale: 1m = 20px) | Floor: {materials.floor.type} | Assets: {placedAssets.length}
+            <span className="controls-bar-info">
+              Room: {roomDimensions.width}×{roomDimensions.depth}×{roomDimensions.height} {ROOM_LENGTH_UNIT} (~{displayPixelsPerFoot.toFixed(1)} px/{ROOM_LENGTH_UNIT}) | Floor: {materials.floor.type} | Assets: {placedAssets.length}
+            </span>
+            <div className="view-mode-toggle" role="group" aria-label="Layer view mode">
+              <button
+                type="button"
+                className={`view-mode-btn ${viewMode === 'all' ? 'active' : ''}`}
+                onClick={() => setViewMode('all')}
+                title="Show all layers"
+              >
+                All Layers
+              </button>
+              <button
+                type="button"
+                className={`view-mode-btn ${viewMode === 'floor' ? 'active' : ''}`}
+                onClick={() => setViewMode('floor')}
+                title="Focus on floor: rugs and carpets"
+              >
+                Floor (rugs)
+              </button>
+              <button
+                type="button"
+                className={`view-mode-btn ${viewMode === 'middle' ? 'active' : ''}`}
+                onClick={() => setViewMode('middle')}
+                title="Focus on middle: furniture on ground and items on tables"
+              >
+                Middle (furniture)
+              </button>
+              <button
+                type="button"
+                className={`view-mode-btn ${viewMode === 'ceiling' ? 'active' : ''}`}
+                onClick={() => setViewMode('ceiling')}
+                title="Focus on ceiling: lights and fans"
+              >
+                Ceiling (lights)
+              </button>
+            </div>
           </div>
+          <div ref={planningViewportRef} className="floor-plan-viewport">
           <div
             ref={canvasRef}
             className="floor-plan-canvas"
@@ -1201,17 +1990,23 @@ const FloorPlanner = () => {
               height: `${canvasHeightPx}px`,
               background: 'transparent',
               backgroundImage:
-                'repeating-linear-gradient(0deg, rgba(255,255,255,0.04) 0, rgba(255,255,255,0.04) 1px, transparent 1px, transparent 20px),' +
-                'repeating-linear-gradient(90deg, rgba(255,255,255,0.04) 0, rgba(255,255,255,0.04) 1px, transparent 1px, transparent 20px)',
+                `repeating-linear-gradient(0deg, rgba(255,255,255,0.06) 0, rgba(255,255,255,0.06) 1px, transparent 1px, transparent ${pxPerFootY}px),` +
+                `repeating-linear-gradient(90deg, rgba(255,255,255,0.06) 0, rgba(255,255,255,0.06) 1px, transparent 1px, transparent ${pxPerFootX}px)`,
               border: 'none'
             }}
             onDrop={handleCanvasDrop}
             onDragOver={handleCanvasDragOver}
+            onDragLeave={(e) => {
+              const to = e.relatedTarget
+              if (to instanceof Node && (e.currentTarget as HTMLElement).contains(to)) return
+              setDropPreview(null)
+            }}
             onMouseDown={(e) => {
-              if (planMode !== 'manual' || draggingAssetId || draggedAsset) return
+              if (false || draggingAssetId || draggedAsset) return
               if (e.button !== 0) return
               const target = e.target as HTMLElement
               if (target.closest('.placed-asset')) return
+              setSelectedPlacedAssetId(null)
               const rect = canvasRef.current?.getBoundingClientRect()
               if (!rect) return
               const xPx = e.clientX - rect.left
@@ -1259,14 +2054,14 @@ const FloorPlanner = () => {
                 return
               }
 
-              const xM = xPx / METER_TO_PIXEL_SCALE
-              const yM = yPx / METER_TO_PIXEL_SCALE
+              const xM = xPx / pxPerFootX
+              const yM = yPx / pxPerFootY
               setIsDrawingWall(true)
               setDraftWall({ x1: xM, y1: yM, x2: xM, y2: yM })
               setSelectedWallId(null)
             }}
             onMouseMove={(e) => {
-              if (planMode !== 'manual') return
+              if (false) return
               const rect = canvasRef.current?.getBoundingClientRect()
               if (!rect) return
               const xPx = e.clientX - rect.left
@@ -1360,8 +2155,8 @@ const FloorPlanner = () => {
               }
 
               if (isDrawingWall && draftWall) {
-                const xM = xPx / METER_TO_PIXEL_SCALE
-                const yM = yPx / METER_TO_PIXEL_SCALE
+                const xM = xPx / pxPerFootX
+                const yM = yPx / pxPerFootY
                 setDraftWall({ ...draftWall, x2: xM, y2: yM })
               }
             }}
@@ -1404,8 +2199,24 @@ const FloorPlanner = () => {
               setDraftWall(null)
             }}
           >
+            {dropPreview && (
+              <div
+                className={`planner-drop-ghost ${dropPreview.valid ? 'planner-drop-ghost--valid' : 'planner-drop-ghost--invalid'}`}
+                style={{
+                  position: 'absolute',
+                  left: dropPreview.x * pxPerFootX,
+                  top: dropPreview.y * pxPerFootY,
+                  width: dropPreview.width * pxPerFootX,
+                  height: dropPreview.depth * pxPerFootY,
+                  zIndex: 40,
+                  pointerEvents: 'none',
+                  boxSizing: 'border-box'
+                }}
+                aria-hidden
+              />
+            )}
             {/* Draw interactive walls */}
-            {planMode === 'manual' &&
+            {true &&
               walls.map((wall) => {
                 const coords = wall.coordinates
                 let x1Px: number
@@ -1515,12 +2326,12 @@ const FloorPlanner = () => {
                 )
               })}
 
-            {planMode === 'manual' && draftWall && (
+            {true && draftWall && (
               (() => {
-                const x1Px = draftWall.x1 * METER_TO_PIXEL_SCALE
-                const y1Px = draftWall.y1 * METER_TO_PIXEL_SCALE
-                const x2Px = draftWall.x2 * METER_TO_PIXEL_SCALE
-                const y2Px = draftWall.y2 * METER_TO_PIXEL_SCALE
+                const x1Px = draftWall.x1 * pxPerFootX
+                const y1Px = draftWall.y1 * pxPerFootY
+                const x2Px = draftWall.x2 * pxPerFootX
+                const y2Px = draftWall.y2 * pxPerFootY
                 const dx = x2Px - x1Px
                 const dy = y2Px - y1Px
                 const lengthPx = Math.sqrt(dx * dx + dy * dy)
@@ -1545,42 +2356,73 @@ const FloorPlanner = () => {
                 )
               })()
             )}
-            {placedAssets.map(asset => {
-              const widthPx = asset.width * METER_TO_PIXEL_SCALE
-              const heightPx = asset.depth * METER_TO_PIXEL_SCALE
-              const leftPx = asset.x * METER_TO_PIXEL_SCALE
-              const topPx = asset.y * METER_TO_PIXEL_SCALE
-
-              return (
-                <div
-                  key={asset.id}
-                  className="placed-asset"
-                  style={{
-                    position: 'absolute',
-                    left: `${leftPx}px`,
-                    top: `${topPx}px`,
-                    width: `${widthPx}px`,
-                    height: `${heightPx}px`,
-                    transform: `rotate(${asset.rotation}deg)`
-                  }}
-                  onMouseDown={() => handleAssetDragStart(asset.id)}
-                  onContextMenu={(e) => handleAssetRightClick(e, asset.id)}
-                >
-                  <span className="asset-label">
-                    {asset.type.toUpperCase()} ({asset.width}x{asset.depth}m)
-                  </span>
-                  <button
-                    className="delete-asset-btn"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleDeleteAsset(asset.id)
+            {(() => {
+              // Smart z-order: by layer (floor → surface → ceiling), then by area descending (smaller on top)
+              const layerRank = (l: AssetLayer) => LAYER_ORDER.indexOf(l)
+              const sorted = [...placedAssets].sort((a, b) => {
+                const la = getAssetLayer(a)
+                const lb = getAssetLayer(b)
+                if (layerRank(la) !== layerRank(lb)) return layerRank(la) - layerRank(lb)
+                const childA = a.parentAssetId ? 1 : 0
+                const childB = b.parentAssetId ? 1 : 0
+                if (childA !== childB) return childA - childB // roots first → tabletop children on top in 2D
+                const areaA = a.width * a.depth
+                const areaB = b.width * b.depth
+                return areaB - areaA // larger first → smaller items get higher z-index
+              })
+              const baseZ = 20
+              return sorted.map((asset, index) => {
+                const widthPx = asset.width * pxPerFootX
+                const heightPx = asset.depth * pxPerFootY
+                const leftPx = asset.x * pxPerFootX
+                const topPx = asset.y * pxPerFootY
+                const layer = getAssetLayer(asset)
+                const elevation = getAssetElevation(asset, roomDimensions.height)
+                const isGhost =
+                  (viewMode === 'floor' && (layer === 'surface' || layer === 'ceiling')) ||
+                  (viewMode === 'middle' && (layer === 'floor' || layer === 'ceiling')) ||
+                  (viewMode === 'ceiling' && (layer === 'floor' || layer === 'surface'))
+                const selected = selectedPlacedAssetId === asset.id
+                return (
+                  <div
+                    key={asset.id}
+                    className={`placed-asset${isGhost ? ' placed-asset-ghost' : ''}${selected ? ' placed-asset--selected' : ''}`}
+                    data-layer={layer}
+                    data-elevation={elevation}
+                    style={{
+                      position: 'absolute',
+                      left: `${leftPx}px`,
+                      top: `${topPx}px`,
+                      width: `${widthPx}px`,
+                      height: `${heightPx}px`,
+                      transform: `rotate(${asset.rotation}deg)`,
+                      zIndex: baseZ + index,
+                      ...(isGhost ? { opacity: 0.3, pointerEvents: 'none' as const } : {})
                     }}
+                    onMouseDown={isGhost ? undefined : (e) => handlePlacedAssetMouseDown(e, asset)}
+                    onContextMenu={isGhost ? undefined : (e) => handleAssetRightClick(e, asset.id)}
                   >
-                    ×
-                  </button>
-                </div>
-              )
-            })}
+                    <span className="asset-label">
+                      {asset.type.toUpperCase()} ({asset.width}×{asset.depth} {ROOM_LENGTH_UNIT})
+                    </span>
+                    {!isGhost && (
+                      <button
+                        type="button"
+                        className="delete-asset-btn"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleDeleteAsset(asset.id)
+                        }}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                )
+              })
+            })()}
+          </div>
           </div>
         </div>
       </div>

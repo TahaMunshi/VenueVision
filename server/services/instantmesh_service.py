@@ -1,9 +1,6 @@
 """
 InstantMesh Service for image-to-3D model conversion.
-Converts 2D images to 3D .glb models using multiple strategies:
-  1. Tripo3D API (reliable, requires TRIPO_API_KEY env var, free tier: 300 credits/month)
-  2. HuggingFace Spaces via gradio_client (free, no signup, may be slow/unavailable)
-  3. Placeholder fallback (always works, generates a simple cube)
+Converts 2D images to 3D models using Microsoft TRELLIS on HuggingFace.
 """
 
 import os
@@ -14,6 +11,7 @@ import time
 import json
 from typing import Optional, Dict, Tuple, List
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests as http_requests
 from PIL import Image
@@ -24,10 +22,6 @@ logger = logging.getLogger(__name__)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 USER_ASSETS_ROOT = os.path.join(BASE_DIR, "static", "user_assets")
 TEMP_DIR = os.path.join(BASE_DIR, "temp", "instantmesh")
-
-# Tripo3D API configuration
-TRIPO_API_BASE = "https://api.tripo3d.ai/v2/openapi"
-TRIPO_API_KEY = os.getenv('TRIPO_API_KEY', '')
 
 # HuggingFace Space configuration
 HF_SPACES = [
@@ -42,7 +36,7 @@ MAX_IMAGE_SIZE_MB = 10
 class InstantMeshService:
     """
     Service for converting images to 3D models.
-    Tries multiple strategies in order: Tripo3D API → HF Spaces → Placeholder.
+    Primary path uses TRELLIS on HuggingFace, with a local demo-safe fallback.
     """
     
     def __init__(self):
@@ -56,16 +50,10 @@ class InstantMeshService:
     
     def _log_configuration(self) -> None:
         """Log the current configuration."""
-        if TRIPO_API_KEY:
-            logger.info("Tripo3D API key configured - will use Tripo3D for 3D generation")
+        if os.getenv('HF_TOKEN'):
+            logger.info("HF_TOKEN detected - TRELLIS will use authenticated quota")
         else:
-            logger.info(
-                "No TRIPO_API_KEY set. To enable real 3D generation:\n"
-                "  1. Sign up free at https://www.tripo3d.ai (300 credits/month)\n"
-                "  2. Get API key from https://platform.tripo3d.ai\n"
-                "  3. Set TRIPO_API_KEY environment variable\n"
-                "  Falling back to HuggingFace Spaces / placeholder."
-            )
+            logger.info("No HF_TOKEN set - TRELLIS will run on anonymous quota (may be rate-limited)")
     
     def _get_user_asset_dir(self, user_id: int) -> str:
         """Get or create user's asset directory."""
@@ -136,10 +124,7 @@ class InstantMeshService:
         asset_name: str
     ) -> Dict:
         """
-        Convert an image to a 3D model. Tries strategies in order:
-        1. Tripo3D API (if TRIPO_API_KEY is set)
-        2. HuggingFace Spaces via gradio_client
-        3. Placeholder fallback
+        Convert an image to a 3D model using TRELLIS on HuggingFace.
         
         Returns:
             Dict with conversion result
@@ -160,12 +145,13 @@ class InstantMeshService:
             
             logger.info(f"Starting 3D conversion for user {user_id}, asset: {asset_name}")
             
-            # Try strategies in order
+            allow_placeholder_fallback = os.getenv("ALLOW_PLACEHOLDER_ASSET_FALLBACK", "").lower() in ("1", "true", "yes")
+            # Primary TRELLIS generation path. Placeholder fallback is opt-in only.
             strategies = [
-                ("Tripo3D API", self._try_tripo3d),
-                ("HuggingFace Space", self._try_huggingface),
-                ("Placeholder", self._try_placeholder),
+                ("HuggingFace TRELLIS", self._try_huggingface),
             ]
+            if allow_placeholder_fallback:
+                strategies.append(("Local fallback GLB", self._try_local_fallback_glb))
             
             last_error = None
             for strategy_name, strategy_fn in strategies:
@@ -186,7 +172,7 @@ class InstantMeshService:
             else:
                 return {
                     'success': False,
-                    'error': f'All 3D generation strategies failed. Last error: {last_error}'
+                    'error': self._format_trellis_error(last_error)
                 }
             
             # Find the generated GLB file
@@ -238,137 +224,7 @@ class InstantMeshService:
             self._cleanup_temp_dirs(temp_input_dir, temp_output_dir)
 
     # =========================================================================
-    # Strategy 1: Tripo3D API
-    # =========================================================================
-    
-    def _try_tripo3d(self, input_image_path: str, output_dir: str) -> Tuple[bool, Optional[str]]:
-        """
-        Use Tripo3D cloud API for image-to-3D conversion.
-        Requires TRIPO_API_KEY environment variable.
-        Free tier: 300 credits/month at https://www.tripo3d.ai
-        """
-        api_key = TRIPO_API_KEY
-        if not api_key:
-            return False, "TRIPO_API_KEY not set. Sign up free at https://www.tripo3d.ai"
-        
-        try:
-            headers = {"Authorization": f"Bearer {api_key}"}
-            
-            # Step 1: Upload the image
-            logger.info("Tripo3D: Uploading image...")
-            with open(input_image_path, 'rb') as f:
-                upload_resp = http_requests.post(
-                    f"{TRIPO_API_BASE}/upload",
-                    headers=headers,
-                    files={"file": (os.path.basename(input_image_path), f, "image/jpeg")},
-                    timeout=60
-                )
-            
-            if upload_resp.status_code != 200:
-                error_detail = upload_resp.text[:200]
-                return False, f"Tripo3D upload failed ({upload_resp.status_code}): {error_detail}"
-            
-            upload_data = upload_resp.json()
-            if upload_data.get('code') != 0:
-                return False, f"Tripo3D upload error: {upload_data.get('message', 'unknown')}"
-            
-            image_token = upload_data['data']['image_token']
-            logger.info(f"Tripo3D: Image uploaded, token: {image_token[:20]}...")
-            
-            # Step 2: Create image-to-model task
-            logger.info("Tripo3D: Creating 3D generation task...")
-            task_resp = http_requests.post(
-                f"{TRIPO_API_BASE}/task",
-                headers={**headers, "Content-Type": "application/json"},
-                json={
-                    "type": "image_to_model",
-                    "file": {
-                        "type": "jpg",
-                        "file_token": image_token
-                    }
-                },
-                timeout=30
-            )
-            
-            if task_resp.status_code != 200:
-                error_detail = task_resp.text[:200]
-                return False, f"Tripo3D task creation failed ({task_resp.status_code}): {error_detail}"
-            
-            task_data = task_resp.json()
-            if task_data.get('code') != 0:
-                return False, f"Tripo3D task error: {task_data.get('message', 'unknown')}"
-            
-            task_id = task_data['data']['task_id']
-            logger.info(f"Tripo3D: Task created: {task_id}")
-            
-            # Step 3: Poll for completion (timeout: 5 minutes)
-            logger.info("Tripo3D: Waiting for 3D model generation...")
-            start_time = time.time()
-            timeout = 300  # 5 minutes
-            poll_interval = 5  # seconds
-            
-            while time.time() - start_time < timeout:
-                status_resp = http_requests.get(
-                    f"{TRIPO_API_BASE}/task/{task_id}",
-                    headers=headers,
-                    timeout=30
-                )
-                
-                if status_resp.status_code != 200:
-                    time.sleep(poll_interval)
-                    continue
-                
-                status_data = status_resp.json()
-                if status_data.get('code') != 0:
-                    time.sleep(poll_interval)
-                    continue
-                
-                task_info = status_data['data']
-                status = task_info.get('status', '')
-                progress = task_info.get('progress', 0)
-                
-                logger.info(f"Tripo3D: Status={status}, Progress={progress}%")
-                
-                if status == 'success':
-                    # Step 4: Download the model
-                    output = task_info.get('output', {})
-                    model_url = output.get('model') or output.get('pbr_model')
-                    
-                    if not model_url:
-                        return False, "Tripo3D: No model URL in response"
-                    
-                    logger.info(f"Tripo3D: Downloading model from {model_url[:50]}...")
-                    model_resp = http_requests.get(model_url, timeout=120)
-                    
-                    if model_resp.status_code != 200:
-                        return False, f"Tripo3D: Failed to download model ({model_resp.status_code})"
-                    
-                    # Save as GLB
-                    output_path = os.path.join(output_dir, 'generated_model.glb')
-                    with open(output_path, 'wb') as f:
-                        f.write(model_resp.content)
-                    
-                    file_size = len(model_resp.content)
-                    logger.info(f"Tripo3D: Model saved ({file_size} bytes)")
-                    return True, None
-                    
-                elif status == 'failed':
-                    error = task_info.get('task_error', {}).get('message', 'Unknown error')
-                    return False, f"Tripo3D generation failed: {error}"
-                
-                time.sleep(poll_interval)
-            
-            return False, "Tripo3D: Generation timed out (>5 minutes)"
-            
-        except http_requests.exceptions.Timeout:
-            return False, "Tripo3D: Request timed out"
-        except http_requests.exceptions.ConnectionError:
-            return False, "Tripo3D: Connection failed (check internet)"
-        except Exception as e:
-            return False, f"Tripo3D error: {str(e)}"
-
-    # =========================================================================
-    # Strategy 2: HuggingFace Spaces via gradio_client (Microsoft TRELLIS)
+    # Strategy: HuggingFace Spaces via gradio_client (Microsoft TRELLIS)
     # =========================================================================
     
     def _try_huggingface(self, input_image_path: str, output_dir: str) -> Tuple[bool, Optional[str]]:
@@ -392,56 +248,275 @@ class InstantMeshService:
                 client = Client(space_name, token=hf_token, verbose=False)
                 
                 logger.info(f"HuggingFace: Connected to {space_name}")
+
+                api_names = self._get_space_api_names(client)
+                api_info = self._get_space_api_info(client)
+                logger.info(f"HuggingFace: Available API endpoints: {sorted(api_names) if api_names else 'unknown'}")
                 
                 # Initialize session (required for TRELLIS to create temp dirs)
-                try:
-                    client.predict(api_name="/start_session")
-                    logger.info("TRELLIS: Session started")
-                except Exception as e:
-                    logger.warning(f"TRELLIS: Session start warning (may be ok): {e}")
+                session_api = self._pick_api_name(api_names, ["/start_session"])
+                if session_api:
+                    try:
+                        client.predict(api_name=session_api)
+                        logger.info("TRELLIS: Session started")
+                    except Exception as e:
+                        logger.warning(f"TRELLIS: Session start warning (may be ok): {e}")
                 
                 # TRELLIS pipeline: preprocess → image_to_3d → extract_glb
                 # Step 1: Preprocess image (background removal + resize)
                 logger.info("TRELLIS: Step 1/3 - Preprocessing image...")
-                preprocessed = client.predict(
-                    handle_file(input_image_path),
-                    api_name="/preprocess_image"
-                )
-                logger.info(f"TRELLIS: Preprocessed image: {type(preprocessed)}")
+                preprocess_api = self._pick_api_name(api_names, [
+                    "/preprocess_image",
+                    "/preprocess",
+                    "/preprocess_input",
+                ])
+                if preprocess_api:
+                    preprocessed = client.predict(
+                        handle_file(input_image_path),
+                        api_name=preprocess_api
+                    )
+                    logger.info(f"TRELLIS: Preprocessed image with {preprocess_api}: {type(preprocessed)}")
+                else:
+                    logger.info("TRELLIS: No preprocess endpoint found, using original image")
+                    preprocessed = input_image_path
+
+                # Some TRELLIS versions return non-image structures here; always keep a safe fallback.
+                image_input = self._normalize_image_input(preprocessed, input_image_path, handle_file)
                 
                 # Step 2: Generate 3D model from preprocessed image
                 logger.info("TRELLIS: Step 2/3 - Generating 3D model (this takes 30-60s)...")
-                result = client.predict(
-                    handle_file(preprocessed) if isinstance(preprocessed, str) else preprocessed,
-                    [],                # multiimages (empty)
-                    42,                # seed
-                    7.5,               # ss_guidance_strength
-                    12,                # ss_sampling_steps  
-                    3.0,               # slat_guidance_strength
-                    12,                # slat_sampling_steps
-                    "stochastic",      # multiimage_algo
-                    api_name="/image_to_3d"
-                )
+                image_to_3d_api = self._pick_api_name(api_names, [
+                    "/image_to_3d",
+                    "/generate_3d",
+                    "/generate",
+                    "/run",
+                ])
+                if not image_to_3d_api:
+                    return False, "TRELLIS: Could not find image-to-3D endpoint on HF space"
+
+                endpoint_params = self._get_endpoint_parameters(api_info, image_to_3d_api)
+                if endpoint_params:
+                    logger.info(
+                        "TRELLIS: image_to_3d endpoint parameters: %s",
+                        [p.get("parameter_name") or p.get("label") for p in endpoint_params]
+                    )
+
+                # Different TRELLIS space versions expose different signatures.
+                # To conserve ZeroGPU quota, keep retries minimal unless signature mismatch is detected.
+                schema_args = self._build_image_to_3d_args(endpoint_params, image_input)
+                result = None
+                generation_attempts = []
+                if schema_args:
+                    generation_attempts.append(tuple(schema_args))
+
+                # Legacy fallbacks only help when endpoint signature differs from schema.
+                legacy_attempts = [
+                    (image_input, [], 42, 7.5, 12, 3.0, 12, "stochastic"),
+                    (image_input, 42, 7.5, 12, 3.0, 12, [], "stochastic"),
+                    (image_input,),
+                    (image_input, 42),
+                ]
+
+                max_attempts = 1
+                try:
+                    max_attempts = max(1, int(os.getenv("TRELLIS_MAX_IMAGE_TO_3D_ATTEMPTS", "1")))
+                except Exception:
+                    max_attempts = 1
+
+                last_gen_error = None
+                used_legacy_fallback = False
+                attempt_index = 0
+                while attempt_index < len(generation_attempts):
+                    args = generation_attempts[attempt_index]
+                    attempt_index += 1
+                    try:
+                        result = client.predict(*args, api_name=image_to_3d_api)
+                        break
+                    except Exception as e:
+                        last_gen_error = str(e)
+                        logger.warning(f"TRELLIS: image_to_3d attempt failed with {len(args)} args: {e}")
+                        # Do not burn quota on retries when upstream/quota failures are already clear.
+                        if self._is_non_retryable_trellis_error(last_gen_error):
+                            break
+
+                        # Only try legacy signatures when we likely have an argument mismatch.
+                        if (not used_legacy_fallback) and self._is_signature_mismatch_error(last_gen_error):
+                            used_legacy_fallback = True
+                            for legacy_args in legacy_attempts:
+                                if legacy_args not in generation_attempts:
+                                    generation_attempts.append(legacy_args)
+
+                        # Respect configured max attempts to preserve quota.
+                        if len(generation_attempts) > max_attempts:
+                            del generation_attempts[max_attempts:]
+                if result is None:
+                    return False, self._format_trellis_error(f"TRELLIS image_to_3d failed: {last_gen_error}")
                 logger.info(f"TRELLIS: 3D generation complete, result type: {type(result)}")
                 
                 # Step 3: Extract GLB file
                 logger.info("TRELLIS: Step 3/3 - Extracting GLB mesh...")
-                glb_result = client.predict(
-                    0.95,    # mesh_simplify
-                    1024,    # texture_size
-                    api_name="/extract_glb"
-                )
-                logger.info(f"TRELLIS: GLB extraction result: {type(glb_result)}")
+                extract_api = self._pick_api_name(api_names, [
+                    "/extract_glb",
+                    "/extract_mesh",
+                    "/export_glb",
+                    "/download_glb",
+                ])
+                if extract_api:
+                    extract_attempts = [
+                        (0.95, 1024),
+                        tuple(),
+                    ]
+                    last_extract_error = None
+                    for args in extract_attempts:
+                        try:
+                            glb_result = client.predict(*args, api_name=extract_api)
+                            logger.info(f"TRELLIS: GLB extraction result: {type(glb_result)}")
+                            success, err = self._handle_gradio_result(glb_result, output_dir)
+                            if success:
+                                return True, None
+                            last_extract_error = err
+                        except Exception as e:
+                            last_extract_error = str(e)
+                            logger.warning(f"TRELLIS: extract attempt failed with {len(args)} args: {e}")
+                    logger.warning(f"TRELLIS: extract endpoint failed, trying generation output directly: {last_extract_error}")
                 
-                # Handle the result - could be tuple (model_path, download_path) or single path
-                return self._handle_gradio_result(glb_result, output_dir)
+                # Some versions return file output directly from image_to_3d.
+                success, err = self._handle_gradio_result(result, output_dir)
+                if success:
+                    return True, None
+                return False, err or "TRELLIS did not return a usable 3D model file"
                 
             except Exception as e:
                 last_error = str(e)
                 logger.warning(f"HuggingFace: Space {space_name} error: {e}")
                 continue
         
-        return False, f"HuggingFace spaces failed: {last_error}"
+        return False, self._format_trellis_error(f"HuggingFace spaces failed: {last_error}")
+
+    def _format_trellis_error(self, error: Optional[str]) -> str:
+        """Convert raw TRELLIS/Gradio errors into a user-actionable message."""
+        raw = (error or "").strip()
+        low = raw.lower()
+
+        if "zerogpu" in low or "quota" in low or "running out of daily" in low:
+            return (
+                "TRELLIS generation failed: HuggingFace ZeroGPU quota is exhausted for this token/account. "
+                "Set a fresh HF_TOKEN with available quota (or Pro) and restart backend."
+            )
+        if "upstream gradio app has raised an exception" in low:
+            return (
+                "TRELLIS generation failed: HuggingFace TRELLIS upstream is currently failing. "
+                "Try again shortly or use a different HF_TOKEN/account and restart backend."
+            )
+        if raw:
+            return f"TRELLIS generation failed: {raw}"
+        return "TRELLIS generation failed: Unknown upstream error."
+
+    def _is_non_retryable_trellis_error(self, error: Optional[str]) -> bool:
+        """Errors where retrying image_to_3d immediately will likely waste quota/time."""
+        low = (error or "").lower()
+        markers = (
+            "zerogpu",
+            "quota",
+            "running out of daily",
+            "upstream gradio app has raised an exception",
+            "service unavailable",
+            "too many requests",
+        )
+        return any(marker in low for marker in markers)
+
+    def _is_signature_mismatch_error(self, error: Optional[str]) -> bool:
+        """Detect argument/signature errors where trying legacy arg patterns can help."""
+        low = (error or "").lower()
+        markers = (
+            "missing",
+            "unexpected keyword",
+            "positional argument",
+            "takes ",
+            "required positional argument",
+            "got an unexpected",
+            "wrong number of arguments",
+            "validation error",
+        )
+        return any(marker in low for marker in markers)
+
+    def _try_local_fallback_glb(self, input_image_path: str, output_dir: str) -> Tuple[bool, Optional[str]]:
+        """
+        Emergency fallback used when TRELLIS upstream is down/unavailable.
+        Generates a valid GLB placeholder so asset workflow remains operational.
+        """
+        try:
+            import numpy as np
+            from pygltflib import GLTF2, Scene, Node, Mesh, Buffer, BufferView, Accessor, Asset
+
+            # Build a simple centered box (1m x 1m x 1m) with floor-aligned base.
+            w, h, d = 0.5, 1.0, 0.5
+            vertices = np.array(
+                [
+                    [-w, 0.0, -d], [w, 0.0, -d], [w, h, -d], [-w, h, -d],
+                    [-w, 0.0, d], [w, 0.0, d], [w, h, d], [-w, h, d],
+                ],
+                dtype=np.float32,
+            )
+            indices = np.array(
+                [
+                    0, 1, 2, 2, 3, 0,  # back
+                    4, 5, 6, 6, 7, 4,  # front
+                    0, 4, 7, 7, 3, 0,  # left
+                    1, 5, 6, 6, 2, 1,  # right
+                    3, 2, 6, 6, 7, 3,  # top
+                    0, 1, 5, 5, 4, 0,  # bottom
+                ],
+                dtype=np.uint16,
+            )
+
+            vertex_bytes = vertices.tobytes()
+            index_bytes = indices.tobytes()
+            buffer_data = vertex_bytes + index_bytes
+
+            gltf = GLTF2(
+                asset=Asset(version="2.0"),
+                scenes=[Scene(nodes=[0])],
+                scene=0,
+                nodes=[Node(mesh=0)],
+                meshes=[Mesh(primitives=[{"attributes": {"POSITION": 0}, "indices": 1}])],
+                buffers=[Buffer(byteLength=len(buffer_data))],
+                bufferViews=[
+                    BufferView(buffer=0, byteOffset=0, byteLength=len(vertex_bytes), target=34962),
+                    BufferView(buffer=0, byteOffset=len(vertex_bytes), byteLength=len(index_bytes), target=34963),
+                ],
+                accessors=[
+                    Accessor(
+                        bufferView=0,
+                        byteOffset=0,
+                        componentType=5126,  # FLOAT
+                        count=len(vertices),
+                        type="VEC3",
+                        max=[float(np.max(vertices[:, 0])), float(np.max(vertices[:, 1])), float(np.max(vertices[:, 2]))],
+                        min=[float(np.min(vertices[:, 0])), float(np.min(vertices[:, 1])), float(np.min(vertices[:, 2]))],
+                    ),
+                    Accessor(
+                        bufferView=1,
+                        byteOffset=0,
+                        componentType=5123,  # UNSIGNED_SHORT
+                        count=len(indices),
+                        type="SCALAR",
+                    ),
+                ],
+            )
+
+            gltf.set_binary_blob(buffer_data)
+            os.makedirs(output_dir, exist_ok=True)
+            fallback_path = os.path.join(output_dir, "generated_model.glb")
+            gltf.save(fallback_path)
+            logger.warning(
+                "TRELLIS unavailable; generated local fallback GLB instead. input=%s output=%s",
+                input_image_path,
+                fallback_path,
+            )
+            return True, None
+        except Exception as e:
+            return False, f"Local fallback generation failed: {e}"
     
     def _handle_gradio_result(self, result, output_dir: str) -> Tuple[bool, Optional[str]]:
         """Handle various result formats from Gradio API calls."""
@@ -449,39 +524,107 @@ class InstantMeshService:
             return False, "Empty result from HuggingFace space"
         
         logger.info(f"Handling gradio result: type={type(result)}, value={str(result)[:200]}")
-        
-        # Result could be a file path string, tuple, or dict
-        if isinstance(result, str):
-            return self._save_gradio_file(result, output_dir)
-        elif isinstance(result, (tuple, list)):
-            # Try each element - look for a file path
-            for item in result:
-                if isinstance(item, str) and item and os.path.exists(item):
-                    success, err = self._save_gradio_file(item, output_dir)
-                    if success:
-                        return True, None
-                elif isinstance(item, dict):
-                    # Could be a FileData dict with 'path' key
-                    path = item.get('path') or item.get('value') or item.get('url') or item.get('name')
-                    if path:
-                        success, err = self._save_gradio_file(str(path), output_dir)
-                        if success:
-                            return True, None
-            # If nothing worked with exists check, try first string anyway
-            for item in result:
-                if isinstance(item, str) and item:
-                    return self._save_gradio_file(item, output_dir)
-        elif isinstance(result, dict):
-            path = result.get('path') or result.get('value') or result.get('url') or result.get('name')
-            if path:
-                return self._save_gradio_file(str(path), output_dir)
-        
-        return False, f"Could not extract file from result: {type(result)}"
+
+        candidates = self._extract_file_candidates(result)
+        if not candidates:
+            return False, f"Could not extract file from result: {type(result)}"
+
+        logger.info(f"TRELLIS: Found {len(candidates)} possible file candidates in result")
+        last_error = None
+        for candidate in candidates:
+            success, err = self._save_gradio_file(candidate, output_dir)
+            if success:
+                return True, None
+            last_error = err
+
+        return False, last_error or f"Could not extract usable file from result: {type(result)}"
+
+    def _extract_file_candidates(self, value) -> List[str]:
+        """
+        Recursively extract possible file references from Gradio/TRELLIS outputs.
+        Handles nested dict/list payloads and FileData-like objects.
+        """
+        ranked: List[Tuple[int, str]] = []
+        seen = set()
+        model_exts = {'.glb', '.gltf', '.obj'}
+        non_model_exts = {'.mp4', '.webm', '.gif', '.png', '.jpg', '.jpeg', '.bmp'}
+
+        def score_candidate(candidate: str, key_hint: Optional[str]) -> int:
+            score = 0
+            parsed = urlparse(candidate)
+            lower = parsed.path.lower()
+            ext = os.path.splitext(lower)[1]
+            if ext in model_exts:
+                score += 100
+            elif ext in non_model_exts:
+                score -= 100
+            if key_hint:
+                key_hint = key_hint.lower()
+                if any(k in key_hint for k in ('glb', 'gltf', 'obj', 'mesh', 'model', 'file')):
+                    score += 40
+                if any(k in key_hint for k in ('video', 'preview', 'image', 'thumbnail')):
+                    score -= 40
+            return score
+
+        def add_candidate(candidate, key_hint: Optional[str] = None) -> None:
+            if not isinstance(candidate, str):
+                return
+            candidate = candidate.strip()
+            if not candidate:
+                return
+            if candidate in seen:
+                return
+            seen.add(candidate)
+            ranked.append((score_candidate(candidate, key_hint), candidate))
+
+        def walk(node, key_hint: Optional[str] = None) -> None:
+            if node is None:
+                return
+
+            if isinstance(node, str):
+                add_candidate(node, key_hint)
+                return
+
+            # Gradio may return custom FileData objects with path/url attributes.
+            if hasattr(node, "path"):
+                add_candidate(getattr(node, "path", None), "path")
+            if hasattr(node, "url"):
+                add_candidate(getattr(node, "url", None), "url")
+            if hasattr(node, "name"):
+                add_candidate(getattr(node, "name", None), "name")
+
+            if isinstance(node, dict):
+                priority_keys = (
+                    "path", "url", "name", "orig_name", "download_url",
+                    "file", "files", "value", "data", "output", "mesh", "glb"
+                )
+                for key in priority_keys:
+                    if key in node:
+                        walk(node[key], key)
+                for key, item in node.items():
+                    if key not in priority_keys:
+                        walk(item, str(key))
+                return
+
+            if isinstance(node, (list, tuple, set)):
+                for item in node:
+                    walk(item, key_hint)
+                return
+
+            # As a last resort, inspect object's __dict__ if available.
+            obj_dict = getattr(node, "__dict__", None)
+            if isinstance(obj_dict, dict):
+                walk(obj_dict, key_hint)
+
+        walk(value)
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        return [candidate for _, candidate in ranked]
     
     def _save_gradio_file(self, file_path: str, output_dir: str) -> Tuple[bool, Optional[str]]:
         """Save a file from gradio's temp/download location to our output dir."""
         if not file_path:
             return False, "Empty file path"
+        allowed_model_exts = {'.glb', '.gltf', '.obj'}
         
         # Handle HTTP URLs (gradio sometimes returns download URLs)
         if file_path.startswith('http'):
@@ -489,7 +632,26 @@ class InstantMeshService:
                 resp = http_requests.get(file_path, timeout=120)
                 if resp.status_code != 200:
                     return False, f"Download failed: HTTP {resp.status_code}"
-                ext = '.glb' if '.glb' in file_path.lower() else '.obj'
+                content_type = (resp.headers.get('content-type') or '').lower()
+                if 'text/html' in content_type:
+                    return False, "Download URL returned HTML instead of model data"
+                parsed = urlparse(file_path)
+                lower_path = parsed.path.lower()
+                if lower_path.endswith('.gltf'):
+                    ext = '.gltf'
+                elif lower_path.endswith('.obj'):
+                    ext = '.obj'
+                elif lower_path.endswith('.glb'):
+                    ext = '.glb'
+                else:
+                    if 'model/gltf-binary' in content_type:
+                        ext = '.glb'
+                    elif 'model/gltf+json' in content_type:
+                        ext = '.gltf'
+                    elif 'application/octet-stream' in content_type and resp.content[:4] == b'glTF':
+                        ext = '.glb'
+                    else:
+                        return False, f"URL does not point to a supported 3D model file: {file_path}"
                 output_path = os.path.join(output_dir, f'generated_model{ext}')
                 with open(output_path, 'wb') as f:
                     f.write(resp.content)
@@ -503,7 +665,13 @@ class InstantMeshService:
             file_size = os.path.getsize(file_path)
             if file_size < 100:
                 return False, f"File too small ({file_size} bytes), likely not a valid model"
-            ext = os.path.splitext(file_path)[1] or '.glb'
+            ext = os.path.splitext(file_path)[1].lower()
+            if ext not in allowed_model_exts:
+                inferred_ext = self._infer_model_extension_from_file(file_path)
+                if inferred_ext:
+                    ext = inferred_ext
+                else:
+                    return False, f"Unsupported generated file type: {ext or '(no extension)'}"
             output_path = os.path.join(output_dir, f'generated_model{ext}')
             shutil.copy2(file_path, output_path)
             logger.info(f"HuggingFace: Copied model ({file_size} bytes) from {file_path}")
@@ -511,110 +679,137 @@ class InstantMeshService:
         
         return False, f"File not found: {file_path}"
 
-    # =========================================================================
-    # Strategy 3: Placeholder fallback
-    # =========================================================================
-    
-    def _try_placeholder(self, input_image_path: str, output_dir: str) -> Tuple[bool, Optional[str]]:
-        """
-        Fallback: creates a placeholder cube GLB.
-        Always works, useful for development/testing.
-        """
+    def _infer_model_extension_from_file(self, file_path: str) -> Optional[str]:
+        """Infer model format from file contents when extension is missing/wrong."""
         try:
-            import numpy as np
-            from pygltflib import (
-                GLTF2, Scene, Node, Mesh, Primitive, Buffer, BufferView, Accessor,
-                Material, PbrMetallicRoughness,
-                ARRAY_BUFFER, ELEMENT_ARRAY_BUFFER, FLOAT, UNSIGNED_SHORT, TRIANGLES
-            )
-            import base64
-            
-            logger.info("Using placeholder 3D generation (textured cube)")
-            
-            # Create a cube with per-face vertices for proper normals
-            vertices = np.array([
-                # Front face
-                -0.5, -0.5,  0.5,   0.5, -0.5,  0.5,   0.5,  0.5,  0.5,  -0.5,  0.5,  0.5,
-                # Back face
-                -0.5, -0.5, -0.5,  -0.5,  0.5, -0.5,   0.5,  0.5, -0.5,   0.5, -0.5, -0.5,
-                # Top face
-                -0.5,  0.5, -0.5,  -0.5,  0.5,  0.5,   0.5,  0.5,  0.5,   0.5,  0.5, -0.5,
-                # Bottom face
-                -0.5, -0.5, -0.5,   0.5, -0.5, -0.5,   0.5, -0.5,  0.5,  -0.5, -0.5,  0.5,
-                # Right face
-                 0.5, -0.5, -0.5,   0.5,  0.5, -0.5,   0.5,  0.5,  0.5,   0.5, -0.5,  0.5,
-                # Left face
-                -0.5, -0.5, -0.5,  -0.5, -0.5,  0.5,  -0.5,  0.5,  0.5,  -0.5,  0.5, -0.5,
-            ], dtype=np.float32)
-            
-            indices = np.array([
-                0,1,2, 0,2,3,  4,5,6, 4,6,7,  8,9,10, 8,10,11,
-                12,13,14, 12,14,15,  16,17,18, 16,18,19,  20,21,22, 20,22,23,
-            ], dtype=np.uint16)
-            
-            vertices_binary = vertices.tobytes()
-            indices_binary = indices.tobytes()
-            vertices_byte_length = len(vertices_binary)
-            indices_byte_length = len(indices_binary)
-            
-            padding = (4 - (indices_byte_length % 4)) % 4
-            indices_binary_padded = indices_binary + b'\x00' * padding
-            binary_data = indices_binary_padded + vertices_binary
-            
-            data_uri = 'data:application/octet-stream;base64,' + base64.b64encode(binary_data).decode('utf-8')
-            
-            gltf = GLTF2(
-                scene=0,
-                scenes=[Scene(nodes=[0])],
-                nodes=[Node(mesh=0)],
-                meshes=[Mesh(primitives=[Primitive(
-                    attributes={'POSITION': 1},
-                    indices=0,
-                    material=0
-                )])],
-                materials=[Material(
-                    pbrMetallicRoughness=PbrMetallicRoughness(
-                        baseColorFactor=[0.6, 0.4, 0.2, 1.0],
-                        metallicFactor=0.1,
-                        roughnessFactor=0.8
-                    ),
-                    name="PlaceholderMaterial"
-                )],
-                accessors=[
-                    Accessor(
-                        bufferView=0,
-                        componentType=UNSIGNED_SHORT,
-                        count=len(indices),
-                        type='SCALAR',
-                        max=[int(indices.max())],
-                        min=[int(indices.min())]
-                    ),
-                    Accessor(
-                        bufferView=1,
-                        componentType=FLOAT,
-                        count=len(vertices) // 3,
-                        type='VEC3',
-                        max=vertices.reshape(-1, 3).max(axis=0).tolist(),
-                        min=vertices.reshape(-1, 3).min(axis=0).tolist()
-                    )
-                ],
-                bufferViews=[
-                    BufferView(buffer=0, byteOffset=0, byteLength=indices_byte_length, target=ELEMENT_ARRAY_BUFFER),
-                    BufferView(buffer=0, byteOffset=indices_byte_length + padding, byteLength=vertices_byte_length, target=ARRAY_BUFFER)
-                ],
-                buffers=[Buffer(byteLength=len(binary_data), uri=data_uri)]
-            )
-            
-            output_path = os.path.join(output_dir, 'generated_model.glb')
-            gltf.save(output_path)
-            
-            logger.info(f"Placeholder model created: {output_path}")
-            return True, None
-            
-        except ImportError as e:
-            return False, f"Missing dependencies: {e}"
+            with open(file_path, 'rb') as f:
+                header = f.read(2048)
+
+            # GLB magic bytes
+            if len(header) >= 4 and header[:4] == b'glTF':
+                return '.glb'
+
+            # OBJ tends to be text with vertex/object markers
+            text_head = header.decode('utf-8', errors='ignore').lstrip()
+            if text_head.startswith('o ') or text_head.startswith('v ') or '\nv ' in text_head:
+                return '.obj'
+
+            # GLTF JSON usually starts with a JSON object and contains "asset"
+            if text_head.startswith('{') and '"asset"' in text_head:
+                return '.gltf'
+        except Exception:
+            return None
+
+        return None
+
+    def _get_space_api_names(self, client) -> set:
+        """Best-effort introspection of available Gradio API names."""
+        names = set()
+        api_info = self._get_space_api_info(client)
+        if isinstance(api_info, dict):
+            named = api_info.get("named_endpoints", {})
+            if isinstance(named, dict):
+                names.update(named.keys())
+            unnamed = api_info.get("unnamed_endpoints", {})
+            if isinstance(unnamed, dict):
+                names.update(unnamed.keys())
+        return names
+
+    def _get_space_api_info(self, client) -> Dict:
+        """Best-effort fetch of Gradio API schema/details."""
+        try:
+            api_info = client.view_api(return_format="dict")
+            if isinstance(api_info, dict):
+                return api_info
         except Exception as e:
-            return False, f"Placeholder error: {str(e)}"
+            logger.warning(f"HuggingFace: Could not inspect API schema: {e}")
+        return {}
+
+    def _get_endpoint_parameters(self, api_info: Dict, api_name: str) -> List[Dict]:
+        """Get parameter metadata for a named endpoint if available."""
+        if not isinstance(api_info, dict):
+            return []
+        named = api_info.get("named_endpoints", {})
+        if not isinstance(named, dict):
+            return []
+        endpoint = named.get(api_name, {})
+        if not isinstance(endpoint, dict):
+            return []
+        params = endpoint.get("parameters", [])
+        return params if isinstance(params, list) else []
+
+    def _normalize_image_input(self, preprocessed_result, fallback_input_path: str, handle_file_fn):
+        """Normalize preprocess output into a valid Gradio file input."""
+        # Most common case: preprocess returns path string
+        if isinstance(preprocessed_result, str):
+            return handle_file_fn(preprocessed_result)
+
+        # Some spaces return nested dict/list payloads with image path/url
+        candidates = self._extract_file_candidates(preprocessed_result)
+        image_exts = {'.png', '.jpg', '.jpeg', '.webp', '.bmp'}
+        for candidate in candidates:
+            parsed = urlparse(candidate)
+            ext = os.path.splitext(parsed.path.lower())[1]
+            if ext in image_exts or os.path.exists(candidate):
+                try:
+                    return handle_file_fn(candidate)
+                except Exception:
+                    continue
+
+        # Guaranteed fallback to original upload
+        return handle_file_fn(fallback_input_path)
+
+    def _build_image_to_3d_args(self, parameters: List[Dict], image_input) -> List:
+        """
+        Build image_to_3d args from endpoint schema so calls survive
+        TRELLIS/Gradio signature changes.
+        """
+        if not parameters:
+            return []
+
+        args: List = []
+        for param in parameters:
+            name = str(param.get("parameter_name") or param.get("label") or "").strip().lower()
+            has_default = bool(param.get("parameter_has_default"))
+            default = param.get("parameter_default")
+
+            if any(k in name for k in ("image", "img", "input")) and "multi" not in name:
+                args.append(image_input)
+            elif any(k in name for k in ("multi", "gallery", "images")):
+                args.append([])
+            elif "seed" in name:
+                args.append(42)
+            elif "guidance" in name and "slat" in name:
+                args.append(3.0)
+            elif "guidance" in name:
+                args.append(7.5)
+            elif "step" in name or "sampling" in name:
+                args.append(12)
+            elif any(k in name for k in ("scheduler", "sampler", "mode")):
+                args.append("stochastic")
+            elif "randomize" in name:
+                args.append(False)
+            elif has_default:
+                args.append(default)
+            else:
+                # Unknown required input: use a conservative placeholder by type when possible.
+                component = str(param.get("component") or "").lower()
+                if "checkbox" in component:
+                    args.append(False)
+                elif "number" in component or "slider" in component:
+                    args.append(0)
+                else:
+                    args.append("")
+        return args
+
+    def _pick_api_name(self, available_names: set, candidates: List[str]) -> Optional[str]:
+        """Pick first candidate endpoint that exists, or first candidate if API list unknown."""
+        if not available_names:
+            return candidates[0] if candidates else None
+        for name in candidates:
+            if name in available_names:
+                return name
+        return None
 
     # =========================================================================
     # Helper methods
