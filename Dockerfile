@@ -61,11 +61,12 @@ RUN mkdir -p ./server/static/uploads \
     && mkdir -p ./server/temp/instantmesh \
     && mkdir -p ./server/migrations
 
-EXPOSE 5000
+ENV PORT=5000
+EXPOSE $PORT
 
 # Health check (requires 'requests' in requirements.txt)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-  CMD python -c "import requests; requests.get('http://localhost:5000/api/v1/health', timeout=5)" || exit 1
+  CMD python -c "import os,requests; requests.get(f'http://localhost:{os.environ.get(\"PORT\",5000)}/api/v1/health', timeout=5)" || exit 1
 
 # Default: start app. Use docker-compose so DB is up and setup_database.py runs first.
 CMD ["python", "server/app.py"]

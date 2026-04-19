@@ -1,5 +1,11 @@
 // Shared API base URL detection used across mobile, planner, and viewer flows.
 export const getApiBaseUrl = () => {
+  // Explicit env override takes highest priority (required for Vercel / split deployments)
+  const envUrl = import.meta.env.VITE_API_BASE_URL
+  if (envUrl) {
+    return envUrl.replace(/\/+$/, '')
+  }
+
   const { hostname, protocol, port } = window.location
 
   // Ngrok or similar tunnels: use same host (Flask serves API + frontend)
@@ -12,10 +18,14 @@ export const getApiBaseUrl = () => {
     return `${protocol}//${hostname}`
   }
 
-  // Respect explicit env override when not on ngrok
-  const envUrl = import.meta.env.VITE_API_BASE_URL
-  if (envUrl) {
-    return envUrl
+  // Vercel / hosted frontend without VITE_API_BASE_URL — warn in console
+  if (
+    hostname.includes('vercel.app') ||
+    hostname.includes('vercel') ||
+    hostname.includes('netlify')
+  ) {
+    console.warn('VITE_API_BASE_URL is not set — API calls will fail on hosted deployments.')
+    return ''
   }
 
   // Non-localhost hosts (LAN IP or custom domain)
