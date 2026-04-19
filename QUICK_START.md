@@ -14,7 +14,7 @@ git checkout yumman
 ```
 
 Then use **Docker** (easiest) or **Manual** setup below. The yumman branch includes:
-- Auth middleware, database helpers (`execute_query` / `execute_insert`), bcrypt & PyJWT in `requirements.txt`
+- Auth middleware, database helpers (`execute_query` / `execute_insert`), bcrypt & PyJWT in `requirements.docker.txt`
 - Blue vase on table (2D planner + 3D viewer), `server/static/models/blue_vase.glb`
 - All fixes needed for `docker-compose up --build` to succeed
 
@@ -27,7 +27,7 @@ Then use **Docker** (easiest) or **Manual** setup below. The yumman branch inclu
 ```powershell
 # Backend (Python)
 .\venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements.docker.txt
 
 # Frontend (Node)
 npm install
@@ -183,7 +183,7 @@ taskkill /PID <PID> /F
 ```powershell
 # Reinstall dependencies
 .\venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements.docker.txt
 npm install
 ```
 

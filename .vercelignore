@@ -1,6 +1,5 @@
-# Deploy the Vite app only. Root requirements.txt + server/ trigger Python (uv pip),
-# which is not needed for the static frontend and breaks the build.
-requirements.txt
+# Extra exclusions for upload packaging (optional). Vercel no longer needs root
+# requirements.txt — deps live in requirements.docker.txt for Docker only.
 server/
 Dockerfile
 docker-compose.yml

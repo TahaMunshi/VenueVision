@@ -59,7 +59,7 @@ Docker Hub’s CDN can drop connections on some networks. Add a registry mirror:
    python -m venv venv
    .\venv\Scripts\Activate.ps1  # Windows
    # source venv/bin/activate    # Mac/Linux
-   pip install -r requirements.txt
+   pip install -r requirements.docker.txt
    
    # Frontend
    npm install

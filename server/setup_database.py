@@ -287,7 +287,7 @@ def main():
     print("=" * 60)
     print()
     print("Next steps:")
-    print("1. Install Python dependencies: pip install -r requirements.txt")
+        print("1. Install Python dependencies: pip install -r requirements.docker.txt")
     print("2. Start your Flask server: python server/app.py")
     print("3. Access the app: http://localhost:5000/mobile")
     print("4. Login with: username='demo', password='demo123'")

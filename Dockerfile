@@ -44,9 +44,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
   && rm -rf /var/lib/apt/lists/*
 
-# Python dependencies (all app + healthcheck deps are in requirements.txt)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Python deps (named requirements.docker.txt so Vercel does not auto-run uv/pip on the frontend deploy)
+COPY requirements.docker.txt .
+RUN pip install --no-cache-dir -r requirements.docker.txt
 
 # Backend code
 COPY server ./server
@@ -64,7 +64,7 @@ RUN mkdir -p ./server/static/uploads \
 ENV PORT=5000
 EXPOSE $PORT
 
-# Health check (requires 'requests' in requirements.txt)
+# Health check (requires 'requests' in requirements.docker.txt)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD python -c "import os,requests; requests.get(f'http://localhost:{os.environ.get(\"PORT\",5000)}/api/v1/health', timeout=5)" || exit 1
 

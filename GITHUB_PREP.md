@@ -36,7 +36,7 @@ The following files have been removed to clean up the repository:
 - ✅ `docker-compose.yml` - Docker orchestration
 - ✅ `Dockerfile` - Container build
 - ✅ `package.json` - Node dependencies
-- ✅ `requirements.txt` - Python dependencies
+- ✅ `requirements.docker.txt` - Python dependencies (Docker / local venv)
 - ✅ `tsconfig.json` - TypeScript config
 - ✅ `vite.config.ts` - Vite config
 
@@ -82,7 +82,7 @@ If you want to commit in stages:
 
 ```bash
 # Initial structure
-git add server/ src/ package.json requirements.txt
+git add server/ src/ package.json requirements.docker.txt
 git commit -m "feat: Add core application structure"
 
 # Docker setup
