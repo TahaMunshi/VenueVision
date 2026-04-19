@@ -5,7 +5,7 @@ import bcrypt
 import json
 import os
 
-DB_URL = os.getenv('DATABASE_URL', 'postgresql://postgres:Tennis123@localhost:5432/fyp_db')
+DB_URL = os.getenv('DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/fyp_db')
 
 def main():
     c = psycopg2.connect(DB_URL)

@@ -1,11 +1,10 @@
 #!/bin/sh
-set -e
 
-echo "Setting up database..."
-python server/setup_database.py
+echo "=== Initializing database tables and migrations ==="
+python server/init_db.py
 
-echo "Seeding demo data..."
-python server/seed_data.py || echo "Seed skipped (data may already exist)"
+echo "=== Seeding demo data ==="
+python server/seed_data.py || echo "[SKIP] Seed skipped (data may already exist)"
 
-echo "Starting Flask server..."
-python server/app.py
+echo "=== Starting Flask server ==="
+exec python server/app.py
