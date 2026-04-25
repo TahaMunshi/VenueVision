@@ -2,8 +2,10 @@
 import json
 import logging
 import os
+import time
 
 from flask import Blueprint, jsonify, request
+from werkzeug.utils import secure_filename
 
 from middleware.auth_middleware import token_required
 from utils.file_manager import UPLOAD_ROOT
@@ -13,6 +15,8 @@ from services.glb_export import generate_glb
 logger = logging.getLogger(__name__)
 
 layout_bp = Blueprint("layout", __name__)
+
+TEXTURE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 @layout_bp.route("/venue/<venue_id>/layout", methods=["GET"])
@@ -137,6 +141,50 @@ def save_layout(current_user, venue_id: str):
 
     except Exception as e:
         logger.error(f"Error saving layout: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@layout_bp.route("/venue/<venue_id>/texture-sample", methods=["POST"])
+@token_required
+def upload_texture_sample(current_user, venue_id: str):
+    """Upload a venue-scoped floor/ceiling texture sample and return a material value."""
+    venue, err = require_venue_access(venue_id, current_user, require_owner=True)
+    if err:
+        return err[0], err[1]
+    fs_venue = venue["venue_identifier"]
+
+    file = request.files.get("file")
+    layer = (request.form.get("layer") or "ceiling").strip().lower()
+    if layer not in ("floor", "ceiling"):
+        return jsonify({"status": "error", "message": "layer must be floor or ceiling"}), 400
+    if not file:
+        return jsonify({"status": "error", "message": "Missing texture image."}), 400
+
+    original_name = secure_filename(file.filename or "texture.jpg")
+    _, ext = os.path.splitext(original_name)
+    ext = ext.lower()
+    if ext not in TEXTURE_EXTENSIONS:
+        return jsonify({"status": "error", "message": "Use a JPG, PNG, or WebP image."}), 400
+
+    try:
+        texture_dir = os.path.join(UPLOAD_ROOT, fs_venue, "textures", layer)
+        os.makedirs(texture_dir, exist_ok=True)
+        stem = os.path.splitext(original_name)[0] or "texture"
+        filename = secure_filename(f"{stem}_{int(time.time())}{ext}")
+        output_path = os.path.join(texture_dir, filename)
+        file.save(output_path)
+
+        rel_path = f"{fs_venue}/textures/{layer}/{filename}"
+        return jsonify({
+            "status": "success",
+            "message": "Texture sample uploaded.",
+            "layer": layer,
+            "filename": filename,
+            "url": f"/static/uploads/{rel_path}",
+            "texture_value": f"texture-upload:{rel_path}",
+        }), 200
+    except Exception as e:
+        logger.error("Error uploading texture sample: %s", e, exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 

@@ -68,6 +68,12 @@ type UserAsset = {
   is_table?: boolean
 }
 
+type UploadedTexture = {
+  value: string
+  label: string
+  url?: string
+}
+
 /**
  * Map pointer (clientX, clientY) to asset **top-left** in feet.
  * Uses the canvas element’s rendered rect so flex/CSS scaling does not skew coords.
@@ -244,6 +250,10 @@ function usesFootprintScaling(asset: Asset): boolean {
 
 const LAYER_ORDER: AssetLayer[] = ['floor', 'surface', 'ceiling']
 type LightingPreset = 'dim' | 'warm' | 'neutral' | 'bright' | 'cool'
+const textureLabelFromValue = (value: string) => {
+  const file = value.split('/').pop() || 'Uploaded sample'
+  return file.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ')
+}
 const WALL_ID_ORDER: Record<string, number> = {
   wall_north: 0,
   wall_east: 1,
@@ -306,6 +316,8 @@ const FloorPlanner = () => {
     floor: { type: 'oak_wood', color: '#c6b39e' },
     ceiling: { type: 'flat_white', color: '#f5f5f5' }
   })
+  const [uploadedCeilingTextures, setUploadedCeilingTextures] = useState<UploadedTexture[]>([])
+  const [isUploadingCeilingTexture, setIsUploadingCeilingTexture] = useState(false)
   const [lightingPreset, setLightingPreset] = useState<LightingPreset>('neutral')
   // Start with no walls by default; user draws or adds rectangle manually
   const defaultWalls: WallSpec[] = []
@@ -343,6 +355,7 @@ const FloorPlanner = () => {
   const [sidebarWidth, setSidebarWidth] = useState(250)
   const [isResizing, setIsResizing] = useState(false)
   const sidebarRef = useRef<HTMLDivElement>(null)
+  const ceilingTextureInputRef = useRef<HTMLInputElement>(null)
   const planningViewportRef = useRef<HTMLDivElement>(null)
   const [viewportSize, setViewportSize] = useState({ w: 0, h: 0 })
   const previewContainerRef = useRef<HTMLDivElement>(null)
@@ -419,6 +432,14 @@ const FloorPlanner = () => {
 
         if (data.materials) {
           setMaterials(data.materials)
+          const ceilingType = data.materials.ceiling?.type
+          if (typeof ceilingType === 'string' && ceilingType.startsWith('texture-upload:')) {
+            setUploadedCeilingTextures((prev) =>
+              prev.some((t) => t.value === ceilingType)
+                ? prev
+                : [...prev, { value: ceilingType, label: textureLabelFromValue(ceilingType) }]
+            )
+          }
         }
         if (data.lighting?.preset) {
           setLightingPreset(data.lighting.preset as LightingPreset)
@@ -1070,6 +1091,63 @@ const FloorPlanner = () => {
     return null
   }
 
+  const handleCeilingTextureUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file || !venueId) return
+
+    const extOk = /\.(jpe?g|png|webp)$/i.test(file.name)
+    if (!file.type.startsWith('image/') && !extOk) {
+      setMessage({ text: 'Please choose a JPG, PNG, or WebP image for the ceiling texture.', type: 'error' })
+      setTimeout(() => setMessage(null), 3500)
+      return
+    }
+    if (file.size > 12 * 1024 * 1024) {
+      setMessage({ text: 'Texture image is too large. Please use an image under 12MB.', type: 'error' })
+      setTimeout(() => setMessage(null), 3500)
+      return
+    }
+
+    setIsUploadingCeilingTexture(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('layer', 'ceiling')
+      const response = await fetch(`${API_BASE_URL}/api/v1/venue/${venueId}/texture-sample`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: formData,
+      })
+      const data = await response.json()
+      if (!response.ok || data.status !== 'success' || !data.texture_value) {
+        throw new Error(data.message || 'Texture upload failed.')
+      }
+
+      const uploaded: UploadedTexture = {
+        value: data.texture_value,
+        label: textureLabelFromValue(data.texture_value),
+        url: data.url,
+      }
+      setUploadedCeilingTextures((prev) =>
+        prev.some((t) => t.value === uploaded.value) ? prev : [...prev, uploaded]
+      )
+      setMaterials((prev) => ({
+        ...prev,
+        ceiling: { ...prev.ceiling, type: uploaded.value },
+      }))
+      setMessage({ text: 'Ceiling texture uploaded and selected. Save layout to keep it.', type: 'success' })
+      setTimeout(() => setMessage(null), 3500)
+    } catch (error) {
+      setMessage({
+        text: error instanceof Error ? error.message : 'Could not upload ceiling texture.',
+        type: 'error',
+      })
+      setTimeout(() => setMessage(null), 3500)
+    } finally {
+      setIsUploadingCeilingTexture(false)
+    }
+  }
+
   const handleSave = async () => {
     if (placedAssets.length === 0) {
       setMessage({ text: 'Please place at least one asset before saving.', type: 'error' })
@@ -1664,8 +1742,35 @@ const FloorPlanner = () => {
                   <option value="texture:ceiling/plank_flooring_04_diff_4k.jpg">Plank Flooring</option>
                   <option value="texture:ceiling/plastered_wall_02_diff_4k.jpg">Plastered Wall</option>
                 </optgroup>
+                {uploadedCeilingTextures.length > 0 && (
+                  <optgroup label="Uploaded samples">
+                    {uploadedCeilingTextures.map((texture) => (
+                      <option key={texture.value} value={texture.value}>
+                        {texture.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
             </label>
+            <div className="texture-upload-row">
+              <input
+                ref={ceilingTextureInputRef}
+                type="file"
+                accept="image/jpeg,image/jpg,image/png,image/webp"
+                style={{ display: 'none' }}
+                onChange={handleCeilingTextureUpload}
+              />
+              <button
+                type="button"
+                className="texture-upload-button"
+                onClick={() => ceilingTextureInputRef.current?.click()}
+                disabled={isUploadingCeilingTexture}
+              >
+                {isUploadingCeilingTexture ? 'Uploading texture...' : 'Upload roof texture sample'}
+              </button>
+              <span className="texture-upload-hint">JPG, PNG, or WebP. Tileable images work best.</span>
+            </div>
             <label className="form-row">
               <span>Lighting</span>
               <select

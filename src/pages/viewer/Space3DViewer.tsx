@@ -228,6 +228,35 @@ const getFloorOrCeilingTexture = (
   type: string,
   tintHex: string
 ): Promise<any | null> => {
+  if (type.startsWith('texture-upload:')) {
+    const path = type.replace('texture-upload:', '')
+    const url = `${apiBase}/static/uploads/${path}`
+    return new Promise((resolve) => {
+      resolveTextureUrlForNgrok(url)
+        .then((loadUrl) => {
+          loader.load(
+            loadUrl,
+            (tex: any) => {
+              if (tex) {
+                tex.wrapS = THREE.RepeatWrapping
+                tex.wrapT = THREE.RepeatWrapping
+                tex.anisotropy = 4
+              }
+              resolve(tex)
+            },
+            undefined,
+            () => {
+              console.warn(`[3D Viewer] Failed to load uploaded floor/ceiling texture: ${url}`)
+              resolve(null)
+            }
+          )
+        })
+        .catch(() => {
+          console.warn(`[3D Viewer] Failed to load uploaded floor/ceiling texture: ${url}`)
+          resolve(null)
+        })
+    })
+  }
   if (type.startsWith('texture:')) {
     const path = type.replace('texture:', '')
     const url = `${apiBase}/static/textures/${path}`
