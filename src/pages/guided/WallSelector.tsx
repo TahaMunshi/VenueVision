@@ -56,7 +56,7 @@ const WallSelector = () => {
   }, [venueId, API_BASE_URL])
 
   const handleWallSelect = (wallId: string) => {
-    navigate(`/edit/${venueId}/${wallId}`)
+    navigate(`/edit/${venueId}/${wallId}?step=corners`)
   }
 
   const handleView3D = () => {
@@ -104,9 +104,9 @@ const WallSelector = () => {
                   type="button"
                   onClick={() => navigate(`/review/${venueId}/${wall.id}`)}
                   className="wall-button"
-                  title="Stitch captured segments"
+                  title="Prepare captured photos for corner adjustment"
                 >
-                  Stitch
+                  Prepare
                 </button>
                 <button
                   type="button"

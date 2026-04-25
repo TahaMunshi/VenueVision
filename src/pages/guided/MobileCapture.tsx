@@ -4,7 +4,7 @@ import './MobileCapture.css'
 import type { WallSegment } from '../../components/MiniMap'
 import GuidedFlowStepper from '../../components/GuidedFlowStepper'
 import PageNavBar from '../../components/PageNavBar'
-import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
+import { getApiBaseUrl, getAuthHeaders, resolveApiAssetUrl } from '../../utils/api'
 
 // NOTE: To access the backend from your phone on the same Wi‑Fi, set VITE_API_BASE_URL in the project .env to your PC's LAN IP, e.g. http://192.168.1.42:5000
 
@@ -325,6 +325,13 @@ const MobileCapture = () => {
         const imagesData = await imagesRes.json()
         if (imagesData.status === 'success' && imagesData.wall_images) {
           setWallImages(imagesData.wall_images)
+        } else if (imagesData.status === 'success' && imagesData.wall_image_records) {
+          const nextImages: Record<string, string> = {}
+          Object.entries(imagesData.wall_image_records).forEach(([id, record]) => {
+            const url = (record as { url?: string }).url
+            if (url) nextImages[id] = url
+          })
+          setWallImages(nextImages)
         }
       } catch (err) {
         console.warn('[MobileCapture] Could not load wall images for review')
@@ -585,6 +592,9 @@ const MobileCapture = () => {
         throw new Error('Unable to capture photo. Please try again.')
       }
 
+      const localPreviewUrl = URL.createObjectURL(blob)
+      setWallImages((prev) => ({ ...prev, [activeWallId]: localPreviewUrl }))
+
       const { ok, payload } = await uploadWallPhotoBlob(blob, `capture-${Date.now()}.jpg`, activeWallId)
 
       if (!ok) {
@@ -607,7 +617,7 @@ const MobileCapture = () => {
         })
       } else if (wallComplete && activeWallId) {
         setToast({
-          message: 'This wall has all required photos. Open Stitch or Corners from the list below when you want.',
+          message: 'Wall photo ready. Prepare it, then adjust corners to finish.',
           type: 'success',
         })
       } else {
@@ -665,6 +675,7 @@ const MobileCapture = () => {
     }
 
     const toUpload = picked.slice(0, remaining)
+    setWallImages((prev) => ({ ...prev, [activeWallId]: URL.createObjectURL(toUpload[0]) }))
     if (picked.length > remaining) {
       setToast({
         message: `Using the first ${remaining} photo(s) in file order (left → right along the wall).`,
@@ -694,7 +705,7 @@ const MobileCapture = () => {
 
         if (wallComplete && activeWallId) {
           setToast({
-            message: 'This wall has all required photos. Open Stitch or Corners from the list below when you want.',
+            message: 'Wall photo ready. Prepare it, then adjust corners to finish.',
             type: 'success',
           })
           setShowCheck(true)
@@ -1265,7 +1276,7 @@ const MobileCapture = () => {
                   <div className="review-wall-name">{wall.name}</div>
                   {url && retakingWallId !== wall.id ? (
                     <img
-                      src={url.startsWith('http') ? url : `${API_BASE_URL}${url}`}
+                      src={resolveApiAssetUrl(url)}
                       alt={wall.name}
                       className="review-wall-image"
                     />
@@ -1297,10 +1308,10 @@ const MobileCapture = () => {
                     <button
                       type="button"
                       className="review-wall-btn"
-                      title="Stitch segments"
+                      title="Prepare this wall image"
                       onClick={() => navigate(`/review/${venueId}/${wall.id}`)}
                     >
-                      Stitch
+                      Prepare
                     </button>
                     <button
                       className="review-wall-btn retake"
@@ -1312,7 +1323,7 @@ const MobileCapture = () => {
                           try {
                             await fetch(`${currentApiUrl}/api/v1/venue/${venueId}/wall/${target.id}/reset`, {
                               method: 'POST',
-                              headers: { 'Content-Type': 'application/json' }
+                              headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' }
                             })
                           } catch (err) {
                             console.warn('[MobileCapture] Could not reset wall image:', err)
@@ -1330,10 +1341,10 @@ const MobileCapture = () => {
                     <button
                       type="button"
                       className="review-wall-btn adjust"
-                      title="Open crop & corner editor for this wall"
-                      onClick={() => navigate(`/edit/${venueId}/${wall.id}?from=capture`)}
+                      title="Open corner editor for this wall"
+                      onClick={() => navigate(`/edit/${venueId}/${wall.id}?step=corners`)}
                     >
-                      Edit wall
+                      Corners
                     </button>
                   </div>
                 </div>

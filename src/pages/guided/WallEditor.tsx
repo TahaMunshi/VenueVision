@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import './WallEditor.css'
-import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
+import { getApiBaseUrl, getAuthHeaders, resolveApiAssetUrl, type WallImageRecord } from '../../utils/api'
 import GuidedFlowStepper from '../../components/GuidedFlowStepper'
 import PageNavBar from '../../components/PageNavBar'
 
@@ -59,6 +59,8 @@ const WallEditor = () => {
   const [isProcessing, setIsProcessing] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  const [sourceType, setSourceType] = useState<WallImageRecord['source_type'] | null>(null)
+  const [canvasImageReady, setCanvasImageReady] = useState(false)
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [cropMode, setCropMode] = useState(!stepCorners)
@@ -83,18 +85,21 @@ const WallEditor = () => {
         })
         const data = await response.json()
         
-        if (data.status === 'success' && data.wall_images && data.wall_images[wallId]) {
-          const imagePath = data.wall_images[wallId]
-          const fullUrl = imagePath.startsWith('http') 
-            ? imagePath 
-            : `${API_BASE_URL}${imagePath}`
+        const record = data.wall_image_records?.[wallId] as WallImageRecord | undefined
+        const imagePath = record?.url || data.wall_images?.[wallId]
+
+        if (data.status === 'success' && imagePath) {
+          const fullUrl = resolveApiAssetUrl(imagePath)
           setImageUrl(fullUrl)
+          setSourceType(record?.source_type || null)
+          setCanvasImageReady(false)
           
           // Load image to canvas
           const img = new Image()
           img.crossOrigin = 'anonymous'
           img.onload = () => {
             imageRef.current = img
+            setCanvasImageReady(true)
             // Important: initialize crop points even if canvas isn't mounted yet
             // (loading screen is shown until setIsLoading(false)).
             const defaultPoints: CornerPoint[] = getDefaultCropPoints(img.width, img.height)
@@ -109,7 +114,8 @@ const WallEditor = () => {
             setIsLoading(false)
           }
           img.onerror = () => {
-            setMessage({ text: 'Failed to load image', type: 'error' })
+            setCanvasImageReady(false)
+            setMessage({ text: 'Canvas preview failed, but the image preview is shown below. Try refreshing if corner handles do not appear.', type: 'error' })
             setIsLoading(false)
           }
           img.src = fullUrl
@@ -537,6 +543,9 @@ const WallEditor = () => {
       )}
       <div className="wall-editor-header">
         <p className="wall-editor-wall-id">Wall: {wallId}</p>
+        {sourceType && (
+          <p className="wall-editor-source">Source: {sourceType === 'captured' ? 'latest captured photo' : sourceType}</p>
+        )}
       </div>
 
       <div className="wall-editor-content">
@@ -550,11 +559,19 @@ const WallEditor = () => {
             onTouchEnd={stopDrag}
             className="preview-canvas"
             style={{ 
-              cursor: isDragging || draggingIndex !== null ? 'grabbing' : 'crosshair'
+              cursor: isDragging || draggingIndex !== null ? 'grabbing' : 'crosshair',
+              display: canvasImageReady ? 'block' : 'none'
             }}
           />
+          {!canvasImageReady && imageUrl && (
+            <img
+              src={imageUrl}
+              alt="Wall preview"
+              className="wall-editor-image-fallback"
+            />
+          )}
           
-          {cornerPoints.length === 4 && (
+          {canvasImageReady && cornerPoints.length === 4 && (
             <p className="instruction-text">
               {stepCorners
                 ? 'Drag the red handles to match the wall edges. Then apply to finish this wall.'

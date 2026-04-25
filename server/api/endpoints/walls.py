@@ -1,7 +1,7 @@
 import logging
 import os
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from flask import Blueprint, jsonify, request
 
@@ -17,6 +17,68 @@ from .common import completed_walls_for_venue, next_wall, required_photos_for_wa
 logger = logging.getLogger(__name__)
 
 walls_bp = Blueprint("walls", __name__)
+
+
+def _latest_seq_name(wall_dir: str) -> Optional[str]:
+    seq_files = []
+    try:
+        for entry in os.scandir(wall_dir):
+            if entry.is_file() and entry.name.startswith("seq_") and entry.name.endswith(".jpg"):
+                seq_files.append(entry.name)
+    except (FileNotFoundError, PermissionError):
+        return None
+
+    if not seq_files:
+        return None
+
+    seq_files.sort(
+        key=lambda x: int(x.split("_")[1].split(".")[0]) if "_" in x else 0,
+        reverse=True,
+    )
+    return seq_files[0]
+
+
+def _wall_image_record(fs_venue: str, wall_id: str, request_original: bool = False) -> Optional[Dict]:
+    wall_dir = os.path.join(UPLOAD_ROOT, fs_venue, wall_id)
+    if not os.path.isdir(wall_dir):
+        return None
+
+    candidates = []
+    if not request_original:
+        candidates.extend(
+            [
+                ("processed", f"processed_{wall_id}.jpg", True),
+                ("stitched", f"stitched_{wall_id}.jpg", False),
+            ]
+        )
+
+    for source_type, filename, is_final in candidates:
+        path = os.path.join(wall_dir, filename)
+        if os.path.exists(path):
+            ts = int(os.path.getmtime(path))
+            return {
+                "wall_id": wall_id,
+                "source_type": source_type,
+                "filename": filename,
+                "url": f"/static/uploads/{fs_venue}/{wall_id}/{filename}?v={ts}",
+                "updated_at": ts,
+                "is_final": is_final,
+            }
+
+    latest_file = _latest_seq_name(wall_dir)
+    if latest_file:
+        seq_path = os.path.join(wall_dir, latest_file)
+        ts = int(os.path.getmtime(seq_path)) if os.path.exists(seq_path) else int(time.time())
+        return {
+            "wall_id": wall_id,
+            "source_type": "captured",
+            "filename": latest_file,
+            "url": f"/static/uploads/{fs_venue}/{wall_id}/{latest_file}?v={ts}",
+            "updated_at": ts,
+            "is_final": False,
+        }
+
+    return None
 
 
 @walls_bp.route("/venue/<venue_id>/progress", methods=["GET"])
@@ -94,60 +156,20 @@ def get_wall_images(current_user, venue_id: str):
 
         walls_metadata = get_venue_walls(fs_venue)
         wall_images: Dict[str, str] = {}
+        wall_image_records: Dict[str, Dict] = {}
 
         for wall in walls_metadata:
             wall_id = wall["id"]
-            wall_dir = os.path.join(UPLOAD_ROOT, fs_venue, wall_id)
+            record = _wall_image_record(fs_venue, wall_id, request_original=request_original)
+            if record:
+                wall_images[wall_id] = record["url"]
+                wall_image_records[wall_id] = record
 
-            if not os.path.isdir(wall_dir):
-                continue
-
-            if request_original:
-                seq_files = []
-                try:
-                    for entry in os.scandir(wall_dir):
-                        if entry.is_file() and entry.name.startswith("seq_") and entry.name.endswith(".jpg"):
-                            seq_files.append(entry.name)
-                except (FileNotFoundError, PermissionError):
-                    pass
-
-                if seq_files:
-                    seq_files.sort(
-                        key=lambda x: int(x.split("_")[1].split(".")[0]) if "_" in x else 0,
-                        reverse=True,
-                    )
-                    latest_file = seq_files[0]
-                    wall_images[wall_id] = f"/static/uploads/{fs_venue}/{wall_id}/{latest_file}"
-            else:
-                # Prefer processed (final), then stitched (master for corners/removal)
-                processed_path = os.path.join(wall_dir, f"processed_{wall_id}.jpg")
-                stitched_path = os.path.join(wall_dir, f"stitched_{wall_id}.jpg")
-                if os.path.exists(processed_path):
-                    ts = int(os.path.getmtime(processed_path)) if os.path.exists(processed_path) else int(time.time())
-                    wall_images[wall_id] = f"/static/uploads/{fs_venue}/{wall_id}/processed_{wall_id}.jpg?v={ts}"
-                elif os.path.exists(stitched_path):
-                    ts = int(os.path.getmtime(stitched_path)) if os.path.exists(stitched_path) else int(time.time())
-                    wall_images[wall_id] = f"/static/uploads/{fs_venue}/{wall_id}/stitched_{wall_id}.jpg?v={ts}"
-                else:
-                    seq_files = []
-                    try:
-                        for entry in os.scandir(wall_dir):
-                            if entry.is_file() and entry.name.startswith("seq_") and entry.name.endswith(".jpg"):
-                                seq_files.append(entry.name)
-                    except (FileNotFoundError, PermissionError):
-                        pass
-
-                    if seq_files:
-                        seq_files.sort(
-                            key=lambda x: int(x.split("_")[1].split(".")[0]) if "_" in x else 0,
-                            reverse=True,
-                        )
-                        latest_file = seq_files[0]
-                        seq_path = os.path.join(wall_dir, latest_file)
-                        ts = int(os.path.getmtime(seq_path)) if os.path.exists(seq_path) else int(time.time())
-                        wall_images[wall_id] = f"/static/uploads/{fs_venue}/{wall_id}/{latest_file}?v={ts}"
-
-        return jsonify({"status": "success", "wall_images": wall_images}), 200
+        return jsonify({
+            "status": "success",
+            "wall_images": wall_images,
+            "wall_image_records": wall_image_records,
+        }), 200
 
     except Exception as e:
         logger.error(f"Error getting wall images: {e}")
@@ -162,11 +184,12 @@ def reset_wall_image(current_user, venue_id: str, wall_id: str):
     This allows the wall to be retaken from scratch.
     Only deletes processed_{wall_id}.jpg, leaves seq_*.jpg files intact.
     """
-    _, err = require_venue_access(venue_id, current_user, require_owner=True)
+    venue, err = require_venue_access(venue_id, current_user, require_owner=True)
     if err:
         return err[0], err[1]
+    fs_venue = venue["venue_identifier"]
     try:
-        wall_dir = os.path.join(UPLOAD_ROOT, venue_id, wall_id)
+        wall_dir = os.path.join(UPLOAD_ROOT, fs_venue, wall_id)
         
         if not os.path.isdir(wall_dir):
             return jsonify({"status": "error", "message": "Wall directory not found"}), 404
@@ -177,7 +200,7 @@ def reset_wall_image(current_user, venue_id: str, wall_id: str):
             if os.path.exists(p):
                 try:
                     os.remove(p)
-                    logger.info(f"Deleted {fname} for {venue_id}/{wall_id}")
+                    logger.info(f"Deleted {fname} for {fs_venue}/{wall_id}")
                 except OSError as e:
                     logger.error(f"Failed to delete {fname}: {e}")
                     return jsonify({"status": "error", "message": str(e)}), 500
@@ -196,17 +219,18 @@ def get_wall_segments(current_user, venue_id: str, wall_id: str):
     Get segment image URLs for a wall (seq_01, seq_02, ...).
     Query param overlaps=true includes overlap estimates for stitching preview.
     """
-    _, err = require_venue_access(venue_id, current_user, require_owner=False)
+    venue, err = require_venue_access(venue_id, current_user, require_owner=False)
     if err:
         return err[0], err[1]
+    fs_venue = venue["venue_identifier"]
     try:
-        segments = get_segment_images(venue_id, wall_id)
+        segments = get_segment_images(fs_venue, wall_id)
         if not segments:
             return jsonify({"status": "error", "message": "No segment images found", "segments": []}), 404
 
         resp = {"status": "success", "segments": segments}
         if request.args.get("overlaps", "false").lower() == "true":
-            resp["overlap_estimates"] = get_overlap_estimates(venue_id, wall_id)
+            resp["overlap_estimates"] = get_overlap_estimates(fs_venue, wall_id)
         return jsonify(resp), 200
     except Exception as e:
         logger.error(f"Error getting segments for {venue_id}/{wall_id}: {e}")
@@ -220,15 +244,16 @@ def stitch_wall(current_user, venue_id: str, wall_id: str):
     Stitch all segment images for a wall into one seamless image.
     Body: optional { "rotations": [0, r2, ...], "manual_overlaps": [o1, o2, ...] }
     """
-    _, err = require_venue_access(venue_id, current_user, require_owner=True)
+    venue, err = require_venue_access(venue_id, current_user, require_owner=True)
     if err:
         return err[0], err[1]
+    fs_venue = venue["venue_identifier"]
     try:
         data = request.get_json() or {}
         rotations = data.get("rotations")
         manual_overlaps = data.get("manual_overlaps")
 
-        success, result = stitch_segments(venue_id, wall_id, rotations=rotations, manual_overlaps=manual_overlaps)
+        success, result = stitch_segments(fs_venue, wall_id, rotations=rotations, manual_overlaps=manual_overlaps)
         if not success:
             return jsonify({"status": "error", "message": result}), 400
         return jsonify({"status": "success", "image_url": f"{result}?v={int(time.time() * 1000)}"}), 200
@@ -244,11 +269,12 @@ def delete_all_wall_images(current_user, venue_id: str):
     Delete all wall image folders for this venue.
     Keeps layout.json, floor_plan.jpg, and generated GLB in the venue root.
     """
-    _, err = require_venue_access(venue_id, current_user, require_owner=True)
+    venue, err = require_venue_access(venue_id, current_user, require_owner=True)
     if err:
         return err[0], err[1]
+    fs_venue = venue["venue_identifier"]
     try:
-        removed = delete_venue_wall_images(venue_id)
+        removed = delete_venue_wall_images(fs_venue)
         return jsonify({
             "status": "success",
             "message": f"Deleted {removed} wall image folder(s).",
@@ -271,9 +297,10 @@ def restitch_with_corners(current_user, venue_id: str, wall_id: str):
     """
     import json
 
-    _, err = require_venue_access(venue_id, current_user, require_owner=True)
+    venue, err = require_venue_access(venue_id, current_user, require_owner=True)
     if err:
         return err[0], err[1]
+    fs_venue = venue["venue_identifier"]
 
     corner_points_json = request.form.get("corner_points")
     if not corner_points_json:
@@ -286,23 +313,23 @@ def restitch_with_corners(current_user, venue_id: str, wall_id: str):
     except json.JSONDecodeError:
         return jsonify({"error": "Invalid JSON in corner_points."}), 400
 
-    success, result = stitch_segments(venue_id, wall_id)
+    success, result = stitch_segments(fs_venue, wall_id)
     if not success:
         return jsonify({"status": "error", "message": result}), 400
 
     # Stitch writes to stitched_{wall_id}.jpg
-    stitched_path = os.path.join(UPLOAD_ROOT, venue_id, wall_id, f"stitched_{wall_id}.jpg")
+    stitched_path = os.path.join(UPLOAD_ROOT, fs_venue, wall_id, f"stitched_{wall_id}.jpg")
     if not os.path.exists(stitched_path):
         return jsonify({"status": "error", "message": "Stitching succeeded but output file not found."}), 500
 
     with open(stitched_path, "rb") as f:
         stitched_bytes = f.read()
 
-    output_path = os.path.join(UPLOAD_ROOT, venue_id, wall_id, f"processed_{wall_id}.jpg")
+    output_path = os.path.join(UPLOAD_ROOT, fs_venue, wall_id, f"processed_{wall_id}.jpg")
 
     wall_ratio = None
     try:
-        walls = get_venue_walls(venue_id)
+        walls = get_venue_walls(fs_venue)
         wall_meta = next((w for w in walls if w.get("id") == wall_id), None)
         if wall_meta:
             length = float(wall_meta.get("length") or 0)
@@ -324,7 +351,7 @@ def restitch_with_corners(current_user, venue_id: str, wall_id: str):
     return jsonify({
         "status": "success",
         "message": "Re-stitched and applied perspective correction.",
-        "url": f"/static/uploads/{venue_id}/{wall_id}/processed_{wall_id}.jpg",
+        "url": f"/static/uploads/{fs_venue}/{wall_id}/processed_{wall_id}.jpg",
     }), 200
 
 
@@ -338,9 +365,10 @@ def remove_object(current_user, venue_id: str, wall_id: str):
     """
     import json
 
-    _, err = require_venue_access(venue_id, current_user, require_owner=True)
+    venue, err = require_venue_access(venue_id, current_user, require_owner=True)
     if err:
         return err[0], err[1]
+    fs_venue = venue["venue_identifier"]
 
     try:
         data = request.get_json() or {}
@@ -349,7 +377,7 @@ def remove_object(current_user, venue_id: str, wall_id: str):
     except (TypeError, ValueError):
         return jsonify({"error": "x and y (integers) are required."}), 400
 
-    wall_dir = os.path.join(UPLOAD_ROOT, venue_id, wall_id)
+    wall_dir = os.path.join(UPLOAD_ROOT, fs_venue, wall_id)
     stitched_path = os.path.join(wall_dir, f"stitched_{wall_id}.jpg")
     if not os.path.isfile(stitched_path):
         return jsonify({"status": "error", "message": "No stitched image found. Stitch first."}), 404
@@ -375,7 +403,7 @@ def remove_object(current_user, venue_id: str, wall_id: str):
             "status": "success",
             "inpainted": True,
             "message": outcome.get("message", "Object removed."),
-            "url": f"/static/uploads/{venue_id}/{wall_id}/stitched_{wall_id}.jpg?v={int(time.time() * 1000)}",
+            "url": f"/static/uploads/{fs_venue}/{wall_id}/stitched_{wall_id}.jpg?v={int(time.time() * 1000)}",
         }
     ), 200
 
@@ -390,9 +418,10 @@ def apply_corners(current_user, venue_id: str, wall_id: str):
     """
     import json
 
-    _, err = require_venue_access(venue_id, current_user, require_owner=True)
+    venue, err = require_venue_access(venue_id, current_user, require_owner=True)
     if err:
         return err[0], err[1]
+    fs_venue = venue["venue_identifier"]
 
     corner_points_json = request.form.get("corner_points")
     if not corner_points_json:
@@ -405,18 +434,23 @@ def apply_corners(current_user, venue_id: str, wall_id: str):
     except json.JSONDecodeError:
         return jsonify({"error": "Invalid JSON in corner_points."}), 400
 
-    wall_dir = os.path.join(UPLOAD_ROOT, venue_id, wall_id)
+    wall_dir = os.path.join(UPLOAD_ROOT, fs_venue, wall_id)
     stitched_path = os.path.join(wall_dir, f"stitched_{wall_id}.jpg")
-    if not os.path.isfile(stitched_path):
-        return jsonify({"status": "error", "message": "No stitched image. Stitch first."}), 404
+    source_path = stitched_path
+    if not os.path.isfile(source_path):
+        latest_file = _latest_seq_name(wall_dir)
+        if latest_file:
+            source_path = os.path.join(wall_dir, latest_file)
+        else:
+            return jsonify({"status": "error", "message": "No wall image found. Capture or upload a photo first."}), 404
 
-    with open(stitched_path, "rb") as f:
+    with open(source_path, "rb") as f:
         stitched_bytes = f.read()
 
     output_path = os.path.join(wall_dir, f"processed_{wall_id}.jpg")
     wall_ratio = None
     try:
-        walls = get_venue_walls(venue_id)
+        walls = get_venue_walls(fs_venue)
         wall_meta = next((w for w in walls if w.get("id") == wall_id), None)
         if wall_meta:
             length = float(wall_meta.get("length") or 0)
@@ -438,7 +472,7 @@ def apply_corners(current_user, venue_id: str, wall_id: str):
     return jsonify({
         "status": "success",
         "message": "Corners applied. Wall complete.",
-        "url": f"/static/uploads/{venue_id}/{wall_id}/processed_{wall_id}.jpg",
+        "url": f"/static/uploads/{fs_venue}/{wall_id}/processed_{wall_id}.jpg",
     }), 200
 
 
@@ -451,12 +485,13 @@ def reset_venue(current_user, venue_id: str):
     """
     import shutil
 
-    _, err = require_venue_access(venue_id, current_user, require_owner=True)
+    venue, err = require_venue_access(venue_id, current_user, require_owner=True)
     if err:
         return err[0], err[1]
+    fs_venue = venue["venue_identifier"]
     try:
-        venue_path = os.path.join(UPLOAD_ROOT, venue_id)
-        logger.info(f"[Reset] Attempting to reset venue {venue_id} at path: {venue_path}")
+        venue_path = os.path.join(UPLOAD_ROOT, fs_venue)
+        logger.info(f"[Reset] Attempting to reset venue {fs_venue} at path: {venue_path}")
         
         if not os.path.isdir(venue_path):
             logger.warning(f"[Reset] Venue directory not found: {venue_path}")
@@ -478,11 +513,11 @@ def reset_venue(current_user, venue_id: str):
                     os.remove(item_path)
                     files_deleted += 1
             
-            logger.info(f"[Reset] Successfully reset venue {venue_id}: deleted {files_deleted} files and {dirs_deleted} directories")
+            logger.info(f"[Reset] Successfully reset venue {fs_venue}: deleted {files_deleted} files and {dirs_deleted} directories")
             return jsonify({"status": "success", "message": f"Venue reset successfully (deleted {files_deleted} files and {dirs_deleted} directories)"}), 200
         
         except Exception as e:
-            logger.error(f"[Reset] Error clearing venue directory for {venue_id}: {str(e)}", exc_info=True)
+            logger.error(f"[Reset] Error clearing venue directory for {fs_venue}: {str(e)}", exc_info=True)
             return jsonify({"status": "error", "message": f"Error clearing venue directory: {str(e)}"}), 500
     
     except Exception as e:

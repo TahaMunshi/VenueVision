@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import './SegmentReview.css'
-import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
+import { getApiBaseUrl, getAuthHeaders, resolveApiAssetUrl } from '../../utils/api'
 import GuidedFlowStepper from '../../components/GuidedFlowStepper'
 import PageNavBar from '../../components/PageNavBar'
 
@@ -74,8 +74,7 @@ const SegmentReview = () => {
     fetchSegments()
   }, [fetchSegments])
 
-  const fullUrl = (path: string) =>
-    path.startsWith('http') ? path : `${API_BASE_URL}${path}`
+  const fullUrl = (path: string) => resolveApiAssetUrl(path)
 
   const handleRotate = (index: number, delta: number) => {
     if (index === 0) return
@@ -158,7 +157,7 @@ const SegmentReview = () => {
       <div className="segment-review-heading">
         <h1 className="segment-review-title">Wall: {wallId}</h1>
         <p className="segment-review-subtitle">
-          {segments.length} photo{segments.length !== 1 ? 's' : ''} — adjust overlap and rotation, then stitch
+          {segments.length} photo{segments.length !== 1 ? 's' : ''} — prepare the wall image, then adjust corners
         </p>
         {overlapLoading && (
           <p className="segment-review-overlap-hint" role="status">
@@ -245,11 +244,17 @@ const SegmentReview = () => {
             disabled={isStitching || segments.length === 0}
             className="stitch-btn"
           >
-            {isStitching ? 'Stitching…' : 'Stitch & Apply'}
+            {isStitching
+              ? 'Preparing…'
+              : segments.length === 1
+              ? 'Use Photo & Continue'
+              : 'Stitch & Continue'}
           </button>
           <p className="long-op-hint">
             {isStitching
-              ? 'Aligning and blending photos can take 30–90 seconds. Please keep this tab open.'
+              ? 'Preparing the wall image. Please keep this tab open.'
+              : segments.length === 1
+              ? 'A single good photo can go straight to corner adjustment.'
               : 'Stitching runs on the server and may take up to a minute for many segments.'}
           </p>
         </div>
@@ -258,24 +263,24 @@ const SegmentReview = () => {
 
         {stitchedUrl && (
           <div className="stitched-result">
-            <h3>Stitched result</h3>
+            <h3>Prepared wall image</h3>
             <img src={fullUrl(stitchedUrl)} alt="Stitched wall" className="stitched-preview" />
             <div className="stitched-actions">
               <button
                 type="button"
-                onClick={() => navigate(`/remove/${venueId}/${wallId}`)}
+                onClick={() => navigate(`/edit/${venueId}/${wallId}?step=corners`)}
                 className="action-btn primary"
-                title="Next step: tap objects on the stitched image to remove them (AI inpaint)"
+                title="Next step: adjust four corners and finish this wall"
               >
-                Next: remove objects
+                Next: adjust corners
               </button>
               <button
                 type="button"
-                onClick={() => navigate(`/edit/${venueId}/${wallId}?step=corners`)}
+                onClick={() => navigate(`/remove/${venueId}/${wallId}`)}
                 className="action-btn secondary"
-                title="Skip cleanup — go straight to the 4-corner editor for this wall"
+                title="Optional AI cleanup. This can take several minutes."
               >
-                Skip to 4-corner editor
+                Optional AI cleanup
               </button>
               <button
                 type="button"

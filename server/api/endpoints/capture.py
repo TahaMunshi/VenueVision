@@ -42,9 +42,10 @@ def upload_capture(current_user):
     if not venue_id or not wall_id:
         return jsonify({"error": "venue_id and wall_id are required."}), 400
 
-    _, err = require_venue_access(venue_id, current_user, require_owner=True)
+    venue, err = require_venue_access(venue_id, current_user, require_owner=True)
     if err:
         return err[0], err[1]
+    fs_venue = venue["venue_identifier"]
 
     file_bytes = file.read()
     if not file_bytes:
@@ -59,19 +60,19 @@ def upload_capture(current_user):
         )
 
     try:
-        saved_path = save_wall_photo(venue_id, wall_id, BytesIO(file_bytes))
+        saved_path = save_wall_photo(fs_venue, wall_id, BytesIO(file_bytes))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except IOError as exc:
         logger.error("Failed to store capture: %s", exc)
         return jsonify({"error": "Failed to save capture. Try again."}), 500
 
-    walls_metadata = get_venue_walls(venue_id)
-    completed = completed_walls_for_venue(venue_id, walls_metadata)
+    walls_metadata = get_venue_walls(fs_venue)
+    completed = completed_walls_for_venue(fs_venue, walls_metadata)
     current_target = next_wall(walls_metadata, completed)
     active_wall_meta = next((w for w in walls_metadata if w["id"] == wall_id), {"id": wall_id})
     active_required = required_photos_for_wall(active_wall_meta)
-    active_captured = captured_segments_for_wall(venue_id, wall_id)
+    active_captured = captured_segments_for_wall(fs_venue, wall_id)
 
     payload = {
         "message": "Capture stored successfully.",
@@ -177,9 +178,10 @@ def process_wall(current_user):
     if not corner_points_json:
         return jsonify({"error": "corner_points are required."}), 400
 
-    _, err = require_venue_access(venue_id, current_user, require_owner=True)
+    venue, err = require_venue_access(venue_id, current_user, require_owner=True)
     if err:
         return err[0], err[1]
+    fs_venue = venue["venue_identifier"]
 
     file_bytes = file.read()
     if not file_bytes:
@@ -190,7 +192,7 @@ def process_wall(current_user):
         if len(corner_points) != 4:
             return jsonify({"error": "Exactly 4 corner points are required."}), 400
 
-        venue_dir = os.path.join(UPLOAD_ROOT, venue_id, wall_id)
+        venue_dir = os.path.join(UPLOAD_ROOT, fs_venue, wall_id)
         os.makedirs(venue_dir, exist_ok=True)
         output_filename = f"processed_{wall_id}.jpg"
         output_path = os.path.join(venue_dir, output_filename)
@@ -198,7 +200,7 @@ def process_wall(current_user):
         # Stretch final processed texture to the wall's real aspect ratio (length/height) when available.
         wall_ratio = None
         try:
-            walls = get_venue_walls(venue_id)
+            walls = get_venue_walls(fs_venue)
             wall_meta = next((w for w in walls if w.get("id") == wall_id), None)
             if wall_meta:
                 length = float(wall_meta.get("length") or 0)
@@ -218,7 +220,7 @@ def process_wall(current_user):
         if result["status"] == "error":
             return jsonify(result), 500
 
-        result["url"] = f"/static/uploads/{venue_id}/{wall_id}/{output_filename}"
+        result["url"] = f"/static/uploads/{fs_venue}/{wall_id}/{output_filename}"
 
         return jsonify(result), 200
 

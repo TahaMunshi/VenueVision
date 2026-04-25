@@ -1,13 +1,12 @@
 import { Link } from 'react-router-dom'
 import './GuidedFlowStepper.css'
 
-export type GuidedFlowStep = 'capture' | 'review' | 'remove' | 'corners'
+export type GuidedFlowStep = 'capture' | 'review' | 'corners'
 
 const STEPS: { id: GuidedFlowStep; label: string; short: string }[] = [
   { id: 'capture', label: 'Capture', short: '1' },
-  { id: 'review', label: 'Stitch', short: '2' },
-  { id: 'remove', label: 'Remove', short: '3' },
-  { id: 'corners', label: 'Corners', short: '4' },
+  { id: 'review', label: 'Prepare', short: '2' },
+  { id: 'corners', label: 'Corners', short: '3' },
 ]
 
 type Props = {
@@ -42,8 +41,6 @@ export default function GuidedFlowStepper({
           : `/capture/${venueId}`
       case 'review':
         return canLinkWall ? `/review/${venueId}/${wallId}` : null
-      case 'remove':
-        return canLinkWall ? `/remove/${venueId}/${wallId}` : null
       case 'corners':
         return canLinkWall ? `/edit/${venueId}/${wallId}?step=corners` : null
       default:
@@ -91,7 +88,7 @@ export default function GuidedFlowStepper({
         })}
       </ol>
       <p className="guided-flow-stepper-hint guided-flow-stepper-hint--always">
-        Optional workflow — upload or capture any wall, then open Stitch or Corners when you want.
+        Fast workflow — capture or upload, prepare the wall image, then adjust corners to finish.
       </p>
       {!canLinkWall && current > 0 && (
         <p className="guided-flow-stepper-hint">Pick a wall on the capture screen (or wall list) to deep-link later steps.</p>

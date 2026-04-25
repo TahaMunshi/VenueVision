@@ -44,6 +44,23 @@ export const getApiBaseUrl = () => {
   return 'http://localhost:5000'
 }
 
+export type WallImageRecord = {
+  wall_id: string
+  url: string
+  source_type: 'processed' | 'stitched' | 'captured'
+  updated_at?: number
+  filename?: string
+  is_final?: boolean
+}
+
+export const resolveApiAssetUrl = (pathOrUrl?: string | null) => {
+  if (!pathOrUrl) return ''
+  if (/^(https?:|blob:|data:)/i.test(pathOrUrl)) return pathOrUrl
+  const base = getApiBaseUrl()
+  if (!base) return pathOrUrl
+  return `${base}${pathOrUrl.startsWith('/') ? '' : '/'}${pathOrUrl}`
+}
+
 /** Returns Authorization header if user is logged in. Use for protected API calls. */
 export const getAuthHeaders = (): Record<string, string> => {
   const token = localStorage.getItem('token')

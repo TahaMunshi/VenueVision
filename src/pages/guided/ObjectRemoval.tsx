@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import './ObjectRemoval.css'
-import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
+import { getApiBaseUrl, getAuthHeaders, resolveApiAssetUrl } from '../../utils/api'
 import GuidedFlowStepper from '../../components/GuidedFlowStepper'
 import PageNavBar from '../../components/PageNavBar'
 
@@ -40,11 +40,14 @@ const ObjectRemoval = () => {
         { headers: getAuthHeaders() }
       )
       const data = await res.json()
-      if (data.status === 'success' && data.wall_images?.[wallId!]) {
+      const record = data.wall_image_records?.[wallId!]
+      if (record?.source_type === 'captured') {
+        setError('Prepare the wall image first, then optional AI cleanup can run on the prepared result.')
+      } else if (data.status === 'success' && data.wall_images?.[wallId!]) {
         const path = data.wall_images[wallId!]
-        setImageUrl(path.startsWith('http') ? path : `${API_BASE_URL}${path}`)
+        setImageUrl(resolveApiAssetUrl(path))
       } else {
-        setError('No stitched image found. Stitch the wall first.')
+        setError('No prepared wall image found. Prepare the wall first.')
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load image')
@@ -89,7 +92,7 @@ const ObjectRemoval = () => {
         if (data.inpainted === false) {
           setError(data.warning || data.message || 'Inpainting did not change the image. Check server logs and INPAINT_SPACE_URL / HF_TOKEN.')
         } else if (data.url) {
-          setImageUrl(`${API_BASE_URL}${data.url}`)
+          setImageUrl(resolveApiAssetUrl(data.url))
           setError(null)
         } else {
           setError(data.message || 'Unexpected response from server.')
@@ -126,16 +129,16 @@ const ObjectRemoval = () => {
           <PageNavBar variant="dark" venueId={venueId} title="Remove objects" backLabel="Back" />
         )}
         {venueId && wallId && (
-          <GuidedFlowStepper venueId={venueId} wallId={wallId} active="remove" linkCaptureToWall />
+          <GuidedFlowStepper venueId={venueId} wallId={wallId} active="review" linkCaptureToWall />
         )}
         <div className="object-removal-error">{error}</div>
         <button
           type="button"
           onClick={() => navigate(`/review/${venueId}/${wallId}`)}
           className="action-btn primary"
-          title="Go back to stitch & review for this wall"
+          title="Go back to prepare this wall"
         >
-          Go to stitch & review
+          Go to prepare wall
         </button>
       </div>
     )
@@ -147,11 +150,11 @@ const ObjectRemoval = () => {
         <PageNavBar variant="dark" venueId={venueId} title="Remove objects" backLabel="Back" />
       )}
       {venueId && wallId && (
-        <GuidedFlowStepper venueId={venueId} wallId={wallId} active="remove" linkCaptureToWall />
+        <GuidedFlowStepper venueId={venueId} wallId={wallId} active="review" linkCaptureToWall />
       )}
       <div className="object-removal-header">
         <p className="object-removal-subtitle">
-          Click on furniture or objects to remove them. Then go to the corner editor when you are done.
+          Optional cleanup: click on furniture or objects to remove them. You can skip this and finish the wall in the corner editor.
         </p>
         <details className="object-removal-tips">
           <summary>Tips</summary>

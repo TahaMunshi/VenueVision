@@ -79,11 +79,13 @@ def save_wall_photo(
     except OSError as exc:
         raise IOError(f"Failed to save file: {exc}") from exc
 
-    # New source image invalidates any previously processed output.
+    # New source image invalidates derived outputs so previews never show stale wall data.
     processed_path = os.path.join(target_dir, f"processed_{safe_wall}.jpg")
+    stitched_path = os.path.join(target_dir, f"stitched_{safe_wall}.jpg")
     try:
-        if os.path.exists(processed_path):
-            os.remove(processed_path)
+        for derived_path in (processed_path, stitched_path):
+            if os.path.exists(derived_path):
+                os.remove(derived_path)
     except OSError:
         pass
 
