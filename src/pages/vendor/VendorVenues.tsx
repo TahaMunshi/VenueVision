@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
+import { getApiBaseUrl, getAuthHeaders, resolveApiAssetUrl } from '../../utils/api'
+import { resolveTextureUrlForNgrok } from '../../utils/ngrokTextureUrl'
 import './Vendor.css'
 
 interface VenueRow {
@@ -24,6 +25,7 @@ interface VenueRow {
 export default function VendorVenues() {
   const navigate = useNavigate()
   const [venues, setVenues] = useState<VenueRow[]>([])
+  const [coverUrls, setCoverUrls] = useState<Record<number, string>>({})
   const [loading, setLoading] = useState(true)
   const API = getApiBaseUrl()
 
@@ -39,6 +41,35 @@ export default function VendorVenues() {
     } catch { /* */ }
     setLoading(false)
   }
+
+  useEffect(() => {
+    let cancelled = false
+    const blobUrls: string[] = []
+
+    const resolveCovers = async () => {
+      const entries = await Promise.all(
+        venues
+          .filter((v) => Boolean(v.cover_image))
+          .map(async (v) => {
+            const fullUrl = resolveApiAssetUrl(v.cover_image)
+            try {
+              const resolved = await resolveTextureUrlForNgrok(fullUrl)
+              if (resolved.startsWith('blob:')) blobUrls.push(resolved)
+              return [v.venue_id, resolved] as const
+            } catch {
+              return [v.venue_id, fullUrl] as const
+            }
+          })
+      )
+      if (!cancelled) setCoverUrls(Object.fromEntries(entries))
+    }
+
+    resolveCovers()
+    return () => {
+      cancelled = true
+      blobUrls.forEach((url) => URL.revokeObjectURL(url))
+    }
+  }, [venues])
 
   async function togglePublish(v: VenueRow) {
     await fetch(`${API}/api/v1/vendor/venues/${v.venue_id}/publish`, {
@@ -86,7 +117,7 @@ export default function VendorVenues() {
             {venues.map(v => (
               <div key={v.venue_id} className="vd-venue-card">
                 <div className="vd-venue-card__img"
-                  style={{ backgroundImage: v.cover_image ? `url(${API}${v.cover_image})` : undefined }}>
+                  style={{ backgroundImage: v.cover_image ? `url(${coverUrls[v.venue_id] || resolveApiAssetUrl(v.cover_image)})` : undefined }}>
                   {!v.cover_image && <span className="vd-venue-card__placeholder">🏢</span>}
                   <span className={`vd-badge vd-badge--${v.is_published ? 'confirmed' : 'pending'} vd-venue-card__status`}>
                     {v.is_published ? 'Published' : 'Draft'}

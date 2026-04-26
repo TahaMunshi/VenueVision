@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import './AssetLibrary.css'
-import { getApiBaseUrl } from '../../utils/api'
+import { getApiBaseUrl, resolveApiAssetUrl } from '../../utils/api'
+import { resolveTextureUrlForNgrok } from '../../utils/ngrokTextureUrl'
 import { feetToMeters, metersToFeet } from '../../constants/roomUnits'
 import { loadThreeBundle } from '../../utils/threeLoader'
 import PageNavBar from '../../components/PageNavBar'
@@ -138,6 +139,7 @@ const AssetLibrary = () => {
   const viewerStateRef = useRef<{ model: any; applyBrightness: (b: number) => void } | null>(null)
   const [previewBrightness, setPreviewBrightness] = useState(1)
   const [assets, setAssets] = useState<Asset[]>([])
+  const [assetImageUrls, setAssetImageUrls] = useState<Record<number, string>>({})
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState('')
@@ -176,6 +178,36 @@ const AssetLibrary = () => {
     }
     fetchAssets()
   }, [navigate])
+
+  useEffect(() => {
+    let cancelled = false
+    const blobUrls: string[] = []
+
+    const resolveAssetImages = async () => {
+      const entries = await Promise.all(
+        assets
+          .map((asset) => ({ asset, imagePath: asset.thumbnail_url || asset.source_image_url }))
+          .filter(({ imagePath }) => Boolean(imagePath))
+          .map(async ({ asset, imagePath }) => {
+            const fullUrl = resolveApiAssetUrl(imagePath)
+            try {
+              const resolved = await resolveTextureUrlForNgrok(fullUrl)
+              if (resolved.startsWith('blob:')) blobUrls.push(resolved)
+              return [asset.asset_id, resolved] as const
+            } catch {
+              return [asset.asset_id, fullUrl] as const
+            }
+          })
+      )
+      if (!cancelled) setAssetImageUrls(Object.fromEntries(entries))
+    }
+
+    resolveAssetImages()
+    return () => {
+      cancelled = true
+      blobUrls.forEach((url) => URL.revokeObjectURL(url))
+    }
+  }, [assets])
 
   const fetchAssets = async () => {
     try {
@@ -1171,9 +1203,9 @@ const AssetLibrary = () => {
               >
                 <div className="asset-thumbnail">
                   {asset.thumbnail_url ? (
-                    <img src={`${API_BASE_URL}${asset.thumbnail_url}`} alt={asset.asset_name} />
+                    <img src={assetImageUrls[asset.asset_id] || resolveApiAssetUrl(asset.thumbnail_url)} alt={asset.asset_name} />
                   ) : asset.source_image_url ? (
-                    <img src={`${API_BASE_URL}${asset.source_image_url}`} alt={asset.asset_name} />
+                    <img src={assetImageUrls[asset.asset_id] || resolveApiAssetUrl(asset.source_image_url)} alt={asset.asset_name} />
                   ) : (
                     <div className="no-thumbnail">
                       <span>📦</span>

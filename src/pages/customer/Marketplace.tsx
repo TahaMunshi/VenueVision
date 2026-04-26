@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
-import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
+import { getApiBaseUrl, getAuthHeaders, resolveApiAssetUrl } from '../../utils/api'
+import { resolveTextureUrlForNgrok } from '../../utils/ngrokTextureUrl'
 import './Customer.css'
 
 interface VenueCard {
@@ -27,6 +28,7 @@ export default function Marketplace() {
   const API = getApiBaseUrl()
 
   const [venues, setVenues] = useState<VenueCard[]>([])
+  const [coverUrls, setCoverUrls] = useState<Record<number, string>>({})
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [city, setCity] = useState('')
@@ -77,6 +79,35 @@ export default function Marketplace() {
   }, [query, city, category, sort, page])
 
   const handleLogout = () => { logout(); navigate('/login') }
+
+  useEffect(() => {
+    let cancelled = false
+    const blobUrls: string[] = []
+
+    const resolveCovers = async () => {
+      const entries = await Promise.all(
+        venues
+          .filter((v) => Boolean(v.cover_image))
+          .map(async (v) => {
+            const fullUrl = resolveApiAssetUrl(v.cover_image)
+            try {
+              const resolved = await resolveTextureUrlForNgrok(fullUrl)
+              if (resolved.startsWith('blob:')) blobUrls.push(resolved)
+              return [v.venue_id, resolved] as const
+            } catch {
+              return [v.venue_id, fullUrl] as const
+            }
+          })
+      )
+      if (!cancelled) setCoverUrls(Object.fromEntries(entries))
+    }
+
+    resolveCovers()
+    return () => {
+      cancelled = true
+      blobUrls.forEach((url) => URL.revokeObjectURL(url))
+    }
+  }, [venues])
 
   return (
     <div className="mp-page">
@@ -167,7 +198,7 @@ export default function Marketplace() {
                   <div key={v.venue_id} className="mp-card-wrap">
                     <Link to={`/venue-detail/${v.venue_identifier}`} className="mp-card">
                       <div className="mp-card__img"
-                        style={{ backgroundImage: v.cover_image ? `url(${API}${v.cover_image})` : undefined }}>
+                        style={{ backgroundImage: v.cover_image ? `url(${coverUrls[v.venue_id] || resolveApiAssetUrl(v.cover_image)})` : undefined }}>
                         {!v.cover_image && <div className="mp-card__img-placeholder">🏛</div>}
                         {v.category && <span className="mp-card__cat">{v.category.replace(/_/g, ' ')}</span>}
                       </div>

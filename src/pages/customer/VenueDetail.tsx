@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
-import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
+import { getApiBaseUrl, getAuthHeaders, resolveApiAssetUrl } from '../../utils/api'
+import { resolveTextureUrlForNgrok } from '../../utils/ngrokTextureUrl'
 import './Customer.css'
 
 export default function VenueDetail() {
@@ -16,6 +17,7 @@ export default function VenueDetail() {
   const [presets, setPresets] = useState<any[]>([])
   const [reviews, setReviews] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [coverUrl, setCoverUrl] = useState<string | null>(null)
   const [showBooking, setShowBooking] = useState(false)
   const [bookForm, setBookForm] = useState({
     event_date: '', start_time: '', end_time: '', package_id: '', preset_id: '', notes: ''
@@ -43,6 +45,31 @@ export default function VenueDetail() {
     } catch { /* */ }
     setLoading(false)
   }
+
+  useEffect(() => {
+    if (!venue?.cover_image) {
+      setCoverUrl(null)
+      return
+    }
+
+    let cancelled = false
+    let blobUrl: string | null = null
+    const fullUrl = resolveApiAssetUrl(venue.cover_image)
+
+    resolveTextureUrlForNgrok(fullUrl)
+      .then((resolved) => {
+        if (resolved.startsWith('blob:')) blobUrl = resolved
+        if (!cancelled) setCoverUrl(resolved)
+      })
+      .catch(() => {
+        if (!cancelled) setCoverUrl(fullUrl)
+      })
+
+    return () => {
+      cancelled = true
+      if (blobUrl) URL.revokeObjectURL(blobUrl)
+    }
+  }, [venue?.cover_image])
 
   async function handleBook() {
     if (!user) { navigate('/login'); return }
@@ -97,7 +124,7 @@ export default function VenueDetail() {
       </header>
 
       <div className="vd-hero-img"
-        style={{ backgroundImage: venue.cover_image ? `url(${API}${venue.cover_image})` : undefined }}>
+        style={{ backgroundImage: venue.cover_image ? `url(${coverUrl || resolveApiAssetUrl(venue.cover_image)})` : undefined }}>
         {!venue.cover_image && <div className="vd-hero-placeholder">🏛</div>}
       </div>
 

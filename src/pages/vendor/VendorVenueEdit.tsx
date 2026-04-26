@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom'
-import { getApiBaseUrl, getAuthHeaders } from '../../utils/api'
+import { getApiBaseUrl, getAuthHeaders, resolveApiAssetUrl } from '../../utils/api'
+import { resolveTextureUrlForNgrok } from '../../utils/ngrokTextureUrl'
 import './Vendor.css'
 
 const CATEGORIES = [
@@ -38,6 +39,7 @@ export default function VendorVenueEdit() {
   const [notice, setNotice] = useState('')
   const [tab, setTab] = useState<'info' | 'pricing' | 'packages' | 'setup'>('info')
   const [coverImage, setCoverImage] = useState<string | null>(null)
+  const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null)
   const [coverRev, setCoverRev] = useState(0)
   const [coverUploading, setCoverUploading] = useState(false)
   const coverFileRef = useRef<HTMLInputElement>(null)
@@ -93,6 +95,32 @@ export default function VendorVenueEdit() {
       setPackages([])
     }
   }, [isNew, venueId, loadVenue])
+
+  useEffect(() => {
+    if (!coverImage) {
+      setCoverPreviewUrl(null)
+      return
+    }
+
+    let cancelled = false
+    let blobUrl: string | null = null
+    const separator = coverImage.includes('?') ? '&' : '?'
+    const fullUrl = resolveApiAssetUrl(`${coverImage}${separator}v=${coverRev}`)
+
+    resolveTextureUrlForNgrok(fullUrl)
+      .then((resolved) => {
+        if (resolved.startsWith('blob:')) blobUrl = resolved
+        if (!cancelled) setCoverPreviewUrl(resolved)
+      })
+      .catch(() => {
+        if (!cancelled) setCoverPreviewUrl(fullUrl)
+      })
+
+    return () => {
+      cancelled = true
+      if (blobUrl) URL.revokeObjectURL(blobUrl)
+    }
+  }, [coverImage, coverRev])
 
   async function handleSave() {
     if (!form.name.trim()) {
@@ -471,7 +499,7 @@ export default function VendorVenueEdit() {
                     {coverImage ? (
                       <img
                         className="vv-cover-preview-img"
-                        src={`${API}${coverImage}?v=${coverRev}`}
+                        src={coverPreviewUrl || resolveApiAssetUrl(coverImage)}
                         alt=""
                       />
                     ) : (
